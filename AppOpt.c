@@ -1,265 +1,167 @@
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <map>
-#include <set>
-#include <regex>
-#include <thread>
-#include <chrono>
-#include <atomic>
-#include <mutex>
+// AppOpt.c  —— 纯C版守护配置热更新工具
 
-#include <sys/inotify.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
+#include <errno.h>
 
-using namespace std;
+#define MAX_LINE 1024
+#define MAX_RULES 4096
+#define EVENT_BUF_LEN (1024 * (sizeof(struct inotify_event) + 16))
 
-// ===================== 数据结构 =====================
-struct ConfigItem {
-    string key;
-    string value;
-    string file;
-    int line;
-};
+static char *rules[MAX_RULES];
+static int rule_count = 0;
 
-static map<string, ConfigItem> g_config;
-static mutex g_mutex;
-static atomic<bool> g_running(true);
+static char config_path[512] = "./applist.prop";
 
-static vector<string> g_files;
-
-// ===================== 工具函数 =====================
-
-// 去空格
-static inline string trim(const string &s) {
-    size_t b = s.find_first_not_of(" \t\r\n");
-    if (b == string::npos) return "";
-    size_t e = s.find_last_not_of(" \t\r\n");
-    return s.substr(b, e - b + 1);
+/* =========================
+ * 中文日志
+ * ========================= */
+void log_info(const char *msg) {
+    printf("[信息] %s\n", msg);
+    fflush(stdout);
 }
 
-// 通配符匹配
-static bool wildcardMatch(const string &pattern, const string &str) {
-    regex re;
-    string tmp;
-    for (char c : pattern) {
-        if (c == '*') tmp += ".*";
-        else if (c == '?') tmp += ".";
-        else if (isalnum(c)) tmp += c;
-        else {
-            tmp += "\\";
-            tmp += c;
+void log_error(const char *msg) {
+    printf("[错误] %s\n", msg);
+    fflush(stdout);
+}
+
+/* =========================
+ * 去重
+ * ========================= */
+int exists_rule(const char *line) {
+    for (int i = 0; i < rule_count; i++) {
+        if (strcmp(rules[i], line) == 0) {
+            return 1;
         }
     }
-    re = regex("^" + tmp + "$");
-    return regex_match(str, re);
+    return 0;
 }
 
-// ===================== 配置解析 =====================
-static void loadFile(const string &file) {
-    ifstream in(file);
-    if (!in.is_open()) {
-        cout << "[错误] 无法打开配置文件: " << file << endl;
+/* =========================
+ * 加载配置
+ * ========================= */
+void load_config() {
+    FILE *fp = fopen(config_path, "r");
+    if (!fp) {
+        log_error("无法打开配置文件");
         return;
     }
 
-    string line;
-    int lineno = 0;
+    char line[MAX_LINE];
     int loaded = 0;
-    int dup = 0;
-    int err = 0;
 
-    while (getline(in, line)) {
-        lineno++;
-        line = trim(line);
+    while (fgets(line, sizeof(line), fp)) {
+        // 去换行
+        line[strcspn(line, "\r\n")] = 0;
 
-        if (line.empty() || line[0] == '#')
+        // 跳过空行和注释
+        if (line[0] == '\0' || line[0] == '#')
             continue;
 
-        size_t eq = line.find('=');
-        if (eq == string::npos) {
-            cout << "[配置错误] " << file << ":" << lineno
-                 << " 缺少 '=' -> " << line << endl;
-            err++;
-            continue;
+        if (!exists_rule(line) && rule_count < MAX_RULES) {
+            rules[rule_count] = strdup(line);
+            rule_count++;
+            loaded++;
         }
-
-        string key = trim(line.substr(0, eq));
-        string value = trim(line.substr(eq + 1));
-
-        if (key.empty() || value.empty()) {
-            cout << "[配置错误] " << file << ":" << lineno
-                 << " 空键或空值 -> " << line << endl;
-            err++;
-            continue;
-        }
-
-        lock_guard<mutex> lock(g_mutex);
-
-        if (g_config.count(key)) {
-            cout << "[去重] key=" << key
-                 << " 原文件=" << g_config[key].file
-                 << " -> 新文件=" << file << endl;
-            dup++;
-        }
-
-        g_config[key] = {key, value, file, lineno};
-        loaded++;
     }
 
-    cout << "[加载完成] 文件=" << file
-         << " 新增=" << loaded
-         << " 去重=" << dup
-         << " 错误=" << err << endl;
+    fclose(fp);
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "加载配置完成，新增规则: %d，总规则: %d", loaded, rule_count);
+    log_info(buf);
 }
 
-// ===================== 全量加载 =====================
-static void reloadAll() {
-    lock_guard<mutex> lock(g_mutex);
-
-    g_config.clear();
-
-    cout << "===============================" << endl;
-    cout << "[AppOpt] 开始重新加载配置..." << endl;
-
-    for (auto &f : g_files) {
-        loadFile(f);
+/* =========================
+ * 打印所有规则（调试）
+ * ========================= */
+void dump_rules() {
+    log_info("当前规则列表:");
+    for (int i = 0; i < rule_count; i++) {
+        printf("  - %s\n", rules[i]);
     }
-
-    cout << "[AppOpt] 当前配置总数: " << g_config.size() << endl;
-    cout << "===============================" << endl;
 }
 
-// ===================== inotify 监听 =====================
-static void watchFiles() {
+/* =========================
+ * inotify 监听
+ * ========================= */
+void watch_config() {
     int fd = inotify_init();
     if (fd < 0) {
-        cout << "[警告] inotify不可用，切换轮询模式" << endl;
+        log_error("inotify初始化失败");
         return;
     }
 
-    map<int, string> wdMap;
+    int wd = inotify_add_watch(fd, config_path,
+        IN_MODIFY | IN_CREATE | IN_DELETE);
 
-    for (auto &f : g_files) {
-        int wd = inotify_add_watch(fd, f.c_str(),
-                                   IN_MODIFY | IN_DELETE_SELF | IN_CREATE);
-        if (wd < 0) {
-            cout << "[警告] 无法监听: " << f << endl;
-            continue;
-        }
-        wdMap[wd] = f;
+    if (wd < 0) {
+        log_error("添加inotify监听失败");
+        return;
     }
 
-    char buf[1024];
+    log_info("开始监听配置文件变化...");
 
-    while (g_running) {
-        int len = read(fd, buf, sizeof(buf));
-        if (len <= 0) continue;
+    char buffer[EVENT_BUF_LEN];
+
+    while (1) {
+        int length = read(fd, buffer, EVENT_BUF_LEN);
+        if (length < 0) {
+            log_error("读取inotify失败");
+            continue;
+        }
 
         int i = 0;
-        while (i < len) {
-            struct inotify_event *event = (struct inotify_event *)&buf[i];
+        while (i < length) {
+            struct inotify_event *event =
+                (struct inotify_event *)&buffer[i];
 
-            if (event->len == 0 && wdMap.count(event->wd)) {
-                cout << "[文件变化] " << wdMap[event->wd]
-                     << " 触发重新加载" << endl;
-                reloadAll();
+            if (event->len) {
+                if (event->mask & (IN_MODIFY | IN_CREATE | IN_DELETE)) {
+                    log_info("检测到配置文件变化，重新加载...");
+                    load_config();
+                }
             }
 
             i += sizeof(struct inotify_event) + event->len;
         }
     }
-
-    close(fd);
 }
 
-// ===================== 轮询 =====================
-static void pollWatch() {
-    map<string, time_t> last;
-
-    for (auto &f : g_files) {
-        struct stat st;
-        if (stat(f.c_str(), &st) == 0)
-            last[f] = st.st_mtime;
-    }
-
-    while (g_running) {
-        this_thread::sleep_for(chrono::seconds(2));
-
-        bool changed = false;
-
-        for (auto &f : g_files) {
-            struct stat st;
-            if (stat(f.c_str(), &st) != 0) continue;
-
-            if (st.st_mtime != last[f]) {
-                last[f] = st.st_mtime;
-                cout << "[文件变化] " << f << " 触发重新加载" << endl;
-                changed = true;
-            }
-        }
-
-        if (changed) reloadAll();
-    }
-}
-
-// ===================== 初始化 =====================
-static void printConfig() {
-    cout << "\n========== 当前配置 ==========\n";
-
-    for (auto &p : g_config) {
-        cout << p.first << " = " << p.second.value
-             << "    (来源: " << p.second.file
-             << ":" << p.second.line << ")\n";
-    }
-
-    cout << "==============================\n";
-}
-
-// ===================== main =====================
+/* =========================
+ * main
+ * ========================= */
 int main(int argc, char *argv[]) {
-    cout << "[AppOpt] 启动中..." << endl;
 
-    if (argc < 3) {
-        cout << "用法: AppOpt -c file1 -c file2 ..." << endl;
-        return 0;
-    }
+    printf("=================================\n");
+    printf("      AppOpt 纯C守护启动\n");
+    printf("=================================\n");
 
+    // 参数解析 -c
     for (int i = 1; i < argc; i++) {
-        string arg = argv[i];
-        if (arg == "-c" && i + 1 < argc) {
-            g_files.push_back(argv[++i]);
+        if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+            strncpy(config_path, argv[i + 1], sizeof(config_path) - 1);
         }
     }
 
-    if (g_files.empty()) {
-        cout << "[错误] 未指定配置文件" << endl;
-        return 0;
-    }
+    char buf[256];
+    snprintf(buf, sizeof(buf), "配置文件: %s", config_path);
+    log_info(buf);
 
-    reloadAll();
+    // 初次加载
+    load_config();
 
-    thread watcher;
+    // 打印规则（可选）
+    // dump_rules();
 
-    // 优先 inotify
-    int fd = inotify_init();
-    if (fd >= 0) {
-        close(fd);
-        watcher = thread(watchFiles);
-        cout << "[AppOpt] 使用 inotify 文件监听" << endl;
-    } else {
-        watcher = thread(pollWatch);
-        cout << "[AppOpt] 使用轮询监听模式" << endl;
-    }
+    // 进入监听
+    watch_config();
 
-    cout << "[AppOpt] 启动成功，配置数量: " << g_config.size() << endl;
-
-    printConfig();
-
-    watcher.join();
     return 0;
 }
