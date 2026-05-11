@@ -1,4 +1,4 @@
-// AppOpt.c —— 完整规则引擎 v4.1（多配置 + 校验 + 定位 + 优先级 + 热更新）
+// AppOpt.c —— 完整规则引擎 v4.1（默认*语义 + 校验 + 热加载）
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,7 +8,6 @@
 
 #define MAX_LINE 1024
 #define MAX_RULES 4096
-#define MAX_CONFIGS 16
 #define EVENT_BUF_LEN (1024 * (sizeof(struct inotify_event) + 16))
 
 // ===================== 规则结构 =====================
@@ -17,13 +16,13 @@ typedef struct {
     char thread[256];
     char range[32];
     int priority;
+    int line_no;
 } Rule;
 
 static Rule rules[MAX_RULES];
 static int rule_count = 0;
 
-static char config_paths[MAX_CONFIGS][512];
-static int config_count = 0;
+static char config_path[512] = "./applist.prop";
 
 // ===================== 日志 =====================
 void log_info(const char *msg) {
@@ -34,16 +33,10 @@ void log_error(const char *msg) {
     printf("[错误] %s\n", msg);
 }
 
-void log_rule_error(const char *file, int line, const char *msg, const char *content) {
-    printf("[规则错误] %s:%d | %s | 内容: %s\n",
-           file, line, msg, content);
-}
-
 // ===================== glob 匹配 =====================
 int match(const char *pattern, const char *text) {
     const char *p = pattern;
     const char *t = text;
-
     const char *star = NULL;
     const char *backup = NULL;
 
@@ -80,7 +73,7 @@ int calc_priority(const char *pattern) {
         return 4;
 
     if (strchr(pattern, '*') == NULL)
-        return 1; // 精确最高
+        return 1;
 
     if (pattern[strlen(pattern) - 1] == '*')
         return 2;
@@ -89,8 +82,10 @@ int calc_priority(const char *pattern) {
 }
 
 // ===================== 校验 =====================
-int validate_rule_line(const char *line) {
-    return line && strlen(line) > 5 && strchr(line, '=');
+int validate_line(const char *line) {
+    if (!line || strlen(line) < 3) return 0;
+    if (!strchr(line, '=')) return 0;
+    return 1;
 }
 
 int validate_pkg(const char *pkg) {
@@ -113,49 +108,52 @@ int validate_range(const char *r) {
     return 1;
 }
 
-// ===================== 解析规则（带定位） =====================
-int parse_rule(const char *file, int line_no, const char *line, Rule *r) {
+// ===================== 解析规则（核心修复） =====================
+int parse_rule(const char *line, Rule *r, int line_no) {
 
-    if (!validate_rule_line(line)) {
-        log_rule_error(file, line_no, "非法规则格式", line);
+    if (!validate_line(line))
         return 0;
-    }
+
+    const char *eq = strchr(line, '=');
+    if (!eq) return 0;
+
+    memset(r, 0, sizeof(Rule));
+    r->line_no = line_no;
 
     const char *p1 = strchr(line, '{');
     const char *p2 = strchr(line, '}');
-    const char *eq = strchr(line, '=');
 
-    if (!(p1 && p2 && eq && p2 > p1 && eq > p2)) {
-        log_rule_error(file, line_no, "结构错误", line);
-        return 0;
+    // ================= pkg =================
+    if (p1 && p2 && p2 < eq) {
+
+        strncpy(r->pkg, line, p1 - line);
+        r->pkg[p1 - line] = '\0';
+
+        // thread
+        if (p2 - p1 - 1 <= 0) {
+            strcpy(r->thread, "*");
+        } else {
+            strncpy(r->thread, p1 + 1, p2 - p1 - 1);
+            r->thread[p2 - p1 - 1] = '\0';
+        }
+
+    } else {
+        // ⭐关键：没有 {} → 默认 *
+        strncpy(r->pkg, line, eq - line);
+        r->pkg[eq - line] = '\0';
+        strcpy(r->thread, "*");
     }
 
-    memset(r, 0, sizeof(Rule));
-
-    strncpy(r->pkg, line, p1 - line);
-    r->pkg[p1 - line] = '\0';
-
-    strncpy(r->thread, p1 + 1, p2 - p1 - 1);
-    r->thread[p2 - p1 - 1] = '\0';
-
+    // ================= range =================
     strcpy(r->range, eq + 1);
 
-    if (!validate_pkg(r->pkg)) {
-        log_rule_error(file, line_no, "pkg非法", line);
-        return 0;
-    }
-
-    if (!validate_thread(r->thread)) {
-        log_rule_error(file, line_no, "thread非法", line);
-        return 0;
-    }
-
-    if (!validate_range(r->range)) {
-        log_rule_error(file, line_no, "range非法", line);
-        return 0;
-    }
+    // ================= 校验 =================
+    if (!validate_pkg(r->pkg)) return 0;
+    if (!validate_thread(r->thread)) return 0;
+    if (!validate_range(r->range)) return 0;
 
     r->priority = calc_priority(r->pkg);
+
     return 1;
 }
 
@@ -164,67 +162,67 @@ int exists_rule(Rule *r) {
     for (int i = 0; i < rule_count; i++) {
         if (strcmp(rules[i].pkg, r->pkg) == 0 &&
             strcmp(rules[i].thread, r->thread) == 0 &&
-            strcmp(rules[i].range, r->range) == 0)
+            strcmp(rules[i].range, r->range) == 0) {
             return 1;
+        }
     }
     return 0;
 }
 
-// ===================== 加载所有配置 =====================
-void load_all_configs() {
+// ===================== 加载配置 =====================
+void load_config() {
+
+    FILE *fp = fopen(config_path, "r");
+    if (!fp) {
+        log_error("无法打开配置文件");
+        return;
+    }
+
+    char line[MAX_LINE];
+    int line_no = 0;
+    int loaded = 0;
 
     rule_count = 0;
 
-    for (int c = 0; c < config_count; c++) {
+    while (fgets(line, sizeof(line), fp)) {
 
-        FILE *fp = fopen(config_paths[c], "r");
-        if (!fp) {
-            printf("[错误] 无法打开: %s\n", config_paths[c]);
+        line_no++;
+
+        line[strcspn(line, "\r\n")] = 0;
+
+        if (line[0] == '#' || line[0] == '\0')
+            continue;
+
+        Rule r;
+
+        if (!parse_rule(line, &r, line_no)) {
+            printf("[错误] 第 %d 行非法规则: %s\n", line_no, line);
             continue;
         }
 
-        char line[MAX_LINE];
-        int line_no = 0;
-        int loaded = 0;
-
-        while (fgets(line, sizeof(line), fp)) {
-
-            line_no++;
-
-            line[strcspn(line, "\r\n")] = 0;
-
-            if (line[0] == '#' || line[0] == '\0')
-                continue;
-
-            Rule r;
-
-            if (!parse_rule(config_paths[c], line_no, line, &r))
-                continue;
-
-            if (!exists_rule(&r) && rule_count < MAX_RULES) {
-                rules[rule_count++] = r;
-                loaded++;
-            }
+        if (!exists_rule(&r) && rule_count < MAX_RULES) {
+            rules[rule_count++] = r;
+            loaded++;
         }
-
-        fclose(fp);
-
-        printf("[信息] %s 加载 %d 条规则\n",
-               config_paths[c], loaded);
     }
 
-    printf("[信息] 总规则数: %d\n", rule_count);
+    fclose(fp);
+
+    printf("[信息] 加载完成：%d 条规则\n", loaded);
 }
 
-// ===================== 匹配引擎 =====================
+// ===================== 匹配 =====================
 Rule* find_best_rule(const char *pkg, const char *thread) {
 
     Rule *best = NULL;
 
     for (int i = 0; i < rule_count; i++) {
 
-        if (!match(rules[i].pkg, pkg)) continue;
-        if (!match(rules[i].thread, thread)) continue;
+        if (!match(rules[i].pkg, pkg))
+            continue;
+
+        if (!match(rules[i].thread, thread))
+            continue;
 
         if (!best || rules[i].priority < best->priority)
             best = &rules[i];
@@ -244,26 +242,26 @@ void schedule(const char *pkg, const char *thread) {
     Rule *r = find_best_rule(pkg, thread);
 
     if (r) {
+        printf("[命中] %s{%s} (line %d)\n",
+            r->pkg, r->thread, r->line_no);
         apply_cpu(r->range);
     } else {
-        printf("[调度] 未命中: %s{%s}\n", pkg, thread);
+        printf("[未命中] %s{%s}\n", pkg, thread);
     }
 }
 
-// ===================== 监听配置 =====================
+// ===================== 监听 =====================
 void watch_config() {
 
     int fd = inotify_init();
-    if (fd < 0) {
-        log_error("inotify失败");
+    int wd = inotify_add_watch(fd, config_path, IN_MODIFY);
+
+    if (wd < 0) {
+        log_error("监听失败");
         return;
     }
 
-    for (int i = 0; i < config_count; i++) {
-        inotify_add_watch(fd, config_paths[i], IN_MODIFY);
-    }
-
-    log_info("开始监听配置变化...");
+    log_info("监听配置中...");
 
     char buffer[EVENT_BUF_LEN];
 
@@ -278,8 +276,8 @@ void watch_config() {
                 (struct inotify_event*)&buffer[i];
 
             if (ev->mask & IN_MODIFY) {
-                log_info("配置变化，重新加载");
-                load_all_configs();
+                log_info("配置变更，重新加载");
+                load_config();
             }
 
             i += sizeof(struct inotify_event) + ev->len;
@@ -291,35 +289,23 @@ void watch_config() {
 int main(int argc, char *argv[]) {
 
     printf("=================================\n");
-    printf("   AppOpt v4.1 Rule Engine\n");
+    printf(" AppOpt v4.1 规则引擎（强化版）\n");
     printf("=================================\n");
 
     for (int i = 1; i < argc; i++) {
-
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
-
-            if (config_count < MAX_CONFIGS) {
-                strncpy(config_paths[config_count],
-                        argv[i + 1],
-                        sizeof(config_paths[0]) - 1);
-                config_count++;
-            }
+            strncpy(config_path, argv[i+1], sizeof(config_path)-1);
         }
     }
 
-    if (config_count == 0) {
-        strcpy(config_paths[0], "./applist.prop");
-        config_count = 1;
-    }
+    printf("[配置] %s\n", config_path);
 
-    printf("[配置文件数] %d\n", config_count);
-
-    load_all_configs();
+    load_config();
 
     // 测试
-    schedule("com.tencent.mm", "RenderThread");
-    schedule("com.tencent.mm", "pool-worker-1");
-    schedule("com.xxx.app", "GLThread");
+    schedule("com.android.systemui", "RenderThread");
+    schedule("com.android.systemui", "pool-worker-1");
+    schedule("com.tencent.mm", "GLThread");
 
     watch_config();
 
