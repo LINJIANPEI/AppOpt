@@ -1,0 +1,50 @@
+name: Build AppOpt ARM64 Static
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt update
+          sudo apt install -y g++-aarch64-linux-gnu gcc-aarch64-linux-gnu
+
+      - name: Build AppOpt (static arm64)
+        run: |
+          mkdir -p out
+
+          aarch64-linux-gnu-g++ \
+            -O3 \
+            -static \
+            -pthread \
+            src/main.cpp \
+            src/config.cpp \
+            src/inotify.cpp \
+            -o out/AppOpt
+
+      - name: Strip binary (reduce size)
+        run: |
+          aarch64-linux-gnu-strip out/AppOpt || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppOpt-arm64
+          path: out/AppOpt
+
+      - name: Create Release (auto)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          files: out/AppOpt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
