@@ -16,22 +16,20 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt update
-          sudo apt install -y g++-aarch64-linux-gnu gcc-aarch64-linux-gnu
+          sudo apt install -y gcc-aarch64-linux-gnu
 
-      - name: Build AppOpt (static arm64)
+      - name: Build AppOpt (single C file)
         run: |
           mkdir -p out
 
-          aarch64-linux-gnu-g++ \
+          aarch64-linux-gnu-gcc \
             -O3 \
             -static \
             -pthread \
-            src/main.cpp \
-            src/config.cpp \
-            src/inotify.cpp \
+            AppOpt.c \
             -o out/AppOpt
 
-      - name: Strip binary (reduce size)
+      - name: Strip binary
         run: |
           aarch64-linux-gnu-strip out/AppOpt || true
 
@@ -41,7 +39,7 @@ jobs:
           name: AppOpt-arm64
           path: out/AppOpt
 
-      - name: Create Release (auto)
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
