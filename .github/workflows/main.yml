@@ -15,11 +15,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install toolchain
-        run: |
-          sudo apt update
-          sudo apt install -y gcc-aarch64-linux-gnu
+      # ===================== APT 缓存 =====================
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt
+            /var/lib/apt/lists
+          key: apt-arm64-toolchain-${{ runner.os }}
 
+      # ===================== Install toolchain =====================
+      - name: Install toolchain (cached)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+
+      # ===================== Build =====================
       - name: Build (fast)
         run: |
           mkdir -p out
@@ -28,10 +39,12 @@ jobs:
             AppOpt.c \
             -o out/AppOpt
 
+      # ===================== Strip =====================
       - name: Strip
         run: |
           aarch64-linux-gnu-strip out/AppOpt || true
 
+      # ===================== Artifact =====================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
