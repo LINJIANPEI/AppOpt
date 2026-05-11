@@ -1,8 +1,7 @@
-name: Build AppOpt ARM64 Static
+name: Build AppOpt ARM64
 
 on:
   push:
-    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -10,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install toolchain
@@ -18,10 +17,9 @@ jobs:
           sudo apt update
           sudo apt install -y gcc-aarch64-linux-gnu
 
-      - name: Build AppOpt (single C file)
+      - name: Build static ARM64 binary
         run: |
           mkdir -p out
-
           aarch64-linux-gnu-gcc \
             -O3 \
             -static \
@@ -29,20 +27,20 @@ jobs:
             AppOpt.c \
             -o out/AppOpt
 
-      - name: Strip binary
+      - name: Strip binary (optional reduce size)
         run: |
           aarch64-linux-gnu-strip out/AppOpt || true
 
-      - name: Upload artifact
+      - name: Upload artifact (Actions下载用)
         uses: actions/upload-artifact@v4
         with:
           name: AppOpt-arm64
           path: out/AppOpt
 
-      - name: Create Release
+      - name: Create Release (GitHub Releases下载用)
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
+          name: AppOpt Build ${{ github.run_number }}
           files: out/AppOpt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
