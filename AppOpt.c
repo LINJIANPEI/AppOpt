@@ -1,4 +1,4 @@
-// AppOpt.c —— 完整规则引擎 v4（多配置 + 校验 + 优先级 + 热更新）
+// AppOpt.c —— 完整规则引擎 v4.1（多配置 + 校验 + 定位 + 优先级 + 热更新）
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +32,11 @@ void log_info(const char *msg) {
 
 void log_error(const char *msg) {
     printf("[错误] %s\n", msg);
+}
+
+void log_rule_error(const char *file, int line, const char *msg, const char *content) {
+    printf("[规则错误] %s:%d | %s | 内容: %s\n",
+           file, line, msg, content);
 }
 
 // ===================== glob 匹配 =====================
@@ -75,7 +80,7 @@ int calc_priority(const char *pattern) {
         return 4;
 
     if (strchr(pattern, '*') == NULL)
-        return 1; // 精确匹配最高
+        return 1; // 精确最高
 
     if (pattern[strlen(pattern) - 1] == '*')
         return 2;
@@ -83,12 +88,9 @@ int calc_priority(const char *pattern) {
     return 3;
 }
 
-// ===================== 校验系统 =====================
+// ===================== 校验 =====================
 int validate_rule_line(const char *line) {
-    if (!line || strlen(line) < 5) return 0;
-    if (!strchr(line, '=')) return 0;
-    if (line[0] == '=') return 0;
-    return 1;
+    return line && strlen(line) > 5 && strchr(line, '=');
 }
 
 int validate_pkg(const char *pkg) {
@@ -111,20 +113,24 @@ int validate_range(const char *r) {
     return 1;
 }
 
-// ===================== 解析规则 =====================
-int parse_rule(const char *line, Rule *r) {
+// ===================== 解析规则（带定位） =====================
+int parse_rule(const char *file, int line_no, const char *line, Rule *r) {
 
-    if (!validate_rule_line(line))
+    if (!validate_rule_line(line)) {
+        log_rule_error(file, line_no, "非法规则格式", line);
         return 0;
+    }
 
     const char *p1 = strchr(line, '{');
     const char *p2 = strchr(line, '}');
     const char *eq = strchr(line, '=');
 
-    memset(r, 0, sizeof(Rule));
-
-    if (!(p1 && p2 && eq && p2 > p1 && eq > p2))
+    if (!(p1 && p2 && eq && p2 > p1 && eq > p2)) {
+        log_rule_error(file, line_no, "结构错误", line);
         return 0;
+    }
+
+    memset(r, 0, sizeof(Rule));
 
     strncpy(r->pkg, line, p1 - line);
     r->pkg[p1 - line] = '\0';
@@ -134,12 +140,22 @@ int parse_rule(const char *line, Rule *r) {
 
     strcpy(r->range, eq + 1);
 
-    if (!validate_pkg(r->pkg)) return 0;
-    if (!validate_thread(r->thread)) return 0;
-    if (!validate_range(r->range)) return 0;
+    if (!validate_pkg(r->pkg)) {
+        log_rule_error(file, line_no, "pkg非法", line);
+        return 0;
+    }
+
+    if (!validate_thread(r->thread)) {
+        log_rule_error(file, line_no, "thread非法", line);
+        return 0;
+    }
+
+    if (!validate_range(r->range)) {
+        log_rule_error(file, line_no, "range非法", line);
+        return 0;
+    }
 
     r->priority = calc_priority(r->pkg);
-
     return 1;
 }
 
@@ -168,9 +184,12 @@ void load_all_configs() {
         }
 
         char line[MAX_LINE];
+        int line_no = 0;
         int loaded = 0;
 
         while (fgets(line, sizeof(line), fp)) {
+
+            line_no++;
 
             line[strcspn(line, "\r\n")] = 0;
 
@@ -179,10 +198,8 @@ void load_all_configs() {
 
             Rule r;
 
-            if (!parse_rule(line, &r)) {
-                log_error("非法规则跳过");
+            if (!parse_rule(config_paths[c], line_no, line, &r))
                 continue;
-            }
 
             if (!exists_rule(&r) && rule_count < MAX_RULES) {
                 rules[rule_count++] = r;
@@ -221,7 +238,7 @@ void apply_cpu(const char *range) {
     printf("[调度] CPU范围: %s\n", range);
 }
 
-// ===================== 调度入口 =====================
+// ===================== 调度 =====================
 void schedule(const char *pkg, const char *thread) {
 
     Rule *r = find_best_rule(pkg, thread);
@@ -246,7 +263,7 @@ void watch_config() {
         inotify_add_watch(fd, config_paths[i], IN_MODIFY);
     }
 
-    log_info("开始监听多配置文件...");
+    log_info("开始监听配置变化...");
 
     char buffer[EVENT_BUF_LEN];
 
@@ -274,7 +291,7 @@ void watch_config() {
 int main(int argc, char *argv[]) {
 
     printf("=================================\n");
-    printf("   AppOpt v4 Final Rule Engine\n");
+    printf("   AppOpt v4.1 Rule Engine\n");
     printf("=================================\n");
 
     for (int i = 1; i < argc; i++) {
