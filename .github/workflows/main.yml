@@ -15,34 +15,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ===================== APT CACHE（关键提速） =====================
+      - name: Cache apt
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt
+          key: apt-cache-arm64
+
       - name: Install toolchain
         run: |
           sudo apt update
           sudo apt install -y gcc-aarch64-linux-gnu
 
-      - name: Build
+      # ===================== BUILD =====================
+      - name: Build (optimized)
         run: |
           mkdir -p out
+
           aarch64-linux-gnu-gcc \
             -O3 \
             -static \
             -pthread \
+            -flto \
+            -march=armv8-a \
             AppOpt.c \
             -o out/AppOpt
 
-      - name: Strip
+      # ===================== STRIP =====================
+      - name: Strip binary
         run: |
-          aarch64-linux-gnu-strip out/AppOpt || true
+          aarch64-linux-gnu-strip -s out/AppOpt || true
 
+      # ===================== UPLOAD =====================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: AppOpt-arm64
           path: out/AppOpt
 
+      # ===================== RELEASE（只在 tag） =====================
       - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: AppOpt Build ${{ github.run_number }}
           files: out/AppOpt
