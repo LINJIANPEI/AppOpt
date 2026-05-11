@@ -15,22 +15,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ===================== APT 缓存 =====================
-      - name: Cache apt packages
+      # ===================== 缓存 apt =====================
+      - name: Cache APT packages
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt
             /var/lib/apt/lists
-          key: apt-arm64-toolchain-${{ runner.os }}
+          key: ${{ runner.os }}-apt-arm64-${{ hashFiles('**/*.c') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-arm64-
 
-      # ===================== Install toolchain =====================
-      - name: Install toolchain (cached)
+      # ===================== 安装工具链（修复glibc缺失） =====================
+      - name: Install toolchain (fast + complete)
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          sudo apt update
+          sudo apt install -y \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            binutils-aarch64-linux-gnu
 
-      # ===================== Build =====================
+      # ===================== 编译 =====================
       - name: Build (fast)
         run: |
           mkdir -p out
@@ -39,12 +44,12 @@ jobs:
             AppOpt.c \
             -o out/AppOpt
 
-      # ===================== Strip =====================
+      # ===================== strip =====================
       - name: Strip
         run: |
           aarch64-linux-gnu-strip out/AppOpt || true
 
-      # ===================== Artifact =====================
+      # ===================== 上传产物 =====================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
