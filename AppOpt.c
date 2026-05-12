@@ -880,6 +880,7 @@ static void print_help(const char* prog_name) {
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);
     CpuTopology topo = init_cpu_topo();
     int sleep_interval = 2;
     int opt;
