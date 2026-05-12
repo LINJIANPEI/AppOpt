@@ -1,4 +1,4 @@
-name: Build AppOpt ARM64 (FAST MODE)
+name: Build AppOpt ARM64 (CLEAN MODE)
 
 on:
   push:
@@ -11,68 +11,51 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      CCACHE_DIR: /tmp/ccache
-
     steps:
-      - name: Checkout
+      # ===================== Checkout（强制最新） =====================
+      - name: Checkout latest code
         uses: actions/checkout@v4
-
-      # ===================== 极限缓存（ccache） =====================
-      - name: Cache ccache
-        uses: actions/cache@v4
         with:
-          path: /tmp/ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-
+          fetch-depth: 0
 
-      # ===================== APT 极速缓存（关键优化） =====================
-      - name: Cache APT packages
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: >
-            gcc-aarch64-linux-gnu
+      # ===================== 安装编译环境（无缓存） =====================
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
             libc6-dev-arm64-cross
-            binutils-aarch64-linux-gnu
-            ccache
 
-      # ===================== 编译器加速配置 =====================
-      - name: Setup ccache
+      # ===================== Clean build =====================
+      - name: Build (clean)
         run: |
-          mkdir -p /tmp/ccache
-          ccache --set-config=max_size=500M
-          ccache --zero-stats || true
-
-      # ===================== Build（极速核心） =====================
-      - name: Build (ultra fast)
-        run: |
+          rm -rf out
           mkdir -p out
 
-          export CC="ccache aarch64-linux-gnu-gcc"
-
-          $CC \
-            -O2 -pipe -s -static -pthread \
+          aarch64-linux-gnu-gcc \
+            -O2 -pipe -static -pthread \
             AppOpt.c \
             -o out/AppOpt
 
-      # ===================== ccache统计 =====================
-      - name: Show cache stats
-        run: |
-          ccache -s
-
       # ===================== strip =====================
-      - name: Strip
+      - name: Strip binary
         run: |
           aarch64-linux-gnu-strip out/AppOpt || true
 
-      # ===================== artifact =====================
+      # ===================== 记录版本信息（非常重要） =====================
+      - name: Write build info
+        run: |
+          echo "commit: $GITHUB_SHA" > out/build_info.txt
+          echo "run: $GITHUB_RUN_NUMBER" >> out/build_info.txt
+          echo "date: $(date)" >> out/build_info.txt
+
+      # ===================== upload artifact =====================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: AppOpt-arm64
-          path: out/AppOpt
-
+          path: out/
 
   release:
     needs: build
@@ -85,9 +68,12 @@ jobs:
           name: AppOpt-arm64
           path: out
 
+      # ===================== Release =====================
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: AppOpt FAST Build ${{ github.run_number }}
-          files: out/AppOpt
+          name: AppOpt CLEAN Build ${{ github.run_number }}
+          files: |
+            out/AppOpt
+            out/build_info.txt
