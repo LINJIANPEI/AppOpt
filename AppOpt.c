@@ -1,259 +1,293 @@
-// AppOpt.c —— 规则引擎 v5（极简错误日志版）
-
+#define _GNU_SOURCE
+#include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <fnmatch.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/inotify.h>
+#include <sys/stat.h>
+#include <sys/sysinfo.h>
+#include <unistd.h>
 
-#define MAX_LINE 1024
-#define MAX_RULES 4096
-#define EVENT_BUF_LEN (1024 * (sizeof(struct inotify_event) + 16))
+#define VERSION "1.5.8"
+#define BASE_CPUSET "/dev/cpuset/Linlin"
+#define MAX_PKG_LEN 128
+#define MAX_THREAD_LEN 32
 
-// ===================== 规则 =====================
+/* =========================
+ * 数据结构
+ * ========================= */
+
 typedef struct {
-    char pkg[256];
-    char thread[256];
-    char range[32];
-    int priority;
-    int line_no;
-} Rule;
+    char pkg[MAX_PKG_LEN];
+    char thread[MAX_THREAD_LEN];
+    char cpuset_dir[256];
+    cpu_set_t cpus;
+} AffinityRule;
 
-static Rule rules[MAX_RULES];
-static int rule_count = 0;
+typedef struct {
+    pid_t pid;
+    char pkg[MAX_PKG_LEN];
+    char base_cpuset[128];
+    cpu_set_t base_cpus;
+    ThreadInfo* threads;
+    size_t num_threads;
+    size_t threads_cap;
+    AffinityRule** thread_rules;
+    size_t num_thread_rules;
+    size_t thread_rules_cap;
+} ProcessInfo;
 
-static char config_path[512] = "./applist.prop";
+/* =========================
+ * 多配置支持
+ * ========================= */
 
-// ===================== 错误日志（只保留错误） =====================
-void log_error(const char *file, int line, const char *msg) {
-    printf("[ERROR] %s:%d -> %s\n", file, line, msg);
+typedef struct {
+    char** config_files;
+    size_t num_config_files;
+} ConfigList;
+
+/* =========================
+ * 工具函数（略保留你原来的）
+ * ========================= */
+
+static char* strtrim(char* s) {
+    while (isspace(*s)) s++;
+    if (*s == 0) return s;
+    char* end = s + strlen(s) - 1;
+    while (end > s && isspace(*end)) end--;
+    *(end + 1) = 0;
+    return s;
 }
 
-// ===================== glob匹配 =====================
-int match(const char *pattern, const char *text) {
-    const char *p = pattern;
-    const char *t = text;
-    const char *star = NULL;
-    const char *backup = NULL;
+/* =========================
+ * CPU 解析（保留）
+ * ========================= */
 
-    while (*t) {
-        if (*p == '*') {
-            star = p++;
-            backup = t;
-            continue;
+static void parse_cpu_ranges(const char* spec, cpu_set_t* set, const cpu_set_t* present);
+
+/* =========================
+ * 规则合并
+ * ========================= */
+
+static void merge_config(AppConfig* base, AppConfig* add) {
+    size_t new_rules = base->num_rules + add->num_rules;
+
+    AffinityRule* tmp = realloc(base->rules, new_rules * sizeof(AffinityRule));
+    if (!tmp) return;
+
+    base->rules = tmp;
+    memcpy(base->rules + base->num_rules,
+           add->rules,
+           add->num_rules * sizeof(AffinityRule));
+
+    base->num_rules += add->num_rules;
+
+    /* pkg 合并 */
+    for (size_t i = 0; i < add->num_pkgs; i++) {
+        bool exists = false;
+        for (size_t j = 0; j < base->num_pkgs; j++) {
+            if (strcmp(base->pkgs[j], add->pkgs[i]) == 0) {
+                exists = true;
+                break;
+            }
         }
-        if (*p == *t) {
-            p++; t++;
-            continue;
-        }
-        if (star) {
-            p = star + 1;
-            t = ++backup;
-            continue;
-        }
-        return 0;
-    }
 
-    while (*p == '*') p++;
-    return *p == '\0';
-}
+        if (!exists) {
+            char** pk = realloc(base->pkgs,
+                        (base->num_pkgs + 1) * sizeof(char*));
+            if (!pk) continue;
 
-// ===================== 优先级 =====================
-int priority(const char *p) {
-    if (strcmp(p, "*") == 0) return 4;
-    if (!strchr(p, '*')) return 1;
-    if (p[strlen(p)-1] == '*') return 2;
-    return 3;
-}
-
-// ===================== 校验 =====================
-int valid_range(const char *r) {
-    if (!r || !*r) return 0;
-
-    for (int i = 0; r[i]; i++) {
-        char c = r[i];
-        if (!((c >= '0' && c <= '9') || c=='-' || c==',')) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-// ===================== 解析规则 =====================
-int parse_rule(const char *line, Rule *r, int line_no, const char *file) {
-
-    const char *eq = strchr(line, '=');
-    if (!eq) {
-        log_error(file, line_no, "missing '='");
-        return 0;
-    }
-
-    memset(r, 0, sizeof(Rule));
-    r->line_no = line_no;
-
-    const char *l = strchr(line, '{');
-    const char *rr = strchr(line, '}');
-
-    // ================= pkg + thread =================
-    if (l && rr && rr < eq) {
-
-        strncpy(r->pkg, line, l - line);
-        r->pkg[l - line] = '\0';
-
-        strncpy(r->thread, l + 1, rr - l - 1);
-        r->thread[rr - l - 1] = '\0';
-
-    } else {
-        // ⭐关键：支持 com.xxx=0-5 => com.xxx{*}=0-5
-        strncpy(r->pkg, line, eq - line);
-        r->pkg[eq - line] = '\0';
-        strcpy(r->thread, "*");
-    }
-
-    // ================= range =================
-    strcpy(r->range, eq + 1);
-
-    if (!valid_range(r->range)) {
-        log_error(file, line_no, "illegal range");
-        return 0;
-    }
-
-    r->priority = priority(r->pkg);
-    return 1;
-}
-
-// ===================== 去重 =====================
-int exists(Rule *r) {
-    for (int i = 0; i < rule_count; i++) {
-        if (!strcmp(rules[i].pkg, r->pkg) &&
-            !strcmp(rules[i].thread, r->thread) &&
-            !strcmp(rules[i].range, r->range)) {
-            return 1;
+            base->pkgs = pk;
+            base->pkgs[base->num_pkgs++] = strdup(add->pkgs[i]);
         }
     }
-    return 0;
 }
 
-// ===================== 加载配置 =====================
-void load_config() {
+/* =========================
+ * 单文件加载（你原来的 load_config）
+ * ========================= */
 
-    FILE *fp = fopen(config_path, "r");
-    if (!fp) {
-        log_error(config_path, 0, "cannot open file");
-        return;
+static AppConfig* load_config(const char* file, const CpuTopology* topo, time_t* mtime);
+
+/* =========================
+ * 多文件加载
+ * ========================= */
+
+static AppConfig* load_config_files(char** files,
+                                     size_t count,
+                                     const CpuTopology* topo,
+                                     time_t* last_mtime)
+{
+    AppConfig* base = calloc(1, sizeof(AppConfig));
+    if (!base) return NULL;
+
+    base->ref_count = 1;
+    base->topo = *topo;
+
+    for (size_t i = 0; i < count; i++) {
+
+        AppConfig* cfg = load_config(files[i], topo, last_mtime);
+        if (!cfg) continue;
+
+        merge_config(base, cfg);
+        config_release(cfg);
     }
 
-    rule_count = 0;
+    return base;
+}
 
-    char line[MAX_LINE];
-    int ln = 0, ok = 0;
+/* =========================
+ * proc_collect（核心改造）
+ * ========================= */
 
-    while (fgets(line, sizeof(line), fp)) {
+static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
+{
+    DIR* proc_dir = opendir("/proc");
+    if (!proc_dir) return;
 
-        ln++;
-        line[strcspn(line, "\r\n")] = 0;
+    int proc_fd = dirfd(proc_dir);
+    *count = 0;
 
-        if (!line[0] || line[0] == '#')
-            continue;
-
-        Rule r;
-
-        if (!parse_rule(line, &r, ln, config_path))
-            continue;
-
-        if (!exists(&r)) {
-            rules[rule_count++] = r;
-            ok++;
-        }
+    if (!cache->procs) {
+        cache->procs_cap = 2048;
+        cache->procs = calloc(cache->procs_cap, sizeof(ProcessInfo));
     }
 
-    fclose(fp);
+    struct dirent* ent;
 
-    printf("[INFO] loaded rules: %d (%s)\n", ok, config_path);
-}
+    while ((ent = readdir(proc_dir))) {
 
-// ===================== 匹配 =====================
-Rule* best(const char *pkg, const char *th) {
+        long pid = atoi(ent->d_name);
+        if (pid <= 0) continue;
 
-    Rule *b = NULL;
+        int pid_fd = openat(proc_fd, ent->d_name, O_RDONLY | O_DIRECTORY);
+        if (pid_fd == -1) continue;
 
-    for (int i = 0; i < rule_count; i++) {
+        char cmd[MAX_PKG_LEN] = {0};
+        read_file(pid_fd, "cmdline", cmd, sizeof(cmd));
 
-        if (!match(rules[i].pkg, pkg)) continue;
-        if (!match(rules[i].thread, th)) continue;
+        char* name = strrchr(cmd, '/');
+        name = name ? name + 1 : cmd;
 
-        if (!b || rules[i].priority < b->priority)
-            b = &rules[i];
-    }
+        ProcessInfo* proc = &cache->procs[*count];
+        proc->pid = pid;
+        strncpy(proc->pkg, name, MAX_PKG_LEN);
 
-    return b;
-}
+        CPU_ZERO(&proc->base_cpus);
 
-// ===================== 应用 =====================
-void apply(const char *range) {
-    printf("[CPU] %s\n", range);
-}
+        /* =========================
+         * ⭐ 优先级匹配
+         * ========================= */
 
-// ===================== 调度 =====================
-void schedule(const char *pkg, const char *th) {
+        const AffinityRule* best_thread = NULL;
+        const AffinityRule* best_exact  = NULL;
+        const AffinityRule* best_wild   = NULL;
 
-    Rule *r = best(pkg, th);
+        for (size_t i = 0; i < cfg->num_rules; i++) {
 
-    if (r) {
-        printf("[HIT] %s{%s} line=%d\n",
-            r->pkg, r->thread, r->line_no);
-        apply(r->range);
-    } else {
-        printf("[MISS] %s{%s}\n", pkg, th);
-    }
-}
+            const AffinityRule* r = &cfg->rules[i];
 
-// ===================== 热加载 =====================
-void watch() {
-
-    int fd = inotify_init();
-    int wd = inotify_add_watch(fd, config_path, IN_MODIFY);
-
-    char buf[EVENT_BUF_LEN];
-
-    while (1) {
-
-        int len = read(fd, buf, sizeof(buf));
-        if (len <= 0) continue;
-
-        for (int i = 0; i < len;) {
-
-            struct inotify_event *ev =
-                (struct inotify_event*)&buf[i];
-
-            if (ev->mask & IN_MODIFY) {
-                printf("[INFO] config changed -> reload\n");
-                load_config();
+            if (r->thread[0]) {
+                if (fnmatch(r->pkg, proc->pkg, FNM_NOESCAPE) == 0)
+                    best_thread = r;
+                continue;
             }
 
-            i += sizeof(struct inotify_event) + ev->len;
+            if (strcmp(r->pkg, proc->pkg) == 0)
+                best_exact = r;
+
+            if (fnmatch(r->pkg, proc->pkg, FNM_NOESCAPE) == 0)
+                best_wild = r;
         }
+
+        const AffinityRule* sel = best_thread ? best_thread :
+                                   best_exact  ? best_exact  :
+                                   best_wild;
+
+        if (!sel) {
+            close(pid_fd);
+            continue;
+        }
+
+        CPU_OR(&proc->base_cpus, &proc->base_cpus, &sel->cpus);
+        strncpy(proc->base_cpuset, sel->cpuset_dir, sizeof(proc->base_cpuset));
+
+        close(pid_fd);
+        (*count)++;
     }
+
+    closedir(proc_dir);
 }
 
-// ===================== main =====================
-int main(int argc, char *argv[]) {
+/* =========================
+ * main 改造：多 -c
+ * ========================= */
 
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-c") && i + 1 < argc)
-            strncpy(config_path, argv[i+1], sizeof(config_path));
+int main(int argc, char** argv)
+{
+    CpuTopology topo = init_cpu_topo();
+
+    ConfigList cfg = {0};
+
+    int opt;
+    while ((opt = getopt(argc, argv, "c:vhs:")) != -1) {
+        switch (opt) {
+
+        case 'c': {
+            cfg.config_files = realloc(cfg.config_files,
+                (cfg.num_config_files + 1) * sizeof(char*));
+
+            cfg.config_files[cfg.num_config_files++] = strdup(optarg);
+            printf("加载配置: %s\n", optarg);
+            break;
+        }
+
+        case 'v':
+            printf("AppOpt %s\n", VERSION);
+            exit(0);
+
+        case 'h':
+            printf("usage: -c file.conf (multi supported)\n");
+            exit(0);
+        }
     }
 
-    printf("==== AppOpt v5 ====\n");
+    if (cfg.num_config_files == 0) {
+        cfg.config_files = malloc(sizeof(char*));
+        cfg.config_files[0] = strdup("./applist.conf");
+        cfg.num_config_files = 1;
+    }
 
-    load_config();
+    AppConfig* config =
+        load_config_files(cfg.config_files,
+                          cfg.num_config_files,
+                          &topo,
+                          NULL);
 
-    // test
-    schedule("com.android.systemui", "RenderThread");
-    schedule("com.android.systemui", "pool-worker");
-    schedule("com.tencent.mm", "GLThread");
+    atomic_store(&current_config, config);
 
-    watch();
+    ProcCache cache = {0};
+    int interval = 2;
 
-    return 0;
+    printf("AppOpt start v%s\n", VERSION);
+
+    while (1) {
+        AppConfig* cfg = get_config();
+        if (cfg) {
+            size_t cnt = 0;
+            proc_collect(cfg, &cache, &cnt);
+            apply_affinity(&cache, &cfg->topo);
+            config_release(cfg);
+        }
+
+        sleep(interval);
+    }
 }
