@@ -270,7 +270,6 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
     merged->pkgs = NULL;
     merged->num_pkgs = 0;
     
-    // 用于去重的哈希表：键为 "pkg\0thread"
     struct {
         char* key;
         AffinityRule rule;
@@ -284,7 +283,9 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
             continue;
         }
         char line[256];
+        int line_num = 0;
         while (fgets(line, sizeof(line), fp)) {
+            line_num++;
             char* p = strtrim(line);
             if (*p == '#' || !*p) continue;
             char* eq = strchr(p, '=');
@@ -302,25 +303,25 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
             char* pkg = strtrim(p);
             char* cpus = strtrim(eq);
             if (strlen(pkg) >= MAX_PKG_LEN || strlen(thread) >= MAX_THREAD_LEN) {
-                fprintf(stderr, "规则校验失败: 包名或线程名过长 (%s{%s})\n", pkg, thread);
+                fprintf(stderr, "%s:%d: 规则校验失败: 包名或线程名过长 (%s{%s})\n", files[fi], line_num, pkg, thread);
                 continue;
             }
             cpu_set_t set;
             CPU_ZERO(&set);
             parse_cpu_ranges(cpus, &set, &merged->topo.present_cpus);
             if (CPU_COUNT(&set) == 0) {
-                fprintf(stderr, "规则校验失败: CPU 范围无效或不包含任何在线 CPU (%s=%s)\n", pkg, cpus);
+                fprintf(stderr, "%s:%d: 规则校验失败: CPU 范围无效或不包含任何在线 CPU (%s=%s)\n", files[fi], line_num, pkg, cpus);
                 continue;
             }
             char* dir_name = cpu_set_to_str(&set);
             if (!dir_name) {
-                fprintf(stderr, "规则校验失败: 无法生成 cpuset 目录名\n");
+                fprintf(stderr, "%s:%d: 规则校验失败: 无法生成 cpuset 目录名\n", files[fi], line_num);
                 continue;
             }
             char path[256];
             build_str(path, sizeof(path), BASE_CPUSET, "/", dir_name, NULL);
             if (!create_cpuset_dir(path, dir_name, merged->topo.mems_str)) {
-                fprintf(stderr, "规则校验失败: 无法创建 cpuset 目录 %s\n", path);
+                fprintf(stderr, "%s:%d: 规则校验失败: 无法创建 cpuset 目录 %s\n", files[fi], line_num, path);
                 free(dir_name);
                 continue;
             }
@@ -331,7 +332,6 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
             rule.cpus = set;
             free(dir_name);
             
-            // 构造唯一键
             char key[512];
             snprintf(key, sizeof(key), "%s\001%s", pkg, thread);
             size_t idx = map_cnt;
@@ -342,6 +342,7 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
                 }
             }
             if (idx == map_cnt) {
+                // 新规则
                 if (map_cnt >= map_cap) {
                     size_t new_cap = map_cap ? map_cap * 2 : 64;
                     void* tmp = realloc(rule_map, new_cap * sizeof(*rule_map));
@@ -357,10 +358,36 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
                 rule_map[map_cnt].rule = rule;
                 map_cnt++;
             } else {
-                // 覆盖旧规则
-                rule_map[idx].rule = rule;
+                // 已存在：合并 CPU 集
+                AffinityRule* existing = &rule_map[idx].rule;
+                cpu_set_t merged_cpus;
+                CPU_ZERO(&merged_cpus);
+                CPU_OR(&merged_cpus, &existing->cpus, &rule.cpus);
+                if (CPU_EQUAL(&merged_cpus, &existing->cpus)) {
+                    // 无变化，跳过
+                    continue;
+                }
+                // 生成新的目录名
+                char* new_dir_name = cpu_set_to_str(&merged_cpus);
+                if (!new_dir_name) {
+                    fprintf(stderr, "%s:%d: 合并规则 %s{%s} 失败：无法生成目录名\n", files[fi], line_num, pkg, thread);
+                    continue;
+                }
+                char new_path[256];
+                build_str(new_path, sizeof(new_path), BASE_CPUSET, "/", new_dir_name, NULL);
+                if (!create_cpuset_dir(new_path, new_dir_name, merged->topo.mems_str)) {
+                    fprintf(stderr, "%s:%d: 合并规则 %s{%s} 失败：无法创建 cpuset 目录 %s\n", files[fi], line_num, pkg, thread, new_path);
+                    free(new_dir_name);
+                    continue;
+                }
+                // 更新规则
+                existing->cpus = merged_cpus;
+                strncpy(existing->cpuset_dir, new_dir_name, sizeof(existing->cpuset_dir) - 1);
+                existing->cpuset_dir[sizeof(existing->cpuset_dir)-1] = '\0';
+                free(new_dir_name);
             }
-            // 更新 pkg 列表（跳过包名为 "*" 的规则）
+            
+            // 更新 pkg 列表（跳过通配包名）
             if (strcmp(pkg, "*") != 0) {
                 bool pkg_exists = false;
                 for (size_t i = 0; i < merged->num_pkgs; i++) {
@@ -393,7 +420,7 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
         }
     }
     free(rule_map);
-    printf("配置合并完成，共加载 %zu 条规则，%zu 个包名\n", merged->num_rules, merged->num_pkgs);
+    printf("配置合并完成（合并相同规则），共加载 %zu 条规则，%zu 个包名\n", merged->num_rules, merged->num_pkgs);
     return merged;
 }
 
