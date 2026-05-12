@@ -358,33 +358,17 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
                 rule_map[map_cnt].rule = rule;
                 map_cnt++;
             } else {
-                // 已存在：合并 CPU 集
+                // 已存在：保留线程名模式更长的规则（更具体）
                 AffinityRule* existing = &rule_map[idx].rule;
-                cpu_set_t merged_cpus;
-                CPU_ZERO(&merged_cpus);
-                CPU_OR(&merged_cpus, &existing->cpus, &rule.cpus);
-                if (CPU_EQUAL(&merged_cpus, &existing->cpus)) {
-                    // 无变化，跳过
-                    continue;
+                size_t existing_len = strlen(existing->thread);
+                size_t new_len = strlen(rule.thread);
+                if (new_len > existing_len) {
+                    // 新规则更具体，替换旧规则
+                    existing->cpus = rule.cpus;
+                    strncpy(existing->cpuset_dir, rule.cpuset_dir, sizeof(existing->cpuset_dir)-1);
+                    existing->cpuset_dir[sizeof(existing->cpuset_dir)-1] = '\0';
                 }
-                // 生成新的目录名
-                char* new_dir_name = cpu_set_to_str(&merged_cpus);
-                if (!new_dir_name) {
-                    fprintf(stderr, "%s:%d: 合并规则 %s{%s} 失败：无法生成目录名\n", files[fi], line_num, pkg, thread);
-                    continue;
-                }
-                char new_path[256];
-                build_str(new_path, sizeof(new_path), BASE_CPUSET, "/", new_dir_name, NULL);
-                if (!create_cpuset_dir(new_path, new_dir_name, merged->topo.mems_str)) {
-                    fprintf(stderr, "%s:%d: 合并规则 %s{%s} 失败：无法创建 cpuset 目录 %s\n", files[fi], line_num, pkg, thread, new_path);
-                    free(new_dir_name);
-                    continue;
-                }
-                // 更新规则
-                existing->cpus = merged_cpus;
-                strncpy(existing->cpuset_dir, new_dir_name, sizeof(existing->cpuset_dir) - 1);
-                existing->cpuset_dir[sizeof(existing->cpuset_dir)-1] = '\0';
-                free(new_dir_name);
+                // 否则保留原规则
             }
             
             // 更新 pkg 列表（跳过通配包名）
@@ -420,7 +404,7 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
         }
     }
     free(rule_map);
-    printf("配置合并完成（合并相同规则），共加载 %zu 条规则，%zu 个包名\n", merged->num_rules, merged->num_pkgs);
+    printf("配置合并完成（最长匹配优先），共加载 %zu 条规则，%zu 个包名\n", merged->num_rules, merged->num_pkgs);
     return merged;
 }
 
@@ -662,6 +646,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
                 proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
             } else {
+                // 进程级规则：直接合并到 base_cpus（注意：这里仍可合并，因为是 base）
                 CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
                 build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
             }
@@ -755,37 +740,41 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             CPU_ZERO(&ti->cpus);
             const char* matched = NULL;
 
-            // 1) 具体包名的线程规则匹配
+            // 1) 具体包名的线程规则：选择最长匹配
+            const AffinityRule* best_rule = NULL;
+            size_t best_len = 0;
             for (size_t i = 0; i < proc->num_thread_rules; i++) {
                 const AffinityRule* rule = proc->thread_rules[i];
                 if (fnmatch(rule->thread, ti->name, FNM_NOESCAPE) == 0) {
-                    CPU_OR(&ti->cpus, &ti->cpus, &rule->cpus);
-                    matched = rule->cpuset_dir;
+                    size_t len = strlen(rule->thread);
+                    if (!best_rule || len > best_len) {
+                        best_rule = rule;
+                        best_len = len;
+                    }
                 }
             }
+            if (best_rule) {
+                ti->cpus = best_rule->cpus;
+                matched = best_rule->cpuset_dir;
+            }
 
-            // 2) 如果具体规则没有匹配到，尝试通配包名 "*" 的线程规则
+            // 2) 如果具体规则没有匹配到，尝试通配包名 "*" 的线程规则（同样选最长匹配）
             if (CPU_COUNT(&ti->cpus) == 0 && wildcard_cnt > 0) {
-                // 精确匹配优先（无通配符）
+                const AffinityRule* best_wild = NULL;
+                size_t best_wild_len = 0;
                 for (size_t i = 0; i < wildcard_cnt; i++) {
                     const AffinityRule* rule = wildcard_thread_rules[i];
-                    if (strpbrk(rule->thread, "*?[") == NULL) {
-                        if (strcmp(rule->thread, ti->name) == 0) {
-                            ti->cpus = rule->cpus;
-                            matched = rule->cpuset_dir;
-                            break;
+                    if (fnmatch(rule->thread, ti->name, FNM_NOESCAPE) == 0) {
+                        size_t len = strlen(rule->thread);
+                        if (!best_wild || len > best_wild_len) {
+                            best_wild = rule;
+                            best_wild_len = len;
                         }
                     }
                 }
-                // 通配匹配
-                if (CPU_COUNT(&ti->cpus) == 0) {
-                    for (size_t i = 0; i < wildcard_cnt; i++) {
-                        const AffinityRule* rule = wildcard_thread_rules[i];
-                        if (fnmatch(rule->thread, ti->name, FNM_NOESCAPE) == 0) {
-                            CPU_OR(&ti->cpus, &ti->cpus, &rule->cpus);
-                            matched = rule->cpuset_dir;
-                        }
-                    }
+                if (best_wild) {
+                    ti->cpus = best_wild->cpus;
+                    matched = best_wild->cpuset_dir;
                 }
             }
 
