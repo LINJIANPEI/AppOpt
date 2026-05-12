@@ -1,46 +1,35 @@
-// AppOpt.c —— v5（真实线程扫描 + 自动调度引擎）
+// AppOpt.c —— 规则引擎 v5（极简错误日志版）
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
-#include <ctype.h>
+#include <unistd.h>
+#include <sys/inotify.h>
 
 #define MAX_LINE 1024
 #define MAX_RULES 4096
-#define MAX_FILES 16
+#define EVENT_BUF_LEN (1024 * (sizeof(struct inotify_event) + 16))
 
-// ===================== 规则结构 =====================
+// ===================== 规则 =====================
 typedef struct {
     char pkg[256];
     char thread[256];
     char range[32];
-
     int priority;
-    int score;
-
     int line_no;
-    char file[128];
 } Rule;
 
 static Rule rules[MAX_RULES];
 static int rule_count = 0;
 
-static char config_files[MAX_FILES][256];
-static int file_count = 0;
+static char config_path[512] = "./applist.prop";
 
-// ===================== debug =====================
-static int DEBUG = 1;
-
-void logi(const char *msg) {
-    printf("[INFO] %s\n", msg);
+// ===================== 错误日志（只保留错误） =====================
+void log_error(const char *file, int line, const char *msg) {
+    printf("[ERROR] %s:%d -> %s\n", file, line, msg);
 }
 
-void logd(const char *msg) {
-    if (DEBUG) printf("[DEBUG] %s\n", msg);
-}
-
-// ===================== match =====================
+// ===================== glob匹配 =====================
 int match(const char *pattern, const char *text) {
     const char *p = pattern;
     const char *t = text;
@@ -69,254 +58,202 @@ int match(const char *pattern, const char *text) {
     return *p == '\0';
 }
 
-// ===================== score =====================
-int calc_score(const char *pkg, const char *thread) {
-    int score = 0;
-    score += strlen(pkg) * 10;
-
-    if (strcmp(thread, "*") == 0) score += 1;
-    else if (strchr(thread, '*')) score += 5;
-    else score += 20;
-
-    return score;
+// ===================== 优先级 =====================
+int priority(const char *p) {
+    if (strcmp(p, "*") == 0) return 4;
+    if (!strchr(p, '*')) return 1;
+    if (p[strlen(p)-1] == '*') return 2;
+    return 3;
 }
 
-// ===================== range 校验 =====================
-int validate_range(const char *r) {
+// ===================== 校验 =====================
+int valid_range(const char *r) {
+    if (!r || !*r) return 0;
+
     for (int i = 0; r[i]; i++) {
         char c = r[i];
-        if (!((c >= '0' && c <= '9') || c=='-' || c==',')) return 0;
+        if (!((c >= '0' && c <= '9') || c=='-' || c==',')) {
+            return 0;
+        }
     }
     return 1;
 }
 
-// ===================== parse rule =====================
+// ===================== 解析规则 =====================
 int parse_rule(const char *line, Rule *r, int line_no, const char *file) {
 
     const char *eq = strchr(line, '=');
-    if (!eq) return 0;
+    if (!eq) {
+        log_error(file, line_no, "missing '='");
+        return 0;
+    }
 
     memset(r, 0, sizeof(Rule));
-
     r->line_no = line_no;
-    strcpy(r->file, file);
 
-    const char *p1 = strchr(line, '{');
-    const char *p2 = strchr(line, '}');
+    const char *l = strchr(line, '{');
+    const char *rr = strchr(line, '}');
 
-    if (p1 && p2 && p2 < eq) {
+    // ================= pkg + thread =================
+    if (l && rr && rr < eq) {
 
-        strncpy(r->pkg, line, p1 - line);
-        r->pkg[p1 - line] = 0;
+        strncpy(r->pkg, line, l - line);
+        r->pkg[l - line] = '\0';
 
-        strncpy(r->thread, p1 + 1, p2 - p1 - 1);
-        r->thread[p2 - p1 - 1] = 0;
+        strncpy(r->thread, l + 1, rr - l - 1);
+        r->thread[rr - l - 1] = '\0';
 
     } else {
+        // ⭐关键：支持 com.xxx=0-5 => com.xxx{*}=0-5
         strncpy(r->pkg, line, eq - line);
-        r->pkg[eq - line] = 0;
+        r->pkg[eq - line] = '\0';
         strcpy(r->thread, "*");
     }
 
+    // ================= range =================
     strcpy(r->range, eq + 1);
 
-    if (!validate_range(r->range)) return 0;
+    if (!valid_range(r->range)) {
+        log_error(file, line_no, "illegal range");
+        return 0;
+    }
 
-    r->priority = 1;
-    r->score = calc_score(r->pkg, r->thread);
-
+    r->priority = priority(r->pkg);
     return 1;
 }
 
-// ===================== load =====================
-int load_file(const char *file) {
+// ===================== 去重 =====================
+int exists(Rule *r) {
+    for (int i = 0; i < rule_count; i++) {
+        if (!strcmp(rules[i].pkg, r->pkg) &&
+            !strcmp(rules[i].thread, r->thread) &&
+            !strcmp(rules[i].range, r->range)) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
-    FILE *fp = fopen(file, "r");
-    if (!fp) return 0;
+// ===================== 加载配置 =====================
+void load_config() {
+
+    FILE *fp = fopen(config_path, "r");
+    if (!fp) {
+        log_error(config_path, 0, "cannot open file");
+        return;
+    }
+
+    rule_count = 0;
 
     char line[MAX_LINE];
-    int line_no = 0;
-    int loaded = 0;
+    int ln = 0, ok = 0;
 
     while (fgets(line, sizeof(line), fp)) {
 
-        line_no++;
+        ln++;
         line[strcspn(line, "\r\n")] = 0;
 
-        if (line[0] == '#' || line[0] == 0)
+        if (!line[0] || line[0] == '#')
             continue;
 
         Rule r;
 
-        if (parse_rule(line, &r, line_no, file)) {
+        if (!parse_rule(line, &r, ln, config_path))
+            continue;
 
-            if (rule_count < MAX_RULES) {
-                rules[rule_count++] = r;
-                loaded++;
-            }
+        if (!exists(&r)) {
+            rules[rule_count++] = r;
+            ok++;
         }
     }
 
     fclose(fp);
 
-    printf("[文件] %s -> %d 条规则\n", file, loaded);
-    return loaded;
+    printf("[INFO] loaded rules: %d (%s)\n", ok, config_path);
 }
 
-// ===================== load all =====================
-void load_all() {
-    rule_count = 0;
+// ===================== 匹配 =====================
+Rule* best(const char *pkg, const char *th) {
 
-    int total = 0;
-    for (int i = 0; i < file_count; i++) {
-        total += load_file(config_files[i]);
-    }
-
-    printf("[总计] %d 条规则\n", total);
-}
-
-// ===================== best match =====================
-Rule* find_best(const char *pkg, const char *thread) {
-
-    Rule *best = NULL;
-    int best_score = -1;
+    Rule *b = NULL;
 
     for (int i = 0; i < rule_count; i++) {
 
         if (!match(rules[i].pkg, pkg)) continue;
-        if (!match(rules[i].thread, thread)) continue;
+        if (!match(rules[i].thread, th)) continue;
 
-        if (rules[i].score > best_score) {
-            best = &rules[i];
-            best_score = rules[i].score;
-        }
+        if (!b || rules[i].priority < b->priority)
+            b = &rules[i];
     }
 
-    return best;
+    return b;
 }
 
-// ===================== 真正调度入口 =====================
-void schedule(const char *pkg, const char *thread) {
+// ===================== 应用 =====================
+void apply(const char *range) {
+    printf("[CPU] %s\n", range);
+}
 
-    Rule *r = find_best(pkg, thread);
+// ===================== 调度 =====================
+void schedule(const char *pkg, const char *th) {
+
+    Rule *r = best(pkg, th);
 
     if (r) {
-        printf("[命中] %s{%s} <- %s:%d (score=%d)\n",
-            r->pkg, r->thread, r->file, r->line_no, r->score);
+        printf("[HIT] %s{%s} line=%d\n",
+            r->pkg, r->thread, r->line_no);
+        apply(r->range);
     } else {
-        printf("[未命中] %s{%s}\n", pkg, thread);
+        printf("[MISS] %s{%s}\n", pkg, th);
     }
 }
 
-// ===================== 真实线程扫描（核心替换点） =====================
-void scan_threads(const char *pkg, int pid) {
+// ===================== 热加载 =====================
+void watch() {
 
-    char path[256];
-    snprintf(path, sizeof(path), "/proc/%d/task", pid);
+    int fd = inotify_init();
+    int wd = inotify_add_watch(fd, config_path, IN_MODIFY);
 
-    DIR *dir = opendir(path);
-    if (!dir) return;
+    char buf[EVENT_BUF_LEN];
 
-    struct dirent *ent;
+    while (1) {
 
-    while ((ent = readdir(dir))) {
+        int len = read(fd, buf, sizeof(buf));
+        if (len <= 0) continue;
 
-        if (ent->d_name[0] == '.')
-            continue;
+        for (int i = 0; i < len;) {
 
-        char comm_path[256];
-        snprintf(comm_path, sizeof(comm_path),
-                 "/proc/%d/task/%s/comm",
-                 pid, ent->d_name);
+            struct inotify_event *ev =
+                (struct inotify_event*)&buf[i];
 
-        FILE *fp = fopen(comm_path, "r");
-        if (!fp) continue;
-
-        char thread[128] = {0};
-        fgets(thread, sizeof(thread), fp);
-        fclose(fp);
-
-        thread[strcspn(thread, "\r\n")] = 0;
-
-        schedule(pkg, thread);
-    }
-
-    closedir(dir);
-}
-
-// ===================== 模拟进程发现（可替换成真实 AMS） =====================
-void scan_processes() {
-
-    DIR *dir = opendir("/proc");
-    if (!dir) return;
-
-    struct dirent *ent;
-
-    while ((ent = readdir(dir))) {
-
-        if (!isdigit(ent->d_name[0]))
-            continue;
-
-        char cmd_path[256];
-        snprintf(cmd_path, sizeof(cmd_path),
-                 "/proc/%s/cmdline",
-                 ent->d_name);
-
-        FILE *fp = fopen(cmd_path, "r");
-        if (!fp) continue;
-
-        char pkg[256] = {0};
-        fgets(pkg, sizeof(pkg), fp);
-        fclose(fp);
-
-        if (strlen(pkg) == 0)
-            continue;
-
-        int pid = atoi(ent->d_name);
-
-        scan_threads(pkg, pid);
-    }
-
-    closedir(dir);
-}
-
-// ===================== args =====================
-void parse_args(int argc, char *argv[]) {
-
-    for (int i = 1; i < argc; i++) {
-
-        if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
-
-            if (file_count < MAX_FILES) {
-                strncpy(config_files[file_count++],
-                        argv[i+1],
-                        sizeof(config_files[0]) - 1);
+            if (ev->mask & IN_MODIFY) {
+                printf("[INFO] config changed -> reload\n");
+                load_config();
             }
-        }
-    }
 
-    if (file_count == 0) {
-        strcpy(config_files[file_count++], "./applist.prop");
+            i += sizeof(struct inotify_event) + ev->len;
+        }
     }
 }
 
 // ===================== main =====================
 int main(int argc, char *argv[]) {
 
-    printf("=================================\n");
-    printf(" AppOpt v5 真实线程调度引擎\n");
-    printf("=================================\n");
-
-    parse_args(argc, argv);
-
-    for (int i = 0; i < file_count; i++) {
-        printf("[输入文件] %s\n", config_files[i]);
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-c") && i + 1 < argc)
+            strncpy(config_path, argv[i+1], sizeof(config_path));
     }
 
-    load_all();
+    printf("==== AppOpt v5 ====\n");
 
-    // 🔥 核心：不再模拟，直接扫描真实系统线程
-    scan_processes();
+    load_config();
+
+    // test
+    schedule("com.android.systemui", "RenderThread");
+    schedule("com.android.systemui", "pool-worker");
+    schedule("com.tencent.mm", "GLThread");
+
+    watch();
 
     return 0;
 }
