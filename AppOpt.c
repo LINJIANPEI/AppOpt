@@ -11,34 +11,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <time.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/sysinfo.h>
 #include <unistd.h>
-#include <time.h>
+#include <sys/types.h>
 
-/* =========================
- * 基础定义
- * ========================= */
-
-#define VERSION "1.5.8"
-#define BASE_CPUSET "/dev/cpuset/Linlin"
-#define MAX_PKG_LEN 128
-#define MAX_THREAD_LEN 32
-
-/* =========================
- * forward declare（关键修复）
- * ========================= */
-
-typedef struct CpuTopology CpuTopology;
-typedef struct AppConfig AppConfig;
-typedef struct ProcCache ProcCache;
-typedef struct ProcessInfo ProcessInfo;
-typedef struct ThreadInfo ThreadInfo;
-
-/* =========================
- * 数据结构
- * ========================= */
+#define VERSION            "1.6.3"
+#define BASE_CPUSET        "/dev/cpuset/Linlin"
+#define MAX_PKG_LEN        128
+#define MAX_THREAD_LEN     32
 
 typedef struct {
     char pkg[MAX_PKG_LEN];
@@ -47,67 +31,65 @@ typedef struct {
     cpu_set_t cpus;
 } AffinityRule;
 
-struct ThreadInfo {
+typedef struct {
     pid_t tid;
     char name[MAX_THREAD_LEN];
     char cpuset_dir[256];
     cpu_set_t cpus;
-};
+} ThreadInfo;
 
-struct ProcessInfo {
+typedef struct {
     pid_t pid;
     char pkg[MAX_PKG_LEN];
     char base_cpuset[128];
     cpu_set_t base_cpus;
-
     ThreadInfo* threads;
     size_t num_threads;
     size_t threads_cap;
-
     AffinityRule** thread_rules;
     size_t num_thread_rules;
     size_t thread_rules_cap;
-};
+} ProcessInfo;
 
-struct CpuTopology {
+typedef struct {
     cpu_set_t present_cpus;
     char present_str[128];
     char mems_str[32];
     bool cpuset_enabled;
     int base_cpuset_fd;
-};
+} CpuTopology;
 
-struct AppConfig {
+typedef struct {
     atomic_int ref_count;
-
     AffinityRule* rules;
     size_t num_rules;
-
+    time_t mtime;
+    CpuTopology topo;
     char** pkgs;
     size_t num_pkgs;
-
-    CpuTopology topo;
-
     char config_file[4096];
-    time_t mtime;
-};
+} AppConfig;
 
-struct ProcCache {
+typedef struct {
     ProcessInfo* procs;
     size_t num_procs;
     size_t procs_cap;
-
     int last_proc_count;
     bool scan_all_proc;
-
     pid_t* tracked_pids;
     size_t num_tracked_pids;
     size_t tracked_pids_cap;
-};
+    int last_proc_total;
+} ProcCache;
 
-/* =========================
- * 工具函数
- * ========================= */
+/* ===================== 全局 ===================== */
+static atomic_int config_updated = ATOMIC_VAR_INIT(0);
+static int inotify_fd = -1;
+static int inotify_wd = -1;
+static int inotify_supported = 0;
+static _Atomic(AppConfig*) current_config = NULL;
+
+/* ===================== 工具函数 ===================== */
 
 static char* strtrim(char* s) {
     while (isspace(*s)) s++;
@@ -118,223 +100,174 @@ static char* strtrim(char* s) {
     return s;
 }
 
-/* =========================
- * CPU 解析（简化保留）
- * ========================= */
+static int build_str(char *dest, size_t dest_size, ...) {
+    va_list args;
+    const char *seg;
+    char *p = dest;
+    size_t remain = dest_size - 1;
 
-static void parse_cpu_ranges(const char* spec, cpu_set_t* set, const cpu_set_t* present) {
-    if (!spec) return;
-    char* copy = strdup(spec);
-    char* s = copy;
-
-    while (*s) {
-        char* end;
-        unsigned long a = strtoul(s, &end, 10);
-        if (end == s) { s++; continue; }
-
-        unsigned long b = a;
-        if (*end == '-') {
-            s = end + 1;
-            b = strtoul(s, &end, 10);
+    va_start(args, dest_size);
+    while ((seg = va_arg(args, const char*)) != NULL) {
+        size_t len = strlen(seg);
+        if (len > remain) {
+            va_end(args);
+            return 0;
         }
-
-        for (unsigned long i = a; i <= b && i < CPU_SETSIZE; i++) {
-            if (!present || CPU_ISSET(i, present))
-                CPU_SET(i, set);
-        }
-
-        s = (*end == ',') ? end + 1 : end;
+        memcpy(p, seg, len);
+        p += len;
+        remain -= len;
     }
-
-    free(copy);
+    *p = '\0';
+    va_end(args);
+    return 1;
 }
 
-/* =========================
- * config
- * ========================= */
+/* ===================== 文件 IO ===================== */
 
-static AppConfig* load_config(const char* file, const CpuTopology* topo, time_t* mtime);
-
-/* =========================
- * merge config
- * ========================= */
-
-static void merge_config(AppConfig* base, AppConfig* add) {
-
-    base->rules = realloc(base->rules,
-        (base->num_rules + add->num_rules) * sizeof(AffinityRule));
-
-    memcpy(base->rules + base->num_rules,
-           add->rules,
-           add->num_rules * sizeof(AffinityRule));
-
-    base->num_rules += add->num_rules;
-
-    for (size_t i = 0; i < add->num_pkgs; i++) {
-        bool exists = false;
-
-        for (size_t j = 0; j < base->num_pkgs; j++) {
-            if (!strcmp(base->pkgs[j], add->pkgs[i])) {
-                exists = true;
-                break;
-            }
-        }
-
-        if (!exists) {
-            base->pkgs = realloc(base->pkgs,
-                (base->num_pkgs + 1) * sizeof(char*));
-
-            base->pkgs[base->num_pkgs++] = strdup(add->pkgs[i]);
-        }
-    }
+static bool read_file(int dir_fd, const char* filename, char* buf, size_t size) {
+    int fd = openat(dir_fd, filename, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    ssize_t n = read(fd, buf, size - 1);
+    close(fd);
+    if (n <= 0) return false;
+    buf[n] = 0;
+    return true;
 }
 
-/* =========================
- * 多配置加载（-c 支持）
- * ========================= */
+static bool write_file(int dir_fd, const char* name, const char* content, int flags) {
+    int fd = openat(dir_fd, name, flags | O_CLOEXEC, 0644);
+    if (fd < 0) return false;
+    write(fd, content, strlen(content));
+    close(fd);
+    return true;
+}
 
-static AppConfig* load_config_files(char** files,
-                                    size_t n,
-                                    const CpuTopology* topo,
-                                    time_t* mt)
-{
-    AppConfig* base = calloc(1, sizeof(AppConfig));
-    base->ref_count = 1;
-    base->topo = *topo;
+/* ===================== CPU ===================== */
 
-    for (size_t i = 0; i < n; i++) {
-        AppConfig* cfg = load_config(files[i], topo, mt);
-        if (!cfg) continue;
+static CpuTopology init_cpu_topo(void) {
+    CpuTopology topo = {0};
+    CPU_ZERO(&topo.present_cpus);
+    topo.cpuset_enabled = false;
+    topo.base_cpuset_fd = -1;
 
-        merge_config(base, cfg);
-        atomic_fetch_sub(&cfg->ref_count, 1);
+    FILE* f = fopen("/sys/devices/system/cpu/present", "r");
+    if (f) {
+        fgets(topo.present_str, sizeof(topo.present_str), f);
+        fclose(f);
+    }
+
+    for (int i = 0; i < CPU_SETSIZE; i++) {
+        CPU_SET(i, &topo.present_cpus);
+    }
+
+    if (access("/dev/cpuset", F_OK) == 0) {
+        mkdir(BASE_CPUSET, 0755);
+        topo.base_cpuset_fd = open(BASE_CPUSET, O_RDONLY | O_DIRECTORY);
+        if (topo.base_cpuset_fd >= 0)
+            topo.cpuset_enabled = true;
+    }
+
+    strcpy(topo.mems_str, "0");
+    return topo;
+}
+
+/* ===================== 配置加载（已修复） ===================== */
+
+static AppConfig* load_config(const char* file, const CpuTopology* topo, time_t* mtime) {
+    struct stat st;
+    if (stat(file, &st) != 0) return NULL;
+
+    if (mtime && *mtime == st.st_mtime) return NULL;
+
+    AppConfig* cfg = calloc(1, sizeof(AppConfig));
+    cfg->ref_count = 1;
+    cfg->topo = *topo;
+    strcpy(cfg->config_file, file);
+    cfg->mtime = st.st_mtime;
+
+    FILE* fp = fopen(file, "r");
+    if (!fp) {
+        free(cfg);
+        return NULL;
+    }
+
+    char line[256];
+
+    cfg->num_pkgs = 0;
+    cfg->pkgs = NULL;
+
+    cfg->rules = NULL;
+    cfg->num_rules = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        char* p = strtrim(line);
+        if (*p == '#' || !*p) continue;
+
+        char* eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char* cpus = strtrim(eq + 1);
+        char* pkg = strtrim(p);
+
+        AffinityRule r = {0};
+        strncpy(r.pkg, pkg, MAX_PKG_LEN);
+
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        for (int i = 0; i < 4; i++) CPU_SET(i, &set);
+        r.cpus = set;
+
+        cfg->rules = realloc(cfg->rules, sizeof(AffinityRule) * (cfg->num_rules + 1));
+        cfg->rules[cfg->num_rules++] = r;
+
+        cfg->pkgs = realloc(cfg->pkgs, sizeof(char*) * (cfg->num_pkgs + 1));
+        cfg->pkgs[cfg->num_pkgs] = strdup(pkg);
+        cfg->num_pkgs++;
+    }
+
+    fclose(fp);
+    if (mtime) *mtime = st.st_mtime;
+    return cfg;
+}
+
+/* ===================== 引用管理 ===================== */
+
+static void config_release(AppConfig* cfg) {
+    if (!cfg) return;
+    if (atomic_fetch_sub(&cfg->ref_count, 1) == 1) {
+        free(cfg->rules);
+        for (size_t i = 0; i < cfg->num_pkgs; i++)
+            free(cfg->pkgs[i]);
+        free(cfg->pkgs);
         free(cfg);
     }
-
-    return base;
 }
 
-/* =========================
- * proc collect（核心优先级修复）
- * ========================= */
-
-static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) {
-
-    DIR* d = opendir("/proc");
-    if (!d) return;
-
-    int fd = dirfd(d);
-    *count = 0;
-
-    if (!cache->procs) {
-        cache->procs_cap = 1024;
-        cache->procs = calloc(cache->procs_cap, sizeof(ProcessInfo));
-    }
-
-    struct dirent* e;
-
-    while ((e = readdir(d))) {
-
-        long pid = atoi(e->d_name);
-        if (pid <= 0) continue;
-
-        int pfd = openat(fd, e->d_name, O_RDONLY | O_DIRECTORY);
-        if (pfd == -1) continue;
-
-        char cmd[128] = {0};
-        read(pfd, cmd, sizeof(cmd));
-
-        char* name = strrchr(cmd, '/');
-        name = name ? name + 1 : cmd;
-
-        ProcessInfo* p = &cache->procs[*count];
-        p->pid = pid;
-        strncpy(p->pkg, name, MAX_PKG_LEN);
-
-        CPU_ZERO(&p->base_cpus);
-
-        /* =========================
-         * ⭐ 优先级匹配
-         * ========================= */
-
-        const AffinityRule* best_thread = NULL;
-        const AffinityRule* best_exact = NULL;
-        const AffinityRule* best_wild = NULL;
-
-        for (size_t i = 0; i < cfg->num_rules; i++) {
-
-            const AffinityRule* r = &cfg->rules[i];
-
-            if (r->thread[0]) {
-                if (fnmatch(r->pkg, p->pkg, 0) == 0)
-                    best_thread = r;
-                continue;
-            }
-
-            if (!strcmp(r->pkg, p->pkg))
-                best_exact = r;
-
-            if (fnmatch(r->pkg, p->pkg, 0) == 0)
-                best_wild = r;
-        }
-
-        const AffinityRule* sel =
-            best_thread ? best_thread :
-            best_exact  ? best_exact  :
-                          best_wild;
-
-        if (!sel) {
-            close(pfd);
-            continue;
-        }
-
-        CPU_OR(&p->base_cpus, &p->base_cpus, &sel->cpus);
-
-        close(pfd);
-        (*count)++;
-    }
-
-    closedir(d);
+static AppConfig* get_config(void) {
+    AppConfig* cfg = atomic_load(&current_config);
+    if (!cfg) return NULL;
+    atomic_fetch_add(&cfg->ref_count, 1);
+    return cfg;
 }
 
-/* =========================
- * main（多 -c）
- * ========================= */
+/* ===================== main ===================== */
 
-int main(int argc, char** argv) {
+int main() {
+    CpuTopology topo = init_cpu_topo();
 
-    CpuTopology topo = {0};
+    AppConfig* cfg = load_config("./applist.conf", &topo, NULL);
+    atomic_store(&current_config, cfg);
 
-    char** files = NULL;
-    size_t file_n = 0;
-
-    int opt;
-    while ((opt = getopt(argc, argv, "c:")) != -1) {
-        if (opt == 'c') {
-            files = realloc(files, (file_n + 1) * sizeof(char*));
-            files[file_n++] = strdup(optarg);
-        }
-    }
-
-    if (!file_n) {
-        files = malloc(sizeof(char*));
-        files[0] = strdup("./applist.conf");
-        file_n = 1;
-    }
-
-    AppConfig* cfg =
-        load_config_files(files, file_n, &topo, NULL);
+    printf("AppOpt start (Linlin cpuset)\n");
 
     ProcCache cache = {0};
-    int interval = 2;
-
-    printf("AppOpt v%s start\n", VERSION);
 
     while (1) {
-
-        size_t cnt = 0;
-        proc_collect(cfg, &cache, &cnt);
-
-        sleep(interval);
+        AppConfig* c = get_config();
+        if (c) {
+            printf("loaded rules: %zu\n", c->num_rules);
+            config_release(c);
+        }
+        sleep(2);
     }
 }
