@@ -6,20 +6,19 @@
 #include <fnmatch.h>
 #include <pthread.h>
 #include <sched.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/inotify.h>
 #include <sys/stat.h>
-#include <sys/sysinfo.h>
 #include <unistd.h>
 
-#define VERSION            "1.6.3"
-#define BASE_CPUSET        "/dev/cpuset/Linlin"
-#define MAX_PKG_LEN        128
-#define MAX_THREAD_LEN     32
+#define VERSION        "1.6.3-stable"
+#define BASE_CPUSET    "/dev/cpuset/Linlin"
+#define MAX_PKG_LEN    128
+#define MAX_THREAD_LEN 64
+
+/* ================= RULE ================= */
 
 typedef struct {
     char pkg[MAX_PKG_LEN];
@@ -28,13 +27,25 @@ typedef struct {
 } AffinityRule;
 
 typedef struct {
-    atomic_int ref_count;
     AffinityRule* rules;
     size_t num_rules;
-    time_t mtime;
 } AppConfig;
 
-/* ================= TOOL ================= */
+/* ================= GLOBAL CONFIG (STABLE ATOMIC) ================= */
+
+static AppConfig* current_config = NULL;
+
+/* ================= SAFE ATOMIC ================= */
+
+static void set_config(AppConfig* cfg) {
+    __atomic_store_n(&current_config, cfg, __ATOMIC_SEQ_CST);
+}
+
+static AppConfig* get_config() {
+    return __atomic_load_n(&current_config, __ATOMIC_SEQ_CST);
+}
+
+/* ================= UTIL ================= */
 
 static char* trim(char* s) {
     while (isspace(*s)) s++;
@@ -47,22 +58,22 @@ static bool valid_cpu(cpu_set_t* set) {
     return CPU_COUNT(set) > 0;
 }
 
-/* ================= CPU PARSE (SAFE) ================= */
+/* ================= CPU PARSER ================= */
+
 static void parse_cpu_ranges(const char* spec, cpu_set_t* set) {
     CPU_ZERO(set);
     if (!spec) return;
 
     char* copy = strdup(spec);
-    if (!copy) return;
-
     char* s = copy;
 
     while (*s) {
-        char* end = NULL;
+        char* end;
         long a = strtol(s, &end, 10);
         if (end == s) break;
 
         long b = a;
+
         if (*end == '-') {
             s = end + 1;
             b = strtol(s, &end, 10);
@@ -84,6 +95,7 @@ static void parse_cpu_ranges(const char* spec, cpu_set_t* set) {
 }
 
 /* ================= DUP CHECK ================= */
+
 static bool is_duplicate(AffinityRule* rules, size_t count, AffinityRule* r) {
     for (size_t i = 0; i < count; i++) {
         if (strcmp(rules[i].pkg, r->pkg) == 0 &&
@@ -95,13 +107,13 @@ static bool is_duplicate(AffinityRule* rules, size_t count, AffinityRule* r) {
     return false;
 }
 
-/* ================= LOAD ================= */
+/* ================= LOAD CONFIG ================= */
+
 static AppConfig* load_config(const char* file) {
     FILE* fp = fopen(file, "r");
     if (!fp) return NULL;
 
     AppConfig* cfg = calloc(1, sizeof(AppConfig));
-    cfg->ref_count = 1;
 
     AffinityRule* rules = NULL;
     size_t count = 0, cap = 0;
@@ -134,18 +146,13 @@ static AppConfig* load_config(const char* file) {
         char pkg[MAX_PKG_LEN];
         strncpy(pkg, trim(left), MAX_PKG_LEN);
 
-        if (!pkg[0] || !right[0]) continue;
-
         AffinityRule r = {0};
         strncpy(r.pkg, pkg, MAX_PKG_LEN);
         strncpy(r.thread, thread, MAX_THREAD_LEN);
 
         parse_cpu_ranges(right, &r.cpus);
 
-        /* ===== 校验规则 ===== */
         if (!valid_cpu(&r.cpus)) continue;
-
-        /* ===== 去重 ===== */
         if (is_duplicate(rules, count, &r)) continue;
 
         if (count >= cap) {
@@ -161,10 +168,13 @@ static AppConfig* load_config(const char* file) {
     cfg->rules = rules;
     cfg->num_rules = count;
 
+    printf("[INFO] loaded %zu rules from %s\n", count, file);
+
     return cfg;
 }
 
 /* ================= MERGE ================= */
+
 static void merge_config(AppConfig* base, AppConfig* add) {
     if (!base || !add) return;
 
@@ -172,7 +182,6 @@ static void merge_config(AppConfig* base, AppConfig* add) {
         if (!is_duplicate(base->rules, base->num_rules, &add->rules[i])) {
             base->rules = realloc(base->rules,
                                   (base->num_rules + 1) * sizeof(AffinityRule));
-
             base->rules[base->num_rules++] = add->rules[i];
         }
     }
@@ -182,6 +191,7 @@ static void merge_config(AppConfig* base, AppConfig* add) {
 }
 
 /* ================= MATCH ================= */
+
 static const AffinityRule* match_rule(AppConfig* cfg,
                                       const char* pkg,
                                       const char* thread) {
@@ -193,11 +203,9 @@ static const AffinityRule* match_rule(AppConfig* cfg,
         if (strcmp(r->pkg, pkg) != 0)
             continue;
 
-        /* 精确优先 */
         if (r->thread[0] && strcmp(r->thread, thread) == 0)
             return r;
 
-        /* 通配 */
         if (!fallback && fnmatch(r->thread, thread, 0) == 0)
             fallback = r;
     }
@@ -206,6 +214,7 @@ static const AffinityRule* match_rule(AppConfig* cfg,
 }
 
 /* ================= MAIN ================= */
+
 int main(int argc, char** argv) {
 
     char* cfg_files[8];
@@ -213,8 +222,10 @@ int main(int argc, char** argv) {
 
     int opt;
     while ((opt = getopt(argc, argv, "c:")) != -1) {
-        if (opt == 'c' && cfg_count < 8)
+        if (opt == 'c' && cfg_count < 8) {
             cfg_files[cfg_count++] = strdup(optarg);
+            printf("[INFO] add config: %s\n", optarg);
+        }
     }
 
     if (cfg_count == 0) {
@@ -228,15 +239,15 @@ int main(int argc, char** argv) {
         merge_config(cfg, tmp);
     }
 
-    atomic_store(&current_config, cfg);
+    set_config(cfg);
 
-    printf("规则总数: %zu\n", cfg->num_rules);
+    printf("[OK] total rules: %zu\n", cfg->num_rules);
 
     const AffinityRule* r =
         match_rule(cfg, "com.tencent.tmgp.sgame", "UnityMain");
 
     if (r)
-        printf("match: %s %s\n", r->pkg, r->thread);
+        printf("[MATCH] %s %s\n", r->pkg, r->thread);
 
     return 0;
 }
