@@ -18,7 +18,7 @@
 #include <stdarg.h>
 
 #define VERSION            "1.7.0"
-#define BASE_CPUSET        "/dev/cpuset/AppOpt"
+#define BASE_CPUSET        "/dev/cpuset/Linlin"
 #define MAX_PKG_LEN        128
 #define MAX_THREAD_LEN     32
 
