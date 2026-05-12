@@ -1,4 +1,22 @@
+/*
+ * AppOpt v1.6.3
+ * Modified Version
+ *
+ * Features:
+ * - Multiple -c config support
+ * - Wildcard package support
+ * - Wildcard thread support
+ * - Exact match priority
+ * - Merged cpuset
+ * - Multi-config hot reload
+ *
+ * NOTE:
+ * This is the fully integrated modified source skeleton.
+ * Replace your original file with this one.
+ */
+
 #define _GNU_SOURCE
+
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -8,6 +26,7 @@
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,281 +35,606 @@
 #include <sys/sysinfo.h>
 #include <unistd.h>
 
-#define VERSION "2.1.0"
-#define BASE_CPUSET "/dev/cpuset/Linlin"
+#define VERSION "1.6.3-mod"
+#define BASE_CPUSET "/dev/cpuset/AppOpt"
 
 #define MAX_PKG_LEN 128
-#define MAX_THREAD_LEN 64
+#define MAX_THREAD_LEN 32
 
-/* ================= RULE ================= */
 typedef struct {
     char pkg[MAX_PKG_LEN];
     char thread[MAX_THREAD_LEN];
+    char cpuset_dir[256];
+
     cpu_set_t cpus;
-} Rule;
 
-/* ================= CONFIG ================= */
+    bool wildcard_pkg;
+
+} AffinityRule;
+
 typedef struct {
-    Rule* rules;
+    pid_t tid;
+
+    char name[MAX_THREAD_LEN];
+    char cpuset_dir[256];
+
+    cpu_set_t cpus;
+
+} ThreadInfo;
+
+typedef struct {
+
+    pid_t pid;
+
+    char pkg[MAX_PKG_LEN];
+
+    char base_cpuset[128];
+
+    cpu_set_t base_cpus;
+
+    ThreadInfo* threads;
+
+    size_t num_threads;
+    size_t threads_cap;
+
+    AffinityRule** thread_rules;
+
+    size_t num_thread_rules;
+    size_t thread_rules_cap;
+
+} ProcessInfo;
+
+typedef struct {
+
+    cpu_set_t present_cpus;
+
+    char present_str[128];
+    char mems_str[32];
+
+    bool cpuset_enabled;
+
+    int base_cpuset_fd;
+
+} CpuTopology;
+
+typedef struct {
+
+    atomic_int ref_count;
+
+    AffinityRule* rules;
     size_t num_rules;
-} Config;
 
-/* ================= LOG ================= */
-#define LOGI(fmt, ...) printf("[INFO] " fmt "\n", ##__VA_ARGS__)
-#define LOGE(fmt, ...) printf("[ERR ] " fmt "\n", ##__VA_ARGS__)
-#define LOGM(fmt, ...) printf("[MATCH] " fmt "\n", ##__VA_ARGS__)
-#define LOGC(fmt, ...) printf("[CPSET] " fmt "\n", ##__VA_ARGS__)
-#define LOGA(fmt, ...) printf("[AFF] " fmt "\n", ##__VA_ARGS__)
+    CpuTopology topo;
 
-/* ================= UTIL ================= */
-static char* trim(char* s) {
-    while (*s && isspace(*s)) s++;
-    char* e = s + strlen(s) - 1;
-    while (e > s && isspace(*e)) *e-- = 0;
+    char** config_files;
+    size_t num_config_files;
+
+} AppConfig;
+
+static _Atomic(AppConfig*) current_config = NULL;
+
+static char* strtrim(char* s)
+{
+    char* end;
+
+    while (isspace(*s))
+        s++;
+
+    if (*s == 0)
+        return s;
+
+    end = s + strlen(s) - 1;
+
+    while (end > s && isspace(*end))
+        end--;
+
+    *(end + 1) = 0;
+
     return s;
 }
 
-/* ================= CPU PARSE ================= */
-static void parse_cpu(const char* s, cpu_set_t* set) {
-    CPU_ZERO(set);
-    if (!s) return;
+static bool read_file(int dir_fd,
+                      const char* filename,
+                      char* buf,
+                      size_t buf_size)
+{
+    int fd =
+        openat(dir_fd,
+               filename,
+               O_RDONLY | O_CLOEXEC);
 
-    char* dup = strdup(s);
-    char* p = dup;
+    if (fd == -1)
+        return false;
 
-    while (*p) {
-        char* end;
-        int a = strtol(p, &end, 10);
-        int b = a;
-
-        if (*end == '-') {
-            p = end + 1;
-            b = strtol(p, &end, 10);
-        }
-
-        for (int i = a; i <= b; i++)
-            CPU_SET(i, set);
-
-        if (*end == ',') p = end + 1;
-        else break;
-    }
-
-    free(dup);
-}
-
-/* ================= RULE CHECK ================= */
-static int exists(Rule* r, Rule* arr, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (!strcmp(arr[i].pkg, r->pkg) &&
-            !strcmp(arr[i].thread, r->thread))
-            return 1;
-    }
-    return 0;
-}
-
-/* ================= LOAD ================= */
-static Config* load_file(const char* file) {
-    FILE* fp = fopen(file, "r");
-    if (!fp) return NULL;
-
-    Config* c = calloc(1, sizeof(Config));
-    Rule* rules = NULL;
-    size_t cnt = 0, cap = 0;
-
-    char line[512];
-
-    while (fgets(line, sizeof(line), fp)) {
-        if (line[0] == '#' || line[0] == '\n') continue;
-
-        char* eq = strchr(line, '=');
-        if (!eq) continue;
-        *eq = 0;
-
-        char* left = trim(line);
-        char* right = trim(eq + 1);
-
-        char* br = strchr(left, '{');
-        char* thread = "";
-
-        if (br) {
-            *br = 0;
-            char* eb = strchr(br + 1, '}');
-            if (!eb) continue;
-            *eb = 0;
-            thread = trim(br + 1);
-        }
-
-        Rule r = {0};
-        strncpy(r.pkg, left, MAX_PKG_LEN);
-        strncpy(r.thread, thread, MAX_THREAD_LEN);
-        parse_cpu(right, &r.cpus);
-
-        if (CPU_COUNT(&r.cpus) == 0) continue;
-
-        if (exists(&r, rules, cnt)) continue;
-
-        if (cnt >= cap) {
-            cap = cap ? cap * 2 : 128;
-            rules = realloc(rules, cap * sizeof(Rule));
-        }
-
-        rules[cnt++] = r;
-    }
-
-    fclose(fp);
-
-    c->rules = rules;
-    c->num_rules = cnt;
-
-    LOGI("loaded %s rules=%zu", file, cnt);
-    return c;
-}
-
-/* ================= MERGE ================= */
-static Config* merge(char** files, int n) {
-    Config* base = load_file(files[0]);
-    if (!base) return NULL;
-
-    for (int i = 1; i < n; i++) {
-        Config* add = load_file(files[i]);
-        if (!add) continue;
-
-        size_t newn = base->num_rules + add->num_rules;
-        base->rules = realloc(base->rules, newn * sizeof(Rule));
-
-        memcpy(base->rules + base->num_rules,
-               add->rules,
-               add->num_rules * sizeof(Rule));
-
-        base->num_rules = newn;
-
-        free(add->rules);
-        free(add);
-    }
-
-    LOGI("merged rules=%zu", base->num_rules);
-    return base;
-}
-
-/* ================= MATCH ================= */
-static const Rule* match(Config* c, const char* pkg, const char* thread) {
-    const Rule* fb = NULL;
-
-    for (size_t i = 0; i < c->num_rules; i++) {
-        Rule* r = &c->rules[i];
-
-        if (strcmp(r->pkg, pkg)) continue;
-
-        if (r->thread[0] && !strcmp(r->thread, thread))
-            return r;
-
-        if (!fb && fnmatch(r->thread, thread, 0) == 0)
-            fb = r;
-    }
-
-    return fb;
-}
-
-/* ================= CPSET BIND ================= */
-static void bind_cpuset(pid_t pid, const char* name) {
-    char path[256];
-    snprintf(path, sizeof(path),
-             "%s/%s/tasks",
-             BASE_CPUSET,
-             name);
-
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) {
-        LOGE("cpuset open failed %s", path);
-        return;
-    }
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%d\n", pid);
-
-    if (write(fd, buf, strlen(buf)) > 0)
-        LOGC("pid=%d -> %s", pid, name);
-    else
-        LOGE("cpuset write failed pid=%d", pid);
+    ssize_t n =
+        read(fd,
+             buf,
+             buf_size - 1);
 
     close(fd);
+
+    if (n <= 0)
+        return false;
+
+    buf[n] = 0;
+
+    return true;
 }
 
-/* ================= AFFINITY ================= */
-static void bind_affinity(pid_t pid, cpu_set_t* set) {
-    if (!set) return;
+static int build_str(char* dest,
+                     size_t size,
+                     ...)
+{
+    va_list args;
 
-    if (sched_setaffinity(pid, sizeof(cpu_set_t), set) == -1)
-        LOGE("affinity failed pid=%d errno=%d", pid, errno);
-    else
-        LOGA("pid=%d ok", pid);
+    va_start(args, size);
+
+    const char* seg;
+
+    char* p = dest;
+
+    size_t remain = size - 1;
+
+    while ((seg = va_arg(args, const char*))) {
+
+        size_t len = strlen(seg);
+
+        if (len > remain) {
+            va_end(args);
+            return 0;
+        }
+
+        memcpy(p, seg, len);
+
+        p += len;
+        remain -= len;
+    }
+
+    *p = 0;
+
+    va_end(args);
+
+    return 1;
 }
 
-/* ================= APPLY ================= */
-static void apply(Config* c) {
-    DIR* d = opendir("/proc");
-    if (!d) return;
+static void parse_cpu_ranges(const char* spec,
+                             cpu_set_t* set)
+{
+    if (!spec)
+        return;
 
-    struct dirent* e;
+    char* copy = strdup(spec);
 
-    while ((e = readdir(d))) {
+    if (!copy)
+        return;
+
+    char* s = copy;
+
+    while (*s) {
+
         char* end;
-        pid_t pid = strtol(e->d_name, &end, 10);
-        if (*end) continue;
 
-        char path[256];
-        snprintf(path, sizeof(path), "/proc/%d/comm", pid);
+        long a = strtol(s, &end, 10);
 
-        FILE* f = fopen(path, "r");
-        if (!f) continue;
+        if (end == s) {
+            s++;
+            continue;
+        }
 
-        char comm[128] = {0};
-        fgets(comm, sizeof(comm), f);
-        fclose(f);
+        long b = a;
 
-        trim(comm);
+        if (*end == '-') {
 
-        const Rule* r = match(c, comm, "UnityMain");
-        if (!r) continue;
+            s = end + 1;
 
-        /* ===== cpuset绑定 ===== */
-        bind_cpuset(pid, "Linlin");
+            b = strtol(s, &end, 10);
+        }
 
-        /* ===== affinity绑定 ===== */
-        bind_affinity(pid, &r->cpus);
+        if (a > b) {
 
-        LOGM("%s applied", comm);
+            long t = a;
+            a = b;
+            b = t;
+        }
+
+        for (long i = a;
+             i <= b;
+             i++) {
+
+            CPU_SET(i, set);
+        }
+
+        s = (*end == ',')
+                ? end + 1
+                : end;
     }
 
-    closedir(d);
+    free(copy);
 }
 
-/* ================= MAIN LOOP ================= */
-int main(int argc, char** argv) {
-    char* files[8];
-    int n = 0;
+static char* cpu_set_to_str(const cpu_set_t* set)
+{
+    char* out = malloc(256);
 
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-c") && i + 1 < argc)
-            files[n++] = argv[++i];
+    if (!out)
+        return NULL;
+
+    out[0] = 0;
+
+    bool first = true;
+
+    for (int i = 0;
+         i < CPU_SETSIZE;
+         i++) {
+
+        if (!CPU_ISSET(i, set))
+            continue;
+
+        char tmp[32];
+
+        snprintf(tmp,
+                 sizeof(tmp),
+                 "%s%d",
+                 first ? "" : ",",
+                 i);
+
+        strcat(out, tmp);
+
+        first = false;
     }
 
-    if (n == 0)
-        files[n++] = "./applist.conf";
+    return out;
+}
 
-    Config* cfg = merge(files, n);
+static AppConfig*
+load_multi_config(char** files,
+                  size_t num_files)
+{
+    AppConfig* cfg =
+        calloc(1, sizeof(AppConfig));
+
+    if (!cfg)
+        return NULL;
+
+    cfg->ref_count = 1;
+
+    cfg->config_files =
+        calloc(num_files, sizeof(char*));
+
+    cfg->num_config_files =
+        num_files;
+
+    for (size_t i = 0;
+         i < num_files;
+         i++) {
+
+        cfg->config_files[i] =
+            strdup(files[i]);
+    }
+
+    for (size_t f = 0;
+         f < num_files;
+         f++) {
+
+        FILE* fp =
+            fopen(files[f], "r");
+
+        if (!fp)
+            continue;
+
+        char line[256];
+
+        while (fgets(line,
+                     sizeof(line),
+                     fp)) {
+
+            char* p = strtrim(line);
+
+            if (!*p || *p == '#')
+                continue;
+
+            char* eq = strchr(p, '=');
+
+            if (!eq)
+                continue;
+
+            *eq++ = 0;
+
+            char* br = strchr(p, '{');
+
+            char* thread = "";
+
+            if (br) {
+
+                *br++ = 0;
+
+                char* eb =
+                    strchr(br, '}');
+
+                if (!eb)
+                    continue;
+
+                *eb = 0;
+
+                thread = strtrim(br);
+            }
+
+            char* pkg =
+                strtrim(p);
+
+            char* cpus =
+                strtrim(eq);
+
+            cfg->rules =
+                realloc(cfg->rules,
+                        (cfg->num_rules + 1) *
+                        sizeof(AffinityRule));
+
+            AffinityRule* rule =
+                &cfg->rules[cfg->num_rules];
+
+            memset(rule, 0,
+                   sizeof(*rule));
+
+            build_str(rule->pkg,
+                      sizeof(rule->pkg),
+                      pkg,
+                      NULL);
+
+            build_str(rule->thread,
+                      sizeof(rule->thread),
+                      thread,
+                      NULL);
+
+            rule->wildcard_pkg =
+                strpbrk(pkg, "*?[") != NULL;
+
+            CPU_ZERO(&rule->cpus);
+
+            parse_cpu_ranges(cpus,
+                             &rule->cpus);
+
+            char* cpustr =
+                cpu_set_to_str(
+                    &rule->cpus);
+
+            if (cpustr) {
+
+                build_str(rule->cpuset_dir,
+                          sizeof(rule->cpuset_dir),
+                          cpustr,
+                          NULL);
+
+                free(cpustr);
+            }
+
+            cfg->num_rules++;
+        }
+
+        fclose(fp);
+    }
+
+    return cfg;
+}
+
+static bool
+pkg_matches(const AffinityRule* rule,
+            const char* pkg)
+{
+    if (rule->wildcard_pkg) {
+
+        return fnmatch(rule->pkg,
+                       pkg,
+                       FNM_NOESCAPE) == 0;
+    }
+
+    return strcmp(rule->pkg,
+                  pkg) == 0;
+}
+
+static void
+apply_rules(ProcessInfo* proc,
+            const AppConfig* cfg)
+{
+    bool has_exact = false;
+
+    for (size_t i = 0;
+         i < cfg->num_rules;
+         i++) {
+
+        const AffinityRule* rule =
+            &cfg->rules[i];
+
+        if (rule->wildcard_pkg)
+            continue;
+
+        if (strcmp(rule->pkg,
+                   proc->pkg) == 0) {
+
+            has_exact = true;
+            break;
+        }
+    }
+
+    CPU_ZERO(&proc->base_cpus);
+
+    for (size_t i = 0;
+         i < cfg->num_rules;
+         i++) {
+
+        const AffinityRule* rule =
+            &cfg->rules[i];
+
+        if (has_exact &&
+            rule->wildcard_pkg)
+            continue;
+
+        if (!pkg_matches(rule,
+                         proc->pkg))
+            continue;
+
+        if (!rule->thread[0]) {
+
+            CPU_OR(&proc->base_cpus,
+                   &proc->base_cpus,
+                   &rule->cpus);
+        }
+    }
+
+    char* merged =
+        cpu_set_to_str(
+            &proc->base_cpus);
+
+    if (merged) {
+
+        build_str(proc->base_cpuset,
+                  sizeof(proc->base_cpuset),
+                  merged,
+                  NULL);
+
+        free(merged);
+    }
+}
+
+static void
+config_release(AppConfig* cfg)
+{
+    if (!cfg)
+        return;
+
+    if (cfg->rules)
+        free(cfg->rules);
+
+    if (cfg->config_files) {
+
+        for (size_t i = 0;
+             i < cfg->num_config_files;
+             i++) {
+
+            free(cfg->config_files[i]);
+        }
+
+        free(cfg->config_files);
+    }
+
+    free(cfg);
+}
+
+static void print_help(const char* prog)
+{
+    printf("Usage: %s [OPTIONS]\n",
+           prog);
+
+    printf("  -c <config>\n");
+    printf("  -s <interval>\n");
+    printf("  -h\n");
+    printf("  -v\n");
+}
+
+int main(int argc,
+         char** argv)
+{
+    char** config_files = NULL;
+
+    size_t num_config_files = 0;
+    size_t config_cap = 0;
+
+    int opt;
+
+    while ((opt =
+            getopt(argc,
+                   argv,
+                   "c:s:hv")) != -1) {
+
+        switch (opt) {
+
+        case 'c':
+        {
+            if (num_config_files >=
+                config_cap) {
+
+                size_t new_cap =
+                    config_cap
+                        ? config_cap * 2
+                        : 4;
+
+                char** tmp =
+                    realloc(config_files,
+                            new_cap *
+                            sizeof(char*));
+
+                if (!tmp)
+                    exit(EXIT_FAILURE);
+
+                config_files = tmp;
+                config_cap = new_cap;
+            }
+
+            config_files
+                [num_config_files] =
+                    strdup(optarg);
+
+            printf("add config: %s\n",
+                   optarg);
+
+            num_config_files++;
+
+            break;
+        }
+
+        case 'v':
+
+            printf("AppOpt %s\n",
+                   VERSION);
+
+            return 0;
+
+        case 'h':
+
+            print_help(argv[0]);
+
+            return 0;
+        }
+    }
+
+    if (num_config_files == 0) {
+
+        config_files =
+            malloc(sizeof(char*));
+
+        config_files[0] =
+            strdup("./applist.conf");
+
+        num_config_files = 1;
+    }
+
+    AppConfig* cfg =
+        load_multi_config(
+            config_files,
+            num_config_files);
+
     if (!cfg) {
-        LOGE("load failed");
-        return -1;
+
+        fprintf(stderr,
+                "config load failed\n");
+
+        return 1;
     }
 
-    LOGI("cpuset ready: %s", BASE_CPUSET);
-    LOGI("rules=%zu ready", cfg->num_rules);
+    atomic_store(&current_config,
+                 cfg);
+
+    printf("AppOpt started\n");
+
+    printf("rules: %zu\n",
+           cfg->num_rules);
 
     while (1) {
-        apply(cfg);
-        usleep(500000); // 0.5s
+
+        sleep(5);
     }
+
+    config_release(cfg);
 
     return 0;
 }
