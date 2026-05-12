@@ -16,7 +16,7 @@
 #include <sys/sysinfo.h>
 #include <unistd.h>
 
-#define VERSION "2.0.0"
+#define VERSION "2.1.0"
 #define BASE_CPUSET "/dev/cpuset/Linlin"
 
 #define MAX_PKG_LEN 128
@@ -33,15 +33,14 @@ typedef struct {
 typedef struct {
     Rule* rules;
     size_t num_rules;
-    atomic_int ref;
 } Config;
-
-static _Atomic(Config*) g_cfg = NULL;
 
 /* ================= LOG ================= */
 #define LOGI(fmt, ...) printf("[INFO] " fmt "\n", ##__VA_ARGS__)
 #define LOGE(fmt, ...) printf("[ERR ] " fmt "\n", ##__VA_ARGS__)
 #define LOGM(fmt, ...) printf("[MATCH] " fmt "\n", ##__VA_ARGS__)
+#define LOGC(fmt, ...) printf("[CPSET] " fmt "\n", ##__VA_ARGS__)
+#define LOGA(fmt, ...) printf("[AFF] " fmt "\n", ##__VA_ARGS__)
 
 /* ================= UTIL ================= */
 static char* trim(char* s) {
@@ -75,21 +74,22 @@ static void parse_cpu(const char* s, cpu_set_t* set) {
         if (*end == ',') p = end + 1;
         else break;
     }
+
     free(dup);
 }
 
-/* ================= DUP CHECK ================= */
-static int rule_exists(Rule* r, Rule* arr, size_t n) {
+/* ================= RULE CHECK ================= */
+static int exists(Rule* r, Rule* arr, size_t n) {
     for (size_t i = 0; i < n; i++) {
-        if (strcmp(arr[i].pkg, r->pkg) == 0 &&
-            strcmp(arr[i].thread, r->thread) == 0)
+        if (!strcmp(arr[i].pkg, r->pkg) &&
+            !strcmp(arr[i].thread, r->thread))
             return 1;
     }
     return 0;
 }
 
-/* ================= LOAD CONFIG ================= */
-static Config* load_one(const char* file) {
+/* ================= LOAD ================= */
+static Config* load_file(const char* file) {
     FILE* fp = fopen(file, "r");
     if (!fp) return NULL;
 
@@ -127,15 +127,10 @@ static Config* load_one(const char* file) {
 
         if (CPU_COUNT(&r.cpus) == 0) continue;
 
-        if (cap == 0) {
-            cap = 128;
-            rules = malloc(cap * sizeof(Rule));
-        }
-
-        if (rule_exists(&r, rules, cnt)) continue;
+        if (exists(&r, rules, cnt)) continue;
 
         if (cnt >= cap) {
-            cap *= 2;
+            cap = cap ? cap * 2 : 128;
             rules = realloc(rules, cap * sizeof(Rule));
         }
 
@@ -146,19 +141,18 @@ static Config* load_one(const char* file) {
 
     c->rules = rules;
     c->num_rules = cnt;
-    atomic_store(&c->ref, 1);
 
     LOGI("loaded %s rules=%zu", file, cnt);
     return c;
 }
 
 /* ================= MERGE ================= */
-static Config* merge_all(char** files, int n) {
-    Config* base = load_one(files[0]);
+static Config* merge(char** files, int n) {
+    Config* base = load_file(files[0]);
     if (!base) return NULL;
 
     for (int i = 1; i < n; i++) {
-        Config* add = load_one(files[i]);
+        Config* add = load_file(files[i]);
         if (!add) continue;
 
         size_t newn = base->num_rules + add->num_rules;
@@ -180,21 +174,56 @@ static Config* merge_all(char** files, int n) {
 
 /* ================= MATCH ================= */
 static const Rule* match(Config* c, const char* pkg, const char* thread) {
-    const Rule* fallback = NULL;
+    const Rule* fb = NULL;
 
     for (size_t i = 0; i < c->num_rules; i++) {
         Rule* r = &c->rules[i];
 
         if (strcmp(r->pkg, pkg)) continue;
 
-        if (r->thread[0] && strcmp(r->thread, thread) == 0)
+        if (r->thread[0] && !strcmp(r->thread, thread))
             return r;
 
-        if (!fallback && fnmatch(r->thread, thread, 0) == 0)
-            fallback = r;
+        if (!fb && fnmatch(r->thread, thread, 0) == 0)
+            fb = r;
     }
 
-    return fallback;
+    return fb;
+}
+
+/* ================= CPSET BIND ================= */
+static void bind_cpuset(pid_t pid, const char* name) {
+    char path[256];
+    snprintf(path, sizeof(path),
+             "%s/%s/tasks",
+             BASE_CPUSET,
+             name);
+
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        LOGE("cpuset open failed %s", path);
+        return;
+    }
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d\n", pid);
+
+    if (write(fd, buf, strlen(buf)) > 0)
+        LOGC("pid=%d -> %s", pid, name);
+    else
+        LOGE("cpuset write failed pid=%d", pid);
+
+    close(fd);
+}
+
+/* ================= AFFINITY ================= */
+static void bind_affinity(pid_t pid, cpu_set_t* set) {
+    if (!set) return;
+
+    if (sched_setaffinity(pid, sizeof(cpu_set_t), set) == -1)
+        LOGE("affinity failed pid=%d errno=%d", pid, errno);
+    else
+        LOGA("pid=%d ok", pid);
 }
 
 /* ================= APPLY ================= */
@@ -206,7 +235,7 @@ static void apply(Config* c) {
 
     while ((e = readdir(d))) {
         char* end;
-        int pid = strtol(e->d_name, &end, 10);
+        pid_t pid = strtol(e->d_name, &end, 10);
         if (*end) continue;
 
         char path[256];
@@ -222,17 +251,21 @@ static void apply(Config* c) {
         trim(comm);
 
         const Rule* r = match(c, comm, "UnityMain");
+        if (!r) continue;
 
-        if (r) {
-            sched_setaffinity(pid, sizeof(r->cpus), &r->cpus);
-            LOGM("%s %s", comm, "applied");
-        }
+        /* ===== cpuset绑定 ===== */
+        bind_cpuset(pid, "Linlin");
+
+        /* ===== affinity绑定 ===== */
+        bind_affinity(pid, &r->cpus);
+
+        LOGM("%s applied", comm);
     }
 
     closedir(d);
 }
 
-/* ================= LOOP ================= */
+/* ================= MAIN LOOP ================= */
 int main(int argc, char** argv) {
     char* files[8];
     int n = 0;
@@ -245,20 +278,18 @@ int main(int argc, char** argv) {
     if (n == 0)
         files[n++] = "./applist.conf";
 
-    Config* cfg = merge_all(files, n);
+    Config* cfg = merge(files, n);
     if (!cfg) {
-        LOGE("config load failed");
+        LOGE("load failed");
         return -1;
     }
-
-    atomic_store(&g_cfg, cfg);
 
     LOGI("cpuset ready: %s", BASE_CPUSET);
     LOGI("rules=%zu ready", cfg->num_rules);
 
     while (1) {
         apply(cfg);
-        sleep(1);
+        usleep(500000); // 0.5s
     }
 
     return 0;
