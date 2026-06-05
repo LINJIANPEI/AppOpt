@@ -19,7 +19,7 @@
 #include <limits.h>
 #include <signal.h>
 
-#define VERSION            "1.8.0"
+#define VERSION            "1.8.1"
 #define BASE_CPUSET        "/dev/cpuset/Linlin"
 #define MAX_PKG_LEN        128
 #define MAX_THREAD_LEN     32
@@ -63,7 +63,7 @@ typedef struct {
     atomic_int ref_count;
     AffinityRule* rules;
     size_t num_rules;
-    AffinityRule** wildcard_thread_rules;
+    AffinityRule** wildcard_thread_rules;   // 仅用于 pkg="*" 且 thread 非空的规则
     size_t wildcard_thread_rule_count;
     time_t mtime;
     CpuTopology topo;
@@ -399,6 +399,7 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
     }
     free(tmp_rules);
 
+    // 预构建通配线程规则（pkg="*" 且 thread 非空）
     size_t wcnt = 0;
     for (size_t i = 0; i < merged->num_rules; i++) {
         AffinityRule* r = &merged->rules[i];
@@ -571,8 +572,10 @@ static void add_tracked_pid(ProcCache* cache, pid_t pid) {
     cache->tracked_pids[cache->num_tracked_pids++] = pid;
 }
 
+// 修正后的 process_thread_rules：无论 wildcard_thread_rules 是否为空，都检查进程级通配规则
 static void process_thread_rules(ProcessInfo* proc, const AppConfig* cfg, size_t* out_idx) {
     bool base_rule_set = false;
+    // 第一轮：具体包名规则
     for (size_t i = 0; i < cfg->num_rules; i++) {
         const AffinityRule* rule = &cfg->rules[i];
         if (strcmp(rule->pkg, proc->pkg) != 0) continue;
@@ -595,7 +598,8 @@ static void process_thread_rules(ProcessInfo* proc, const AppConfig* cfg, size_t
             }
         }
     }
-    if (!base_rule_set && CPU_COUNT(&proc->base_cpus) == 0 && cfg->wildcard_thread_rule_count > 0) {
+    // 第二轮：通配包名规则（进程级）- 不再依赖 wildcard_thread_rule_count
+    if (!base_rule_set && CPU_COUNT(&proc->base_cpus) == 0) {
         for (size_t i = 0; i < cfg->num_rules; i++) {
             const AffinityRule* rule = &cfg->rules[i];
             if (!(rule->pkg[0] == '*' && rule->pkg[1] == '\0')) continue;
@@ -607,7 +611,8 @@ static void process_thread_rules(ProcessInfo* proc, const AppConfig* cfg, size_t
             }
         }
     }
-    if (CPU_COUNT(&proc->base_cpus) == 0 && proc->num_thread_rules == 0 && cfg->wildcard_thread_rule_count == 0) {
+    // 如果仍然没有规则，标记无效
+    if (CPU_COUNT(&proc->base_cpus) == 0 && proc->num_thread_rules == 0) {
         *out_idx = (size_t)-1;
         return;
     }
@@ -645,6 +650,7 @@ static void collect_threads(ProcessInfo* proc, int task_fd, const AppConfig* cfg
         CPU_ZERO(&ti->cpus);
         const char* matched = NULL;
 
+        // 具体包名的线程规则（最长匹配）
         const AffinityRule* best_rule = NULL;
         size_t best_len = 0;
         for (size_t i = 0; i < proc->num_thread_rules; i++) {
@@ -661,6 +667,7 @@ static void collect_threads(ProcessInfo* proc, int task_fd, const AppConfig* cfg
             ti->cpus = best_rule->cpus;
             matched = best_rule->cpuset_dir;
         }
+        // 通配包名的线程规则
         if (CPU_COUNT(&ti->cpus) == 0 && cfg->wildcard_thread_rule_count > 0) {
             const AffinityRule* best_wild = NULL;
             size_t best_wild_len = 0;
@@ -711,7 +718,8 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
         }
     }
 
-    bool has_wildcard_pkg = (cfg->wildcard_thread_rule_count > 0);
+    // 判断是否存在通配包名（无论是否有线程名）
+    bool has_wildcard_pkg = false;
     for (size_t i = 0; i < cfg->num_rules; i++) {
         if (strcmp(cfg->rules[i].pkg, "*") == 0) {
             has_wildcard_pkg = true;
