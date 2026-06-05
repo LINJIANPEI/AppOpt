@@ -833,7 +833,8 @@ static void update_cache(ProcCache* cache, const AppConfig* cfg, int* affinity_c
         proc_collect(cfg, cache, &new_count);
 
         if (new_count > cache->tracked_pids_cap) {
-            size_t new_cap = cache->tracked_pids_cap ? cache->tracked_pids_cap * 2 : new_count;
+            size_t new_cap = cache->tracked_pids_cap ? cache->tracked_pids_cap * 2 : 64;
+            while (new_cap < new_count) new_cap *= 2;
             pid_t* new_pids = realloc(cache->tracked_pids, new_cap * sizeof(pid_t));
             if (new_pids) {
                 cache->tracked_pids = new_pids;
