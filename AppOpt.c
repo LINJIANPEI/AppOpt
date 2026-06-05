@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 
-#define VERSION            "1.7.0"
+#define VERSION            "1.7.1"
 #define BASE_CPUSET        "/dev/cpuset/Linlin"
 #define MAX_PKG_LEN        128
 #define MAX_THREAD_LEN     32
@@ -44,7 +44,7 @@ typedef struct {
     ThreadInfo* threads;
     size_t num_threads;
     size_t threads_cap;
-    AffinityRule** thread_rules;
+    AffinityRule** thread_rules;      // 指向全局规则，不负责释放
     size_t num_thread_rules;
     size_t thread_rules_cap;
 } ProcessInfo;
@@ -59,7 +59,7 @@ typedef struct {
 
 typedef struct {
     atomic_int ref_count;
-    AffinityRule* rules;
+    AffinityRule* rules;          // 所有有效规则（未去重）
     size_t num_rules;
     time_t mtime;
     CpuTopology topo;
@@ -82,7 +82,6 @@ typedef struct {
 
 static atomic_int config_updated = ATOMIC_VAR_INIT(0);
 static int inotify_fd = -1;
-static int inotify_wd = -1;
 static int inotify_supported = 0;
 static _Atomic(AppConfig*) current_config = NULL;
 static char** config_files = NULL;
@@ -260,6 +259,7 @@ static CpuTopology init_cpu_topo(void) {
     return topo;
 }
 
+// 修复1：合并配置时不再去重规则，而是直接收集所有有效规则
 static AppConfig* merge_configs(const CpuTopology* topo, const char** files, size_t num_files) {
     AppConfig* merged = calloc(1, sizeof(AppConfig));
     if (!merged) return NULL;
@@ -269,13 +269,11 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
     merged->num_rules = 0;
     merged->pkgs = NULL;
     merged->num_pkgs = 0;
-    
-    struct {
-        char* key;
-        AffinityRule rule;
-    } *rule_map = NULL;
-    size_t map_cap = 0, map_cnt = 0;
-    
+
+    // 临时动态数组收集规则
+    AffinityRule* tmp_rules = NULL;
+    size_t tmp_cap = 0, tmp_cnt = 0;
+
     for (size_t fi = 0; fi < num_files; fi++) {
         FILE* fp = fopen(files[fi], "r");
         if (!fp) {
@@ -331,46 +329,20 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
             build_str(rule.cpuset_dir, sizeof(rule.cpuset_dir), dir_name, NULL);
             rule.cpus = set;
             free(dir_name);
-            
-            char key[512];
-            snprintf(key, sizeof(key), "%s\001%s", pkg, thread);
-            size_t idx = map_cnt;
-            for (size_t i = 0; i < map_cnt; i++) {
-                if (strcmp(rule_map[i].key, key) == 0) {
-                    idx = i;
-                    break;
+
+            // 直接添加规则，不去重
+            if (tmp_cnt >= tmp_cap) {
+                size_t new_cap = tmp_cap ? tmp_cap * 2 : 64;
+                AffinityRule* tmp = realloc(tmp_rules, new_cap * sizeof(AffinityRule));
+                if (!tmp) {
+                    fprintf(stderr, "内存不足，跳过规则 %s{%s}\n", pkg, thread);
+                    continue;
                 }
+                tmp_rules = tmp;
+                tmp_cap = new_cap;
             }
-            if (idx == map_cnt) {
-                // 新规则
-                if (map_cnt >= map_cap) {
-                    size_t new_cap = map_cap ? map_cap * 2 : 64;
-                    void* tmp = realloc(rule_map, new_cap * sizeof(*rule_map));
-                    if (!tmp) {
-                        fprintf(stderr, "内存不足，跳过规则 %s{%s}\n", pkg, thread);
-                        continue;
-                    }
-                    rule_map = tmp;
-                    map_cap = new_cap;
-                }
-                rule_map[map_cnt].key = strdup(key);
-                if (!rule_map[map_cnt].key) continue;
-                rule_map[map_cnt].rule = rule;
-                map_cnt++;
-            } else {
-                // 已存在：保留线程名模式更长的规则（更具体）
-                AffinityRule* existing = &rule_map[idx].rule;
-                size_t existing_len = strlen(existing->thread);
-                size_t new_len = strlen(rule.thread);
-                if (new_len > existing_len) {
-                    // 新规则更具体，替换旧规则
-                    existing->cpus = rule.cpus;
-                    strncpy(existing->cpuset_dir, rule.cpuset_dir, sizeof(existing->cpuset_dir)-1);
-                    existing->cpuset_dir[sizeof(existing->cpuset_dir)-1] = '\0';
-                }
-                // 否则保留原规则
-            }
-            
+            tmp_rules[tmp_cnt++] = rule;
+
             // 更新 pkg 列表（跳过通配包名）
             if (strcmp(pkg, "*") != 0) {
                 bool pkg_exists = false;
@@ -392,19 +364,16 @@ static AppConfig* merge_configs(const CpuTopology* topo, const char** files, siz
         }
         fclose(fp);
     }
-    
-    if (map_cnt) {
-        merged->rules = malloc(map_cnt * sizeof(AffinityRule));
+
+    if (tmp_cnt) {
+        merged->rules = malloc(tmp_cnt * sizeof(AffinityRule));
         if (merged->rules) {
-            for (size_t i = 0; i < map_cnt; i++) {
-                merged->rules[i] = rule_map[i].rule;
-                free(rule_map[i].key);
-            }
-            merged->num_rules = map_cnt;
+            memcpy(merged->rules, tmp_rules, tmp_cnt * sizeof(AffinityRule));
+            merged->num_rules = tmp_cnt;
         }
     }
-    free(rule_map);
-    printf("配置合并完成（最长匹配优先），共加载 %zu 条规则，%zu 个包名\n", merged->num_rules, merged->num_pkgs);
+    free(tmp_rules);
+    printf("配置合并完成（保留所有规则），共加载 %zu 条规则，%zu 个包名\n", merged->num_rules, merged->num_pkgs);
     return merged;
 }
 
@@ -439,15 +408,15 @@ static AppConfig* get_config() {
     return cfg;
 }
 
+// 修复3：为所有配置文件添加 inotify 监控
 static void* config_loader_thread(void* arg) {
     int interval = *(int*)arg;
     free(arg);
     pthread_setname_np(pthread_self(), "ConfigLoader");
-    
-    // 监控所有配置文件
+
     int* wds = NULL;
     size_t wd_count = 0;
-    if (inotify_supported) {
+    if (inotify_supported && inotify_fd != -1) {
         wds = calloc(num_config_files, sizeof(int));
         if (wds) {
             for (size_t i = 0; i < num_config_files; i++) {
@@ -468,11 +437,11 @@ static void* config_loader_thread(void* arg) {
             wds = NULL;
         }
     }
-    
+
     time_t last_reload = 0;
     while (1) {
         int need_reload = 0;
-        if (inotify_supported) {
+        if (inotify_supported && inotify_fd != -1) {
             fd_set rfds;
             struct timeval tv;
             FD_ZERO(&rfds);
@@ -509,24 +478,41 @@ static void* config_loader_thread(void* arg) {
                 last_reload = now;
             }
         }
-        
+
         if (need_reload) {
             AppConfig* cfg = get_config();
             CpuTopology topo = cfg ? cfg->topo : init_cpu_topo();
+            if (cfg) config_release(cfg);
             AppConfig* new_config = load_configs((const char**)config_files, num_config_files, &topo);
             if (new_config) {
                 AppConfig* old = atomic_exchange(&current_config, new_config);
                 atomic_store(&config_updated, 1);
                 if (old) config_release(old);
             }
-            if (cfg) config_release(cfg);
         }
-        
+
         if (!inotify_supported) sleep(interval);
         else usleep(100000);
     }
     free(wds);
     return NULL;
+}
+
+// 修复2：在 proc_collect 开始时释放旧进程条目内的动态内存，防止泄漏
+static void free_proc_resources(ProcessInfo* proc) {
+    if (proc->threads) {
+        free(proc->threads);
+        proc->threads = NULL;
+        proc->threads_cap = 0;
+        proc->num_threads = 0;
+    }
+    if (proc->thread_rules) {
+        // thread_rules 中的指针指向全局规则，不需要释放它们指向的内容
+        free(proc->thread_rules);
+        proc->thread_rules = NULL;
+        proc->thread_rules_cap = 0;
+        proc->num_thread_rules = 0;
+    }
 }
 
 static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) {
@@ -535,13 +521,24 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
     int proc_fd = dirfd(proc_dir);
     *count = 0;
 
-    if (cache->procs == NULL) {
+    // 释放旧进程资源并重置数组（但保留数组本身以备重用）
+    if (cache->procs) {
+        for (size_t i = 0; i < cache->num_procs; i++) {
+            free_proc_resources(&cache->procs[i]);
+        }
+        // 可选：若需要缩容可在此处 realloc，为简单保持容量
+    }
+
+    if (cache->procs_cap == 0) {
         cache->procs_cap = 2048;
         cache->procs = calloc(cache->procs_cap, sizeof(ProcessInfo));
         if (!cache->procs) {
             closedir(proc_dir);
             return;
         }
+    } else {
+        // 确保所有条目被清零（新填充会覆盖关键字段，但保留容量即可）
+        memset(cache->procs, 0, cache->procs_cap * sizeof(ProcessInfo));
     }
 
     // 检查是否有通配包名 "*" 规则
@@ -632,6 +629,8 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
         }
 
         // 第一轮：具体包名规则
+        // 修复4：对于进程级规则（thread为空），若匹配多个，只采用第一个（并警告）
+        bool base_rule_set = false;
         for (size_t i = 0; i < cfg->num_rules; i++) {
             const AffinityRule* rule = &cfg->rules[i];
             if (strcmp(rule->pkg, proc->pkg) != 0) continue;
@@ -646,13 +645,18 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
                 proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
             } else {
-                // 进程级规则：直接合并到 base_cpus（注意：这里仍可合并，因为是 base）
-                CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
-                build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
+                // 进程级规则：只采用第一个匹配的，避免 cpuset_dir 冲突
+                if (!base_rule_set) {
+                    CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
+                    build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
+                    base_rule_set = true;
+                } else {
+                    fprintf(stderr, "警告: 进程 %s (PID %ld) 匹配多个进程级规则，仅第一个生效\n", proc->pkg, (long)pid);
+                }
             }
         }
 
-        // 第二轮：通配包名 "*" 规则
+        // 第二轮：通配包名 "*" 规则（仅当尚未设置 base 且通配规则存在）
         AffinityRule** wildcard_thread_rules = NULL;
         size_t wildcard_cnt = 0, wildcard_cap = 0;
         for (size_t i = 0; i < cfg->num_rules; i++) {
@@ -669,10 +673,10 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
                 wildcard_thread_rules[wildcard_cnt++] = (AffinityRule*)rule;
             } else {
-                // 进程级通配规则：仅当具体包名规则没有提供 base CPU 时才使用
-                if (CPU_COUNT(&proc->base_cpus) == 0) {
+                if (!base_rule_set && CPU_COUNT(&proc->base_cpus) == 0) {
                     CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
                     build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
+                    base_rule_set = true;
                 }
             }
         }
@@ -740,7 +744,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             CPU_ZERO(&ti->cpus);
             const char* matched = NULL;
 
-            // 1) 具体包名的线程规则：选择最长匹配
+            // 具体包名的线程规则：选最长匹配
             const AffinityRule* best_rule = NULL;
             size_t best_len = 0;
             for (size_t i = 0; i < proc->num_thread_rules; i++) {
@@ -758,7 +762,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 matched = best_rule->cpuset_dir;
             }
 
-            // 2) 如果具体规则没有匹配到，尝试通配包名 "*" 的线程规则（同样选最长匹配）
+            // 通配包名的线程规则
             if (CPU_COUNT(&ti->cpus) == 0 && wildcard_cnt > 0) {
                 const AffinityRule* best_wild = NULL;
                 size_t best_wild_len = 0;
@@ -793,6 +797,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
         (*count)++;
     }
     closedir(proc_dir);
+    // 更新扫描策略：进程总数增加则下次全扫描
     if (current_proc_total > cache->last_proc_total) {
         cache->scan_all_proc = true;
     } else {
@@ -844,7 +849,7 @@ static void update_cache(ProcCache* cache, const AppConfig* cfg, int* affinity_c
                 }
             }
         }
-        
+
         cache->num_procs = new_count;
         *affinity_counter = 0;
     }
@@ -967,22 +972,19 @@ int main(int argc, char **argv) {
     if (inotify_fd >= 0) {
         int flags = fcntl(inotify_fd, F_GETFL);
         if (flags >= 0) fcntl(inotify_fd, F_SETFL, flags | O_NONBLOCK);
-        inotify_wd = inotify_add_watch(inotify_fd, config_files[0], IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF);
-        if (inotify_wd >= 0) {
-            inotify_supported = 1;
-            printf("启用inotify监控配置文件变更\n");
-        } else {
-            close(inotify_fd);
-            inotify_fd = -1;
-            printf("inotify初始化失败，使用轮询模式\n");
-        }
+        // 注意：实际监控将在 loader 线程中为每个文件分别添加
+        inotify_supported = 1;
+        printf("启用inotify监控配置文件变更\n");
+    } else {
+        inotify_supported = 0;
+        printf("inotify初始化失败，使用轮询模式\n");
     }
 
     pthread_t loader_thread;
     int* interval_ptr = malloc(sizeof(int));
     if (!interval_ptr) {
         config_release(initial_config);
-        if (inotify_supported) close(inotify_fd);
+        if (inotify_fd >= 0) close(inotify_fd);
         exit(EXIT_FAILURE);
     }
     *interval_ptr = sleep_interval;
@@ -991,7 +993,7 @@ int main(int argc, char **argv) {
         perror("配置加载器线程创建失败");
         free(interval_ptr);
         config_release(initial_config);
-        if (inotify_supported) close(inotify_fd);
+        if (inotify_fd >= 0) close(inotify_fd);
         exit(EXIT_FAILURE);
     }
     pthread_detach(loader_thread);
