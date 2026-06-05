@@ -47,7 +47,9 @@ typedef struct {
     AffinityRule** thread_rules;      // 指向全局规则，不负责释放
     size_t num_thread_rules;
     size_t thread_rules_cap;
-} ProcessInfo;
+
+    AffinityRule **wildcard_thread_rules;
+    size_t wildcard_thread_rule_count;} ProcessInfo;
 
 typedef struct {
     cpu_set_t present_cpus;
@@ -66,7 +68,9 @@ typedef struct {
     char** pkgs;
     size_t num_pkgs;
     char config_file[4096];
-} AppConfig;
+
+    AffinityRule **wildcard_thread_rules;
+    size_t wildcard_thread_rule_count;} AppConfig;
 
 typedef struct {
     ProcessInfo* procs;
@@ -385,6 +389,7 @@ static void config_release(AppConfig* cfg) {
     if (!cfg) return;
     if (atomic_fetch_sub(&cfg->ref_count, 1) == 1) {
         if (cfg->rules) free(cfg->rules);
+if(cfg->wildcard_thread_rules) free(cfg->wildcard_thread_rules);
         if (cfg->pkgs) {
             for (size_t i = 0; i < cfg->num_pkgs; i++) free(cfg->pkgs[i]);
             free(cfg->pkgs);
@@ -405,7 +410,28 @@ static AppConfig* get_config() {
         atomic_fetch_sub_explicit(&cfg->ref_count, 1, memory_order_release);
         return NULL;
     }
-    return cfg;
+    
+// --- 构建 wildcard_thread_rules ---
+size_t idx=0;
+for(size_t i=0;i<cfg->num_rules;i++){
+    AffinityRule *r=&cfg->rules[i];
+    if(strcmp(r->pkg,"*")==0 && r->thread[0]){
+        idx++;
+    }
+}
+if(idx>0){
+    cfg->wildcard_thread_rules = malloc(idx*sizeof(AffinityRule*));
+    size_t k=0;
+    for(size_t i=0;i<cfg->num_rules;i++){
+        AffinityRule *r=&cfg->rules[i];
+        if(strcmp(r->pkg,"*")==0 && r->thread[0]){
+            cfg->wildcard_thread_rules[k++] = r;
+        }
+    }
+    cfg->wildcard_thread_rule_count = idx;
+}
+
+return cfg;
 }
 
 // 修复3：为所有配置文件添加 inotify 监控
@@ -500,19 +526,14 @@ static void* config_loader_thread(void* arg) {
 
 // 修复2：在 proc_collect 开始时释放旧进程条目内的动态内存，防止泄漏
 static void free_proc_resources(ProcessInfo* proc) {
-    if (proc->threads) {
-        free(proc->threads);
-        proc->threads = NULL;
-        proc->threads_cap = 0;
-        proc->num_threads = 0;
-    }
-    if (proc->thread_rules) {
-        // thread_rules 中的指针指向全局规则，不需要释放它们指向的内容
-        free(proc->thread_rules);
-        proc->thread_rules = NULL;
-        proc->thread_rules_cap = 0;
-        proc->num_thread_rules = 0;
-    }
+    if(proc->threads) free(proc->threads);
+    if(proc->thread_rules) free(proc->thread_rules);
+    memset(proc,0,sizeof(*proc));
+}
+
+static void reset_proc_resources(ProcessInfo* proc) {
+    proc->num_threads=0;
+    proc->num_thread_rules=0;
 }
 
 static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) {
@@ -524,9 +545,8 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
     // 释放旧进程资源并重置数组（但保留数组本身以备重用）
     if (cache->procs) {
         for (size_t i = 0; i < cache->num_procs; i++) {
-            free_proc_resources(&cache->procs[i]);
+            reset_proc_resources(&cache->procs[i]);
         }
-        // 可选：若需要缩容可在此处 realloc，为简单保持容量
     }
 
     if (cache->procs_cap == 0) {
@@ -536,9 +556,6 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             closedir(proc_dir);
             return;
         }
-    } else {
-        // 确保所有条目被清零（新填充会覆盖关键字段，但保留容量即可）
-        memset(cache->procs, 0, cache->procs_cap * sizeof(ProcessInfo));
     }
 
     // 检查是否有通配包名 "*" 规则
