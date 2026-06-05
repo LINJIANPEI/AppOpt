@@ -12,13 +12,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ===================== Checkout（强制最新） =====================
       - name: Checkout latest code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ===================== 安装编译环境（无缓存） =====================
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -27,30 +25,34 @@ jobs:
             binutils-aarch64-linux-gnu \
             libc6-dev-arm64-cross
 
-      # ===================== Clean build =====================
-      - name: Build (clean)
+      - name: Clean build
         run: |
           rm -rf out
           mkdir -p out
 
+          # 增加 -Wall -Wextra 以捕获潜在问题，-static -pthread 保持不变
           aarch64-linux-gnu-gcc \
             -O2 -pipe -static -pthread \
+            -Wall -Wextra \
             AppOpt.c \
             -o out/AppOpt
 
-      # ===================== strip =====================
       - name: Strip binary
         run: |
           aarch64-linux-gnu-strip out/AppOpt || true
 
-      # ===================== 记录版本信息（非常重要） =====================
+      - name: Verify binary
+        run: |
+          file out/AppOpt
+          ldd out/AppOpt || echo "静态链接，无动态依赖"
+
       - name: Write build info
         run: |
           echo "commit: $GITHUB_SHA" > out/build_info.txt
           echo "run: $GITHUB_RUN_NUMBER" >> out/build_info.txt
           echo "date: $(date)" >> out/build_info.txt
+          echo "version: $(./out/AppOpt -v 2>&1 | head -1)" >> out/build_info.txt || true
 
-      # ===================== upload artifact =====================
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -68,7 +70,6 @@ jobs:
           name: AppOpt-arm64
           path: out
 
-      # ===================== Release =====================
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
