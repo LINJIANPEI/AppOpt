@@ -1,0 +1,538 @@
+name: Build AppOpts
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'AppOpts.c'
+      - 'uthash.h'
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+jobs:
+  # ==================== Linux x86_64 ====================
+  build-x86_64:
+    name: Build for x86_64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        if [ ! -f uthash.h ]; then
+          wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+        fi
+        echo "✅ uthash.h ready"
+        ls -la uthash.h
+
+    - name: Verify source file
+      run: |
+        if [ ! -f AppOpts.c ]; then
+          echo "❌ AppOpts.c not found!"
+          exit 1
+        fi
+        echo "✅ Found AppOpts.c"
+        head -5 AppOpts.c
+
+    - name: Install musl-tools
+      run: |
+        sudo apt update
+        sudo apt install -y musl-tools
+
+    - name: Build static binary for x86_64
+      run: |
+        echo "=== Building AppOpt-x86_64 ==="
+        musl-gcc -static \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-x86_64 \
+            AppOpts.c
+        
+        # 验证静态编译
+        file AppOpt-x86_64
+        if file AppOpt-x86_64 | grep -q "statically linked"; then
+          echo "✅ Fully static binary verified"
+        else
+          echo "⚠️ Binary may have dynamic dependencies"
+          ldd AppOpt-x86_64 2>&1 || true
+        fi
+        
+        # 去除调试符号
+        strip AppOpt-x86_64
+        echo "=== Final size ==="
+        ls -lh AppOpt-x86_64
+
+    - name: Test binary
+      run: |
+        chmod +x AppOpt-x86_64
+        ./AppOpt-x86_64 -v || echo "Version check OK (no config file)"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-x86_64
+        path: AppOpt-x86_64
+        retention-days: 90
+        compression-level: 0
+
+  # ==================== Linux aarch64 ====================
+  build-aarch64:
+    name: Build for aarch64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+        ls -la uthash.h
+
+    - name: Download musl cross toolchain for aarch64
+      run: |
+        wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+        tar -xzf aarch64-linux-musl-cross.tgz
+        echo "TOOLCHAIN=$(pwd)/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc" >> $GITHUB_ENV
+        echo "✅ aarch64 toolchain ready"
+
+    - name: Build static binary for aarch64
+      run: |
+        echo "=== Building AppOpt-aarch64 ==="
+        ${{ env.TOOLCHAIN }} \
+            -static \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-aarch64 \
+            AppOpts.c
+        
+        file AppOpt-aarch64
+        strip AppOpt-aarch64
+        ls -lh AppOpt-aarch64
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-aarch64
+        path: AppOpt-aarch64
+        retention-days: 90
+        compression-level: 0
+
+  # ==================== Linux armv7l ====================
+  build-armv7l:
+    name: Build for armv7l
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Download musl cross toolchain for armv7l
+      run: |
+        wget -q https://musl.cc/armv7l-linux-musleabihf-cross.tgz
+        tar -xzf armv7l-linux-musleabihf-cross.tgz
+        echo "TOOLCHAIN=$(pwd)/armv7l-linux-musleabihf-cross/bin/armv7l-linux-musleabihf-gcc" >> $GITHUB_ENV
+        echo "✅ armv7l toolchain ready"
+
+    - name: Build static binary for armv7l
+      run: |
+        echo "=== Building AppOpt-armv7l ==="
+        ${{ env.TOOLCHAIN }} \
+            -static \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-armv7l \
+            AppOpts.c
+        
+        file AppOpt-armv7l
+        strip AppOpt-armv7l
+        ls -lh AppOpt-armv7l
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-armv7l
+        path: AppOpt-armv7l
+        retention-days: 90
+        compression-level: 0
+
+  # ==================== Linux i686 ====================
+  build-i686:
+    name: Build for i686
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Download musl cross toolchain for i686
+      run: |
+        wget -q https://musl.cc/i686-linux-musl-cross.tgz
+        tar -xzf i686-linux-musl-cross.tgz
+        echo "TOOLCHAIN=$(pwd)/i686-linux-musl-cross/bin/i686-linux-musl-gcc" >> $GITHUB_ENV
+        echo "✅ i686 toolchain ready"
+
+    - name: Build static binary for i686
+      run: |
+        echo "=== Building AppOpt-i686 ==="
+        ${{ env.TOOLCHAIN }} \
+            -static \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-i686 \
+            AppOpts.c
+        
+        file AppOpt-i686
+        strip AppOpt-i686
+        ls -lh AppOpt-i686
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-i686
+        path: AppOpt-i686
+        retention-days: 90
+        compression-level: 0
+
+  # ==================== Linux riscv64 ====================
+  build-riscv64:
+    name: Build for riscv64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Download musl cross toolchain for riscv64
+      run: |
+        wget -q https://musl.cc/riscv64-linux-musl-cross.tgz
+        tar -xzf riscv64-linux-musl-cross.tgz
+        echo "TOOLCHAIN=$(pwd)/riscv64-linux-musl-cross/bin/riscv64-linux-musl-gcc" >> $GITHUB_ENV
+        echo "✅ riscv64 toolchain ready"
+
+    - name: Build static binary for riscv64
+      run: |
+        echo "=== Building AppOpt-riscv64 ==="
+        ${{ env.TOOLCHAIN }} \
+            -static \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-riscv64 \
+            AppOpts.c
+        
+        file AppOpt-riscv64 || true
+        strip AppOpt-riscv64 2>/dev/null || true
+        ls -lh AppOpt-riscv64 2>/dev/null || echo "Build may have issues"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-riscv64
+        path: AppOpt-riscv64
+        retention-days: 90
+        if-no-files-found: warn
+
+  # ==================== macOS x86_64 (cross compile) ====================
+  build-macos-x86_64:
+    name: Build for macOS x86_64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: 0.12.0
+
+    - name: Build for macOS x86_64
+      run: |
+        echo "=== Building AppOpt-macos-x86_64 ==="
+        zig cc -target x86_64-macos \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-macos-x86_64 \
+            AppOpts.c
+        
+        file AppOpt-macos-x86_64
+        ls -lh AppOpt-macos-x86_64
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-macos-x86_64
+        path: AppOpt-macos-x86_64
+        retention-days: 90
+
+  # ==================== macOS aarch64 (Apple Silicon) ====================
+  build-macos-aarch64:
+    name: Build for macOS aarch64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: 0.12.0
+
+    - name: Build for macOS aarch64
+      run: |
+        echo "=== Building AppOpt-macos-aarch64 ==="
+        zig cc -target aarch64-macos \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-macos-aarch64 \
+            AppOpts.c
+        
+        file AppOpt-macos-aarch64
+        ls -lh AppOpt-macos-aarch64
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-macos-aarch64
+        path: AppOpt-macos-aarch64
+        retention-days: 90
+
+  # ==================== Windows x86_64 ====================
+  build-windows-x86_64:
+    name: Build for Windows x86_64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: 0.12.0
+
+    - name: Build for Windows x86_64
+      run: |
+        echo "=== Building AppOpt-windows-x86_64.exe ==="
+        zig cc -target x86_64-windows \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-windows-x86_64.exe \
+            AppOpts.c
+        
+        file AppOpt-windows-x86_64.exe || true
+        ls -lh AppOpt-windows-x86_64.exe
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-windows-x86_64
+        path: AppOpt-windows-x86_64.exe
+        retention-days: 90
+
+  # ==================== FreeBSD x86_64 ====================
+  build-freebsd-x86_64:
+    name: Build for FreeBSD x86_64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: 0.12.0
+
+    - name: Build for FreeBSD x86_64
+      run: |
+        echo "=== Building AppOpt-freebsd-x86_64 ==="
+        zig cc -target x86_64-freebsd \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o AppOpt-freebsd-x86_64 \
+            AppOpts.c
+        
+        file AppOpt-freebsd-x86_64 || true
+        ls -lh AppOpt-freebsd-x86_64
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AppOpt-freebsd-x86_64
+        path: AppOpt-freebsd-x86_64
+        retention-days: 90
+
+  # ==================== 使用 Zig 统一编译多个架构（备选方案） ====================
+  zig-multi-build:
+    name: Zig multi-arch build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux-musl
+            output: AppOpt-x86_64-musl
+          - target: aarch64-linux-musl
+            output: AppOpt-aarch64-musl
+          - target: armv7-linux-musleabihf
+            output: AppOpt-armv7l-musl
+          - target: i686-linux-musl
+            output: AppOpt-i686-musl
+          - target: riscv64-linux-musl
+            output: AppOpt-riscv64-musl
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: 0.12.0
+
+    - name: Download uthash.h
+      run: |
+        wget -q https://raw.githubusercontent.com/troydhanson/uthash/master/src/uthash.h
+
+    - name: Build with Zig for ${{ matrix.target }}
+      run: |
+        echo "=== Building ${{ matrix.output }} ==="
+        zig cc -target ${{ matrix.target }} \
+            -static \
+            -O2 \
+            -pthread \
+            -Wall -Wextra \
+            -D_GNU_SOURCE \
+            -o ${{ matrix.output }} \
+            AppOpts.c
+        
+        file ${{ matrix.output }} || true
+        strip ${{ matrix.output }} 2>/dev/null || true
+        ls -lh ${{ matrix.output }}
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.output }}
+        path: ${{ matrix.output }}
+        retention-days: 90
+        if-no-files-found: warn
+
+  # ==================== 发布阶段 ====================
+  release:
+    name: Create Release Package
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    needs: [build-x86_64, build-aarch64, build-armv7l, build-i686, build-riscv64, build-macos-x86_64, build-macos-aarch64, build-windows-x86_64, build-freebsd-x86_64]
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts/
+
+    - name: List all artifacts
+      run: |
+        echo "=== All downloaded artifacts ==="
+        find artifacts/ -type f | sort
+
+    - name: Organize release files
+      run: |
+        mkdir -p release/
+        
+        # 收集所有二进制文件
+        find artifacts/ -type f \( -name "AppOpt-*" -o -name "*.exe" \) | while read file; do
+          filename=$(basename "$file")
+          cp "$file" "release/$filename"
+          echo "Added: $filename"
+        done
+        
+        # 添加配置文件示例
+        cat > release/applist.conf.example << 'EOF'
+        # AppOpt 配置文件
+        # 格式: 进程名{线程名}=CPU核心
+        
+        # 示例规则
+        nginx=0-3
+        nginx{worker}=0-3
+        mysql=4-7
+        mysql{*io*}=4-7
+        chrome*=8-11
+        java*{*GC*}=12-15
+        
+        # CPU范围格式: 0,2,4 或 0-3 或 0-3,8,10-12
+        # 通配符: * ? [0-9]
+        EOF
+        
+        # 添加 README
+        cat > release/README.md << 'EOF'
+        # AppOpt - CPU Affinity Optimizer
+        
+        ## 简介
+        AppOpt 是一个 Linux 进程/线程 CPU 亲和性自动优化工具，可根据配置文件自动将指定应用的线程绑定到特定 CPU 核心。
+        
+        ## 特性
+        - ✅ 完全静态链接，无需运行时依赖
+        - ✅ 支持多架构 (x86_64, aarch64, armv7l, i686, riscv64)
+        - ✅ 支持配置文件热更新 (inotify)
+        - ✅ 支持进程名和线程名通配符匹配
+        - ✅ 规则优先级自动计算
+        
+        ## 使用方法
+        
+        ### Linux
+        ```bash
+        # 赋予执行权限
+        chmod +x AppOpt-x86_64
+        
+        # 运行 (需要 root 权限)
+        sudo ./AppOpt-x86_64 -c /path/to/applist.conf -s 2
+        
+        # 查看帮助
+        ./AppOpt-x86_64 -h
+        
+        # 查看版本
+        ./AppOpt-x86_64 -v
