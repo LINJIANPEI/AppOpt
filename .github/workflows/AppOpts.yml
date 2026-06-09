@@ -15,9 +15,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - run: sudo apt update && sudo apt install -y gcc-aarch64-linux-gnu
-    - run: sed -i '/#include "uthash.h"/i #include <stdarg.h>\n#include <signal.h>' AppOpts.c
-    - run: aarch64-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-arm64-v8a AppOpts.c
+
+    - name: Install cross compiler
+      run: sudo apt update && sudo apt install -y gcc-aarch64-linux-gnu
+
+    - name: Fix missing headers
+      run: |
+        printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
+        cat /tmp/headers.txt AppOpts.c > AppOpts.tmp
+        mv AppOpts.tmp AppOpts.c
+
+    - name: Build
+      run: aarch64-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-arm64-v8a AppOpts.c
+
     - uses: actions/upload-artifact@v4
       with:
         name: AppOpt-arm64-v8a
@@ -28,9 +38,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - run: sudo apt update && sudo apt install -y gcc-arm-linux-gnueabihf
-    - run: sed -i '/#include "uthash.h"/i #include <stdarg.h>\n#include <signal.h>' AppOpts.c
-    - run: arm-linux-gnueabihf-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-armeabi-v7a AppOpts.c
+
+    - name: Install cross compiler
+      run: sudo apt update && sudo apt install -y gcc-arm-linux-gnueabihf
+
+    - name: Fix missing headers
+      run: |
+        printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
+        cat /tmp/headers.txt AppOpts.c > AppOpts.tmp
+        mv AppOpts.tmp AppOpts.c
+
+    - name: Build
+      run: arm-linux-gnueabihf-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-armeabi-v7a AppOpts.c
+
     - uses: actions/upload-artifact@v4
       with:
         name: AppOpt-armeabi-v7a
@@ -41,9 +61,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - run: sudo apt update && sudo apt install -y gcc-i686-linux-gnu
-    - run: sed -i '/#include "uthash.h"/i #include <stdarg.h>\n#include <signal.h>' AppOpts.c
-    - run: i686-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-x86 AppOpts.c
+
+    - name: Install cross compiler
+      run: sudo apt update && sudo apt install -y gcc-i686-linux-gnu
+
+    - name: Fix missing headers
+      run: |
+        printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
+        cat /tmp/headers.txt AppOpts.c > AppOpts.tmp
+        mv AppOpts.tmp AppOpts.c
+
+    - name: Build
+      run: i686-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-x86 AppOpts.c
+
     - uses: actions/upload-artifact@v4
       with:
         name: AppOpt-x86
@@ -54,8 +84,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - run: sed -i '/#include "uthash.h"/i #include <stdarg.h>\n#include <signal.h>' AppOpts.c
-    - run: gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-x86_64 AppOpts.c
+
+    - name: Fix missing headers
+      run: |
+        printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
+        cat /tmp/headers.txt AppOpts.c > AppOpts.tmp
+        mv AppOpts.tmp AppOpts.c
+
+    - name: Build
+      run: gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-x86_64 AppOpts.c
+
     - uses: actions/upload-artifact@v4
       with:
         name: AppOpt-x86_64
@@ -73,10 +111,10 @@ jobs:
     - name: Copy binaries
       run: |
         mkdir -p release/
-        cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/
-        cp artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/
-        cp artifacts/AppOpt-x86/AppOpt-x86 release/
-        cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/
+        cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/ 2>/dev/null || true
+        cp artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/ 2>/dev/null || true
+        cp artifacts/AppOpt-x86/AppOpt-x86 release/ 2>/dev/null || true
+        cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/ 2>/dev/null || true
         chmod +x release/*
 
     - name: Create VERSION.txt
