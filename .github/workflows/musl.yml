@@ -70,7 +70,7 @@ jobs:
       with:
         path: artifacts/
 
-    - name: Organize release files
+    - name: Copy binaries
       run: |
         mkdir -p release/
         cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/
@@ -79,45 +79,44 @@ jobs:
         cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/
         chmod +x release/*
 
-        RUN_NUM="${{ github.run_number }}"
-        echo "Build Number: $RUN_NUM" > release/VERSION.txt
+    - name: Create VERSION.txt
+      run: |
+        echo "Build Number: ${{ github.run_number }}" > release/VERSION.txt
         echo "Build Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
         echo "Commit: ${{ github.sha }}" >> release/VERSION.txt
         echo "Triggered by: ${{ github.actor }}" >> release/VERSION.txt
 
-        cat > release/applist.conf.example << 'EOF'
-# AppOpt 配置文件
-# 格式: 进程名{线程名}=CPU核心范围
+    - name: Create applist.conf.example
+      run: |
+        echo "# AppOpt 配置文件" > release/applist.conf.example
+        echo "# 格式: 进程名{线程名}=CPU核心范围" >> release/applist.conf.example
+        echo "" >> release/applist.conf.example
+        echo "# 示例规则" >> release/applist.conf.example
+        echo "nginx=0-3" >> release/applist.conf.example
+        echo "nginx{worker}=0-3" >> release/applist.conf.example
+        echo "mysql=4-7" >> release/applist.conf.example
+        echo "chrome*=8-11" >> release/applist.conf.example
 
-# 示例规则
-nginx=0-3
-nginx{worker}=0-3
-mysql=4-7
-chrome*=8-11
+    - name: Create README.md
+      run: |
+        echo "# AppOpt - CPU Affinity Optimizer" > release/README.md
+        echo "" >> release/README.md
+        echo "## 支持架构" >> release/README.md
+        echo "| 架构 | 文件名 |" >> release/README.md
+        echo "|------|--------|" >> release/README.md
+        echo "| arm64-v8a | AppOpt-arm64-v8a |" >> release/README.md
+        echo "| armeabi-v7a | AppOpt-armeabi-v7a |" >> release/README.md
+        echo "| x86 | AppOpt-x86 |" >> release/README.md
+        echo "| x86_64 | AppOpt-x86_64 |" >> release/README.md
+        echo "" >> release/README.md
+        echo "## 使用方法" >> release/README.md
+        echo '```bash' >> release/README.md
+        echo "chmod +x AppOpt-x86_64" >> release/README.md
+        echo "sudo ./AppOpt-x86_64 -c applist.conf -s 2" >> release/README.md
+        echo '```' >> release/README.md
 
-# CPU范围格式: 0,2,4 或 0-3 或 0-3,8,10-12
-EOF
-
-        cat > release/README.md << 'EOF'
-# AppOpt - CPU Affinity Optimizer
-
-## 支持架构
-| 架构 | 文件名 |
-|------|--------|
-| arm64-v8a (64位 ARM) | AppOpt-arm64-v8a |
-| armeabi-v7a (32位 ARM) | AppOpt-armeabi-v7a |
-| x86 (32位 x86) | AppOpt-x86 |
-| x86_64 (64位 x86) | AppOpt-x86_64 |
-
-## 使用方法
-
-chmod +x AppOpt-x86_64
-sudo ./AppOpt-x86_64 -c applist.conf -s 2
-
-## 验证静态编译
-file AppOpt-x86_64
-EOF
-
+    - name: Create tarball
+      run: |
         cd release
         tar -czf ../AppOpt-build-${{ github.run_number }}.tar.gz .
         cd ..
@@ -129,23 +128,33 @@ EOF
         tag_name: build-${{ github.run_number }}
         name: "AppOpt CLEAN Build ${{ github.run_number }}"
         body: |
-          ## AppOpt CLEAN Build ${{ github.run_number }}
+          AppOpt CLEAN Build ${{ github.run_number }}
 
-          ### 构建信息
-          | 项目 | 信息 |
-          |------|------|
-          | 构建编号 | #${{ github.run_number }} |
-          | 构建时间 | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |
-          | 提交哈希 | `${{ github.sha }}` |
-          | 触发者 | @${{ github.actor }} |
+          构建信息:
+          - 构建编号: #${{ github.run_number }}
+          - 构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - 提交哈希: ${{ github.sha }}
+          - 触发者: ${{ github.actor }}
 
-          ### 包含文件
-          - AppOpt-arm64-v8a - 64位 ARM
-          - AppOpt-armeabi-v7a - 32位 ARM
-          - AppOpt-x86 - 32位 x86
-          - AppOpt-x86_64 - 64位 x86
+          包含架构:
+          - arm64-v8a (64位 ARM)
+          - armeabi-v7a (32位 ARM)
+          - x86 (32位 x86)
+          - x86_64 (64位 x86)
 
-          ### 快速开始
-          ```bash
+          快速开始:
           tar -xzf AppOpt-build-${{ github.run_number }}.tar.gz
           sudo ./AppOpt-x86_64 -c applist.conf -s 2
+        files: |
+          AppOpt-build-${{ github.run_number }}.tar.gz
+          release/AppOpt-arm64-v8a
+          release/AppOpt-armeabi-v7a
+          release/AppOpt-x86
+          release/AppOpt-x86_64
+          release/applist.conf.example
+          release/README.md
+          release/VERSION.txt
+        draft: false
+        prerelease: ${{ github.event.inputs.prerelease }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
