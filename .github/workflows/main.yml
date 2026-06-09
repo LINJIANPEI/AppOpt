@@ -1,8 +1,7 @@
 name: Build AppOpt ARM64 (CLEAN MODE)
 
 on:
-  push:
-  workflow_dispatch:
+  workflow_dispatch:  # 只允许手动触发
 
 permissions:
   contents: write
