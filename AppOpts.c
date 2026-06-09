@@ -21,7 +21,7 @@
 #include "uthash.h"
 
 #define VERSION            "1.6.3"
-#define BASE_CPUSET        "/dev/cpuset/AppOpt"
+#define BASE_CPUSET        "/dev/cpuset/Linlin"
 #define MAX_PKG_LEN        128
 #define MAX_THREAD_LEN     32
 #define INITIAL_PKG_CAPACITY 2560
