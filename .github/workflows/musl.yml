@@ -3,11 +3,6 @@ name: Build AppOpts
 on:
   workflow_dispatch:        # 仅手动触发
     inputs:
-      version:
-        description: '版本号 (必填，如: v1.0.0)'
-        required: true
-        default: ''
-        type: string
       prerelease:
         description: '是否为预发布版本'
         required: false
@@ -190,11 +185,12 @@ jobs:
         chmod +x release/*
         
         # 创建版本信息
-        VERSION="${{ github.event.inputs.version }}"
-        echo "Version: $VERSION" > release/VERSION.txt
+        RUN_NUM="${{ github.run_number }}"
+        echo "Build Number: $RUN_NUM" > release/VERSION.txt
         echo "Build Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
         echo "Commit: ${{ github.sha }}" >> release/VERSION.txt
         echo "Triggered by: ${{ github.actor }}" >> release/VERSION.txt
+        echo "Run ID: ${{ github.run_id }}" >> release/VERSION.txt
         
         # 添加配置文件示例
         cat > release/applist.conf.example << 'EOF'
