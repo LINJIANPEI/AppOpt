@@ -851,12 +851,37 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 proc->thread_rules_cap = new_cap;
             }
 
+            // ========== 重新实现规则匹配逻辑 ==========
+            // 1. 先尝试精确匹配包名
             PackageEntry* pkg_entry;
             HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
-            bool matched = (pkg_entry != NULL);
+            bool matched = false;
+
+            // 收集所有匹配的规则（精确 + 通配符 + 默认）
+            if (pkg_entry) {
+                // 包名精确匹配，查找该包的所有规则
+                for (size_t i = 0; i < cfg->num_rules; i++) {
+                    const AffinityRule* rule = &cfg->rules[i];
+                    if (rule->priority == -1) continue;  // 跳过默认规则
+                    if (strcmp(rule->pkg, name) == 0) {
+                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                            size_t new_cap = proc->thread_rules_cap * 2;
+                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
+                            if (!tmp) break;
+                            proc->thread_rules = tmp;
+                            proc->thread_rules_cap = new_cap;
+                        }
+                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
+                        matched = true;
+                    }
+                }
+            }
+
+            // 2. 如果没有精确匹配，尝试通配符匹配
             if (!matched) {
                 for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
                     const AffinityRule* rule = cfg->wildcard_rules[i];
+                    // 检查包名是否匹配（包括 * 通配符）
                     if (fnmatch(rule->pkg, name, 0) == 0) {
                         if (proc->num_thread_rules >= proc->thread_rules_cap) {
                             size_t new_cap = proc->thread_rules_cap * 2;
@@ -871,7 +896,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
             }
 
-            // ========== 如果还没有匹配，尝试默认规则 ==========
+            // 3. 如果还没有匹配，使用默认规则
             if (!matched) {
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     const AffinityRule* rule = &cfg->rules[i];
@@ -897,44 +922,16 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 continue;
             }
 
-            if (pkg_entry) {
-                for (size_t i = 0; i < cfg->num_rules; i++) {
-                    const AffinityRule* rule = &cfg->rules[i];
-                    if ((strcmp(rule->pkg, proc->pkg) == 0) ||
-                        (rule->is_wildcard && fnmatch(rule->pkg, proc->pkg, 0) == 0)) {
-                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
-                            size_t new_cap = proc->thread_rules_cap * 2;
-                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
-                            if (!tmp) break;
-                            proc->thread_rules = tmp;
-                            proc->thread_rules_cap = new_cap;
-                        }
-                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
-                    }
-                }
-            } else {
-                for (size_t i = 0; i < cfg->num_rules; i++) {
-                    const AffinityRule* rule = &cfg->rules[i];
-                    if (!rule->is_wildcard && strcmp(rule->pkg, proc->pkg) == 0) {
-                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
-                            size_t new_cap = proc->thread_rules_cap * 2;
-                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
-                            if (!tmp) break;
-                            proc->thread_rules = tmp;
-                            proc->thread_rules_cap = new_cap;
-                        }
-                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
-                    }
-                }
-            }
-
+            // 对规则按优先级排序
             if (proc->num_thread_rules > 1) {
                 qsort(proc->thread_rules, proc->num_thread_rules, sizeof(AffinityRule*), compare_rules);
             }
 
+            // 设置基础 CPU 亲和性（主线程）
             for (size_t i = 0; i < proc->num_thread_rules; i++) {
                 const AffinityRule* rule = proc->thread_rules[i];
-                if (!rule->thread[0]) {
+                // 只有线程名为空或与包名相同的规则才作为基础规则
+                if (rule->thread[0] == '\0' || strcmp(rule->thread, name) == 0) {
                     CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
                     build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
                     break;
@@ -1003,37 +1000,55 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 ti->tid = tid;
                 build_str(ti->name, sizeof(ti->name), tname, NULL);
                 CPU_ZERO(&ti->cpus);
-                const char* matched = NULL;
+
+                // ========== 线程规则匹配 ==========
+                const char* matched_dir = NULL;
                 int highest_priority = -1;
                 size_t best_rule_idx = 0;
 
+                // 1. 精确匹配线程名
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
                     const AffinityRule* rule = proc->thread_rules[i];
                     const char* rule_thread = rule->thread;
-
-                    if (strcmp(rule_thread, tname) == 0 ||
-                        (rule_thread[0] == '\0' && (tname[0] == '\0' || strcmp(tname, " ") == 0))) {
+                    
+                    // 精确匹配线程名
+                    if (strcmp(rule_thread, tname) == 0) {
                         CPU_OR(&ti->cpus, &ti->cpus, &rule->cpus);
-                        matched = rule->cpuset_dir;
+                        matched_dir = rule->cpuset_dir;
                         break;
-                    } else if (rule->priority < 1000 && fnmatch(rule_thread, tname, 0) == 0) {
-                        if (rule->priority > highest_priority) {
-                            highest_priority = rule->priority;
-                            best_rule_idx = i;
-                        }
                     }
                 }
 
-                if (!matched && highest_priority >= 0) {
-                    CPU_OR(&ti->cpus, &ti->cpus, &proc->thread_rules[best_rule_idx]->cpus);
-                    matched = proc->thread_rules[best_rule_idx]->cpuset_dir;
+                // 2. 如果没有精确匹配，尝试通配符匹配线程名
+                if (!matched_dir) {
+                    for (size_t i = 0; i < proc->num_thread_rules; i++) {
+                        const AffinityRule* rule = proc->thread_rules[i];
+                        const char* rule_thread = rule->thread;
+                        
+                        // 如果规则是通配符模式（包含 * ? [）且不是默认规则
+                        if (rule->priority >= 0 && rule->is_wildcard) {
+                            if (fnmatch(rule_thread, tname, 0) == 0) {
+                                if (rule->priority > highest_priority) {
+                                    highest_priority = rule->priority;
+                                    best_rule_idx = i;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (highest_priority >= 0) {
+                        const AffinityRule* best_rule = proc->thread_rules[best_rule_idx];
+                        CPU_OR(&ti->cpus, &ti->cpus, &best_rule->cpus);
+                        matched_dir = best_rule->cpuset_dir;
+                    }
                 }
 
-                if (matched) {
-                    build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), matched, NULL);
-                } else {
+                // 3. 如果没有匹配到任何线程规则，使用进程的基础规则
+                if (!matched_dir) {
                     CPU_OR(&ti->cpus, &ti->cpus, &proc->base_cpus);
                     build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), proc->base_cpuset, NULL);
+                } else {
+                    build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), matched_dir, NULL);
                 }
 
                 proc->num_threads++;
