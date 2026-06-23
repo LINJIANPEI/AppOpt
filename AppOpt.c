@@ -851,19 +851,17 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 proc->thread_rules_cap = new_cap;
             }
 
-            // ========== 重新实现规则匹配逻辑 ==========
-            // 1. 先尝试精确匹配包名
-            PackageEntry* pkg_entry;
-            HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
+            // ========== 进程级匹配（只匹配包名） ==========
             bool matched = false;
 
-            // 收集所有匹配的规则（精确 + 通配符 + 默认）
+            // 1. 精确匹配包名
+            PackageEntry* pkg_entry;
+            HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
             if (pkg_entry) {
-                // 包名精确匹配，查找该包的所有规则
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     const AffinityRule* rule = &cfg->rules[i];
-                    if (rule->priority == -1) continue;  // 跳过默认规则
-                    if (strcmp(rule->pkg, name) == 0) {
+                    if (rule->priority == -1) continue;
+                    if (!rule->is_wildcard && strcmp(rule->pkg, name) == 0) {
                         if (proc->num_thread_rules >= proc->thread_rules_cap) {
                             size_t new_cap = proc->thread_rules_cap * 2;
                             AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
@@ -877,11 +875,13 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
             }
 
-            // 2. 如果没有精确匹配，尝试通配符匹配
+            // 2. 通配符匹配包名（排除 pkg="*" 的规则）
             if (!matched) {
                 for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
                     const AffinityRule* rule = cfg->wildcard_rules[i];
-                    // 检查包名是否匹配（包括 * 通配符）
+                    // 跳过 pkg="*" 的规则（它们作为默认规则处理）
+                    if (strcmp(rule->pkg, "*") == 0) continue;
+                    
                     if (fnmatch(rule->pkg, name, 0) == 0) {
                         if (proc->num_thread_rules >= proc->thread_rules_cap) {
                             size_t new_cap = proc->thread_rules_cap * 2;
@@ -896,7 +896,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
             }
 
-            // 3. 如果还没有匹配，使用默认规则
+            // 3. 默认规则（*=0-5）
             if (!matched) {
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     const AffinityRule* rule = &cfg->rules[i];
@@ -1001,7 +1001,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 build_str(ti->name, sizeof(ti->name), tname, NULL);
                 CPU_ZERO(&ti->cpus);
 
-                // ========== 线程规则匹配 ==========
+                // ========== 线程级匹配（匹配包名+线程名） ==========
                 const char* matched_dir = NULL;
                 int highest_priority = -1;
                 size_t best_rule_idx = 0;
@@ -1009,28 +1009,27 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 // 1. 精确匹配线程名
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
                     const AffinityRule* rule = proc->thread_rules[i];
-                    const char* rule_thread = rule->thread;
-                    
-                    // 精确匹配线程名
-                    if (strcmp(rule_thread, tname) == 0) {
+                    if (strcmp(rule->thread, tname) == 0) {
                         CPU_OR(&ti->cpus, &ti->cpus, &rule->cpus);
                         matched_dir = rule->cpuset_dir;
                         break;
                     }
                 }
 
-                // 2. 如果没有精确匹配，尝试通配符匹配线程名
+                // 2. 通配符匹配线程名（包括 pkg="*" 的规则）
                 if (!matched_dir) {
                     for (size_t i = 0; i < proc->num_thread_rules; i++) {
                         const AffinityRule* rule = proc->thread_rules[i];
-                        const char* rule_thread = rule->thread;
-                        
-                        // 如果规则是通配符模式（包含 * ? [）且不是默认规则
-                        if (rule->priority >= 0 && rule->is_wildcard) {
-                            if (fnmatch(rule_thread, tname, 0) == 0) {
-                                if (rule->priority > highest_priority) {
-                                    highest_priority = rule->priority;
-                                    best_rule_idx = i;
+                        // 如果是通配符规则
+                        if (rule->is_wildcard) {
+                            // 检查包名是否匹配（包括 "*" 匹配所有）
+                            if (fnmatch(rule->pkg, proc->pkg, 0) == 0) {
+                                // 检查线程名是否匹配
+                                if (fnmatch(rule->thread, tname, 0) == 0) {
+                                    if (rule->priority > highest_priority) {
+                                        highest_priority = rule->priority;
+                                        best_rule_idx = i;
+                                    }
                                 }
                             }
                         }
@@ -1043,7 +1042,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                     }
                 }
 
-                // 3. 如果没有匹配到任何线程规则，使用进程的基础规则
+                // 3. 如果线程没有匹配到任何规则，使用进程的基础规则
                 if (!matched_dir) {
                     CPU_OR(&ti->cpus, &ti->cpus, &proc->base_cpus);
                     build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), proc->base_cpuset, NULL);
