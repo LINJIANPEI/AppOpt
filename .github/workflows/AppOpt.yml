@@ -1,4 +1,5 @@
 name: 构建 AppOpt
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build-arm64:
@@ -140,8 +142,13 @@ jobs:
         id: version
         run: |
           TIMESTAMP=$(date -u '+%Y%m%d-%H%M%S')
-          TAG_NAME="build-${TIMESTAMP}"
+          if [ "${{ github.event.inputs.prerelease }}" == "true" ]; then
+            TAG_NAME="pre-${TIMESTAMP}"
+          else
+            TAG_NAME="build-${TIMESTAMP}"
+          fi
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "version_tag=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "版本标签: ${TAG_NAME}"
 
       - name: 检查下载的产物
@@ -152,27 +159,37 @@ jobs:
           echo "=== 检查是否有二进制文件 ==="
           find artifacts/ -name "AppOpt-*" -exec ls -la {} \;
 
-      - name: 复制二进制文件
+      - name: 准备发布文件
         run: |
           mkdir -p release/
-          cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/ 2>/dev/null || true
-          cp artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/ 2>/dev/null || true
-          cp artifacts/AppOpt-x86/AppOpt-x86 release/ 2>/dev/null || true
-          cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/ 2>/dev/null || true
-          chmod +x release/*
+          
+          # 复制二进制文件
+          cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/AppOpt-android-arm64 2>/dev/null || echo "警告: arm64-v8a 文件不存在"
+          cp artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/AppOpt-android-armv7 2>/dev/null || echo "警告: armeabi-v7a 文件不存在"
+          cp artifacts/AppOpt-x86/AppOpt-x86 release/AppOpt-linux-x86 2>/dev/null || echo "警告: x86 文件不存在"
+          cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/AppOpt-linux-x86_64 2>/dev/null || echo "警告: x86_64 文件不存在"
+          
+          # 添加执行权限
+          chmod +x release/* 2>/dev/null || true
 
       - name: 检查 release 目录
         run: |
           echo "=== release 目录内容 ==="
           ls -la release/
+          echo ""
+          echo "=== 文件类型检查 ==="
+          file release/* 2>/dev/null || echo "没有文件"
 
       - name: 创建版本信息文件
         run: |
-          echo "版本: ${{ steps.version.outputs.tag_name }}" > release/VERSION.txt
-          echo "构建编号: ${{ github.run_number }}" >> release/VERSION.txt
-          echo "构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
-          echo "提交哈希: ${{ github.sha }}" >> release/VERSION.txt
-          echo "触发者: ${{ github.actor }}" >> release/VERSION.txt
+          cat > release/VERSION.txt << EOF
+          版本: ${{ steps.version.outputs.version_tag }}
+          构建编号: ${{ github.run_number }}
+          构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          提交哈希: ${{ github.sha }}
+          触发者: ${{ github.actor }}
+          仓库: ${{ github.repository }}
+          EOF
 
       - name: 创建配置示例文件
         run: |
@@ -180,7 +197,11 @@ jobs:
           # AppOpt 配置文件
           # 格式: 进程名{线程名}=CPU核心范围
           # 示例: nginx{worker}=0-3
-
+          
+          # 进程匹配规则
+          # 可以使用通配符 * 和 ?
+          # 例如: chrome* 匹配所有以 chrome 开头的进程
+          
           # 示例规则
           nginx=0-3
           nginx{worker}=0-3
@@ -188,6 +209,7 @@ jobs:
           chrome*=8-11
           redis-server{*}=0-7
           java*{main}=0-1
+          systemd{*}=0-1
           EOF
 
       - name: 创建说明文档
@@ -196,17 +218,22 @@ jobs:
           # AppOpt - CPU 亲和性优化工具
 
           ## 简介
-          AppOpt 是一个 Linux 进程 CPU 亲和性优化工具。
+          AppOpt 是一个 Linux 进程 CPU 亲和性优化工具，可以指定特定进程或线程运行在指定的 CPU 核心上。
 
           ## 支持架构
-          | 架构 | 文件名 |
-          |------|--------|
-          | arm64-v8a | AppOpt-arm64-v8a |
-          | armeabi-v7a | AppOpt-armeabi-v7a |
-          | x86 | AppOpt-x86 |
-          | x86_64 | AppOpt-x86_64 |
+          | 架构 | 文件名 | 适用场景 |
+          |------|--------|----------|
+          | arm64-v8a | AppOpt-android-arm64 | Android 64位设备 |
+          | armeabi-v7a | AppOpt-android-armv7 | Android 32位设备 |
+          | x86 | AppOpt-linux-x86 | 32位 Linux 系统 |
+          | x86_64 | AppOpt-linux-x86_64 | 64位 Linux 系统 |
 
           ## 快速开始
+
+          ### 1. 下载对应架构的二进制文件
+          根据你的系统架构选择合适的文件。
+
+          ### 2. 创建配置文件
           ```bash
-          chmod +x AppOpt-x86_64
-          sudo ./AppOpt-x86_64 -c applist.conf -s 2
+          cp applist.conf.example applist.conf
+          vim applist.conf
