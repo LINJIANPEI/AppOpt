@@ -1,4 +1,4 @@
-name: Build AppOpts
+name: 构建 AppOpts
 on:
   workflow_dispatch:
     inputs:
@@ -13,22 +13,22 @@ permissions:
 
 jobs:
   build-arm64:
-    name: Build for arm64-v8a
+    name: 构建 arm64-v8a 版本
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cross compiler
+      - name: 安装交叉编译工具链
         run: sudo apt update && sudo apt install -y gcc-aarch64-linux-gnu
 
-      - name: Fix missing headers
+      - name: 修复缺失的头文件
         run: |
           printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
           cat /tmp/headers.txt AppOpt.c > AppOpt.tmp
           mv AppOpt.tmp AppOpt.c
 
-      - name: Build
-        run: aarch64-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-arm64-v8a AppOpt.c
+      - name: 编译（使用本地 uthash）
+        run: aarch64-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-arm64-v8a AppOpt.c
 
       - uses: actions/upload-artifact@v4
         with:
@@ -36,22 +36,22 @@ jobs:
           path: AppOpt-arm64-v8a
 
   build-armv7:
-    name: Build for armeabi-v7a
+    name: 构建 armeabi-v7a 版本
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cross compiler
+      - name: 安装交叉编译工具链
         run: sudo apt update && sudo apt install -y gcc-arm-linux-gnueabihf
 
-      - name: Fix missing headers
+      - name: 修复缺失的头文件
         run: |
           printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
           cat /tmp/headers.txt AppOpt.c > AppOpt.tmp
           mv AppOpt.tmp AppOpt.c
 
-      - name: Build
-        run: arm-linux-gnueabihf-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-armeabi-v7a AppOpt.c
+      - name: 编译（使用本地 uthash）
+        run: arm-linux-gnueabihf-gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-armeabi-v7a AppOpt.c
 
       - uses: actions/upload-artifact@v4
         with:
@@ -59,22 +59,22 @@ jobs:
           path: AppOpt-armeabi-v7a
 
   build-x86:
-    name: Build for x86
+    name: 构建 x86 版本
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cross compiler
+      - name: 安装交叉编译工具链
         run: sudo apt update && sudo apt install -y gcc-i686-linux-gnu
 
-      - name: Fix missing headers
+      - name: 修复缺失的头文件
         run: |
           printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
           cat /tmp/headers.txt AppOpt.c > AppOpt.tmp
           mv AppOpt.tmp AppOpt.c
 
-      - name: Build
-        run: i686-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-x86 AppOpt.c
+      - name: 编译（使用本地 uthash）
+        run: i686-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-x86 AppOpt.c
 
       - uses: actions/upload-artifact@v4
         with:
@@ -82,19 +82,19 @@ jobs:
           path: AppOpt-x86
 
   build-x86_64:
-    name: Build for x86_64
+    name: 构建 x86_64 版本
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fix missing headers
+      - name: 修复缺失的头文件
         run: |
           printf '#include <stdarg.h>\n#include <signal.h>\n' > /tmp/headers.txt
           cat /tmp/headers.txt AppOpt.c > AppOpt.tmp
           mv AppOpt.tmp AppOpt.c
 
-      - name: Build
-        run: gcc -static -O2 -pthread -D_GNU_SOURCE -o AppOpt-x86_64 AppOpt.c
+      - name: 编译（使用本地 uthash）
+        run: gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-x86_64 AppOpt.c
 
       - uses: actions/upload-artifact@v4
         with:
@@ -102,7 +102,7 @@ jobs:
           path: AppOpt-x86_64
 
   create-release:
-    name: Create Release
+    name: 创建发布版本
     runs-on: ubuntu-latest
     needs: [build-arm64, build-armv7, build-x86, build-x86_64]
     steps:
@@ -110,7 +110,7 @@ jobs:
         with:
           path: artifacts/
 
-      - name: Copy binaries
+      - name: 复制二进制文件
         run: |
           mkdir -p release/
           cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/ 2>/dev/null || true
@@ -119,82 +119,132 @@ jobs:
           cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/ 2>/dev/null || true
           chmod +x release/*
 
-      - name: Create VERSION.txt
+      - name: 创建版本信息文件
         run: |
-          echo "Build Number: ${{ github.run_number }}" > release/VERSION.txt
-          echo "Build Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
-          echo "Commit: ${{ github.sha }}" >> release/VERSION.txt
-          echo "Triggered by: ${{ github.actor }}" >> release/VERSION.txt
+          echo "构建编号: ${{ github.run_number }}" > release/VERSION.txt
+          echo "构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
+          echo "提交哈希: ${{ github.sha }}" >> release/VERSION.txt
+          echo "触发者: ${{ github.actor }}" >> release/VERSION.txt
 
-      - name: Create applist.conf.example
+      - name: 创建配置示例文件
         run: |
           echo "# AppOpt 配置文件" > release/applist.conf.example
           echo "# 格式: 进程名{线程名}=CPU核心范围" >> release/applist.conf.example
+          echo "# 示例: nginx{worker}=0-3" >> release/applist.conf.example
           echo "" >> release/applist.conf.example
           echo "# 示例规则" >> release/applist.conf.example
           echo "nginx=0-3" >> release/applist.conf.example
           echo "nginx{worker}=0-3" >> release/applist.conf.example
           echo "mysql=4-7" >> release/applist.conf.example
           echo "chrome*=8-11" >> release/applist.conf.example
+          echo "redis-server{*}=0-7" >> release/applist.conf.example
+          echo "java*{main}=0-1" >> release/applist.conf.example
 
-      - name: Create README.md
+      - name: 创建说明文档
         run: |
-          echo "# AppOpt - CPU Affinity Optimizer" > release/README.md
+          echo "# AppOpt - CPU 亲和性优化工具" > release/README.md
+          echo "" >> release/README.md
+          echo "## 简介" >> release/README.md
+          echo "AppOpt 是一个 Linux 进程 CPU 亲和性优化工具，可以自动将进程绑定到指定的 CPU 核心上。" >> release/README.md
           echo "" >> release/README.md
           echo "## 支持架构" >> release/README.md
-          echo "| 架构 | 文件名 |" >> release/README.md
-          echo "|------|--------|" >> release/README.md
-          echo "| arm64-v8a | AppOpt-arm64-v8a |" >> release/README.md
-          echo "| armeabi-v7a | AppOpt-armeabi-v7a |" >> release/README.md
-          echo "| x86 | AppOpt-x86 |" >> release/README.md
-          echo "| x86_64 | AppOpt-x86_64 |" >> release/README.md
+          echo "| 架构 | 文件名 | 说明 |" >> release/README.md
+          echo "|------|--------|------|" >> release/README.md
+          echo "| arm64-v8a | AppOpt-arm64-v8a | 64位 ARM 架构（Android/Linux） |" >> release/README.md
+          echo "| armeabi-v7a | AppOpt-armeabi-v7a | 32位 ARM 架构（Android/Linux） |" >> release/README.md
+          echo "| x86 | AppOpt-x86 | 32位 x86 架构 |" >> release/README.md
+          echo "| x86_64 | AppOpt-x86_64 | 64位 x86_64 架构 |" >> release/README.md
           echo "" >> release/README.md
-          echo "## 使用方法" >> release/README.md
+          echo "## 快速开始" >> release/README.md
           echo '```bash' >> release/README.md
+          echo "# 1. 解压" >> release/README.md
+          echo "tar -xzf AppOpt-build-*.tar.gz" >> release/README.md
+          echo "" >> release/README.md
+          echo "# 2. 赋予执行权限" >> release/README.md
           echo "chmod +x AppOpt-x86_64" >> release/README.md
+          echo "" >> release/README.md
+          echo "# 3. 编辑配置文件" >> release/README.md
+          echo "vim applist.conf" >> release/README.md
+          echo "" >> release/README.md
+          echo "# 4. 运行" >> release/README.md
           echo "sudo ./AppOpt-x86_64 -c applist.conf -s 2" >> release/README.md
           echo '```' >> release/README.md
+          echo "" >> release/README.md
+          echo "## 配置说明" >> release/README.md
+          echo "配置文件格式: \`进程名{线程名}=CPU核心范围\`" >> release/README.md
+          echo "" >> release/README.md
+          echo "### 示例" >> release/README.md
+          echo '```' >> release/README.md
+          echo "# 绑定 nginx 的所有线程到 CPU 0-3" >> release/README.md
+          echo "nginx=0-3" >> release/README.md
+          echo "" >> release/README.md
+          echo "# 绑定 nginx 的 worker 线程到 CPU 0-3" >> release/README.md
+          echo "nginx{worker}=0-3" >> release/README.md
+          echo "" >> release/README.md
+          echo "# 绑定 mysql 到 CPU 4-7" >> release/README.md
+          echo "mysql=4-7" >> release/README.md
+          echo "" >> release/README.md
+          echo "# 绑定所有以 chrome 开头的进程到 CPU 8-11" >> release/README.md
+          echo "chrome*=8-11" >> release/README.md
+          echo '```' >> release/README.md
+          echo "" >> release/README.md
+          echo "## 命令行参数" >> release/README.md
+          echo '```' >> release/README.md
+          echo "./AppOpt-x86_64 -c <配置文件> -s <检查间隔(秒)>" >> release/README.md
+          echo "" >> release/README.md
+          echo "选项:" >> release/README.md
+          echo "  -c <配置文件>   指定配置文件路径 (默认: ./applist.conf)" >> release/README.md
+          echo "  -s <间隔>      检查间隔秒数 (默认: 2)" >> release/README.md
+          echo "  -v             显示版本信息" >> release/README.md
+          echo "  -h             显示帮助信息" >> release/README.md
+          echo '```' >> release/README.md
+          echo "" >> release/README.md
+          echo "## 注意事项" >> release/README.md
+          echo "1. 需要 root 权限运行" >> release/README.md
+          echo "2. 系统需要支持 cpuset（通常 Linux 默认支持）" >> release/README.md
+          echo "3. CPU 核心范围必须在系统可用范围内" >> release/README.md
 
-      - name: Create tarball
+      - name: 打包成压缩文件
         run: |
           cd release
           tar -czf ../AppOpt-build-${{ github.run_number }}.tar.gz .
           cd ..
           ls -lh AppOpt-build-*.tar.gz
 
-      - name: Create GitHub Release
+      - name: 创建 GitHub 发布
         uses: softprops/action-gh-release@v1
         with:
           tag_name: build-${{ github.run_number }}
-          name: "AppOpt CLEAN Build ${{ github.run_number }}"
+          name: "AppOpt 构建版本 ${{ github.run_number }}"
           body: |
-            AppOpt CLEAN Build ${{ github.run_number }}
+            ## AppOpt 构建版本 #${{ github.run_number }}
 
-            构建信息:
-            - 构建编号: #${{ github.run_number }}
-            - 构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-            - 提交哈希: ${{ github.sha }}
-            - 触发者: ${{ github.actor }}
+            ### 📦 构建信息
+            - **构建编号**: #${{ github.run_number }}
+            - **构建时间**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            - **提交哈希**: `${{ github.sha }}`
+            - **触发者**: @${{ github.actor }}
 
-            包含架构:
-            - arm64-v8a (64位 ARM)
-            - armeabi-v7a (32位 ARM)
-            - x86 (32位 x86)
-            - x86_64 (64位 x86)
+            ### 🏗️ 支持架构
+            - ✅ **arm64-v8a** - 64位 ARM（Android/Linux）
+            - ✅ **armeabi-v7a** - 32位 ARM（Android/Linux）
+            - ✅ **x86** - 32位 x86
+            - ✅ **x86_64** - 64位 x86_64
 
-            快速开始:
+            ### 🚀 快速开始
+            ```bash
+            # 1. 下载并解压
             tar -xzf AppOpt-build-${{ github.run_number }}.tar.gz
+
+            # 2. 进入目录
+            cd release
+
+            # 3. 赋予执行权限
+            chmod +x AppOpt-x86_64
+
+            # 4. 编辑配置（根据需要修改）
+            cp applist.conf.example applist.conf
+            vim applist.conf
+
+            # 5. 运行
             sudo ./AppOpt-x86_64 -c applist.conf -s 2
-          files: |
-            AppOpt-build-${{ github.run_number }}.tar.gz
-            release/AppOpt-arm64-v8a
-            release/AppOpt-armeabi-v7a
-            release/AppOpt-x86
-            release/AppOpt-x86_64
-            release/applist.conf.example
-            release/README.md
-            release/VERSION.txt
-          draft: false
-          prerelease: ${{ github.event.inputs.prerelease }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
