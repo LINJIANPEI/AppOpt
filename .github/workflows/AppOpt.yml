@@ -138,6 +138,15 @@ jobs:
         with:
           path: artifacts/
 
+      - name: 生成版本标签
+        id: version
+        run: |
+          # 使用时间戳作为版本号，格式：YYYYMMDD-HHMMSS
+          TIMESTAMP=$(date -u '+%Y%m%d-%H%M%S')
+          TAG_NAME="v${TIMESTAMP}"
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "版本标签: ${TAG_NAME}"
+
       - name: 检查下载的产物
         run: |
           echo "=== 检查 artifacts 目录 ==="
@@ -166,7 +175,8 @@ jobs:
 
       - name: 创建版本信息文件
         run: |
-          echo "构建编号: ${{ github.run_number }}" > release/VERSION.txt
+          echo "版本: ${{ steps.version.outputs.tag_name }}" > release/VERSION.txt
+          echo "构建编号: ${{ github.run_number }}" >> release/VERSION.txt
           echo "构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
           echo "提交哈希: ${{ github.sha }}" >> release/VERSION.txt
           echo "触发者: ${{ github.actor }}" >> release/VERSION.txt
