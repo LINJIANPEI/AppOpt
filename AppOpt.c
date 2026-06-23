@@ -490,9 +490,13 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
             continue;
         }
 
+        // ========== 解析包名{线程名} ==========
         char* br = strchr(key, '{');
-        char* thread = "";
+        char* thread = NULL;
+        char* pkg = NULL;
+
         if (br) {
+            // 有 {}，解析线程名
             *br++ = '\0';
             char* eb = strchr(br, '}');
             if (!eb) {
@@ -501,23 +505,43 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
             }
             *eb = '\0';
             thread = strtrim(br);
+            pkg = strtrim(key);
+
+            // 线程名为空 → 警告并跳过
+            if (thread[0] == '\0') {
+                LOG_W("第 %zu 行无效规则：线程名为空，已跳过: %s{%s}=%s\n", 
+                      line_number, pkg, thread, value);
+                continue;
+            }
+        } else {
+            // 没有 {}，整个 key 作为包名，线程名使用包名
+            pkg = strtrim(key);
+            thread = pkg;  // 指向同一内存，后续不会修改，安全
         }
 
-        char* pkg = strtrim(key);
-        if (strlen(pkg) >= MAX_PKG_LEN || strlen(thread) >= MAX_THREAD_LEN) {
-            LOG_W("第 %zu 行无效规则：包名或线程名过长: %s\n", line_number, p);
+        // 检查包名是否为空
+        if (!pkg || pkg[0] == '\0') {
+            LOG_W("第 %zu 行无效规则：包名为空，已跳过: %s\n", line_number, p);
             continue;
         }
 
+        // 检查长度
+        if (strlen(pkg) >= MAX_PKG_LEN || strlen(thread) >= MAX_THREAD_LEN) {
+            LOG_W("第 %zu 行无效规则：包名或线程名过长，已跳过: %s\n", line_number, p);
+            continue;
+        }
+
+        // 检查重复规则
         bool is_duplicate = false;
         for (size_t i = 0; i < num_rules; i++) {
             if (!strcmp(rules[i].pkg, pkg) && !strcmp(rules[i].thread, thread)) {
-                LOG_W("第 %zu 行重复规则：%s{%s}=%s，请检查配置\n", line_number, pkg, thread, value);
+                LOG_W("第 %zu 行重复规则：%s{%s}=%s，已跳过\n", line_number, pkg, thread, value);
                 is_duplicate = true;
                 break;
             }
         }
         if (is_duplicate) continue;
+
 
         if (num_rules >= rules_capacity) {
             rules_capacity *= 2;
@@ -567,12 +591,35 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
         rule->cpuset_dir[sizeof(rule->cpuset_dir) - 1] = '\0';
         free(dir_name);
 
-        rule->is_wildcard = (strchr(pkg, '*') != NULL || strchr(pkg, '?') != NULL || strchr(pkg, '[') != NULL || strchr(thread, '*') != NULL || strchr(thread, '?') != NULL || strchr(thread, '[') != NULL);
-        rule->priority = calculate_rule_priority(thread[0] ? thread : pkg);
+        // ========== 修改这里：判断规则类型 ==========
+        // 判断是否是默认规则（包名为*，线程名为空或*）
+        bool is_default = (strcmp(pkg, "*") == 0 && (thread[0] == '\0' || strcmp(thread, "*") == 0));
+
+        bool is_wildcard = false;
+        if (!is_default) {
+            is_wildcard = (strchr(pkg, '*') != NULL || 
+                           strchr(pkg, '?') != NULL || 
+                           strchr(pkg, '[') != NULL ||
+                           strchr(thread, '*') != NULL || 
+                           strchr(thread, '?') != NULL || 
+                           strchr(thread, '[') != NULL);
+        }
+
+        if (is_default) {
+            rule->priority = -1;
+            rule->is_wildcard = false;
+        } else {
+            rule->priority = calculate_rule_priority(thread[0] ? thread : pkg);
+            rule->is_wildcard = is_wildcard;
+        }
 
         num_rules++;
 
-        if (!rule->is_wildcard) {
+        // 默认规则不存入 pkg_table，也不存入 wildcard_rules
+        if (is_default) {
+            // 只保存在 rules 数组中，用于最后匹配
+            // 不加入任何索引
+        } else if (!rule->is_wildcard) {
             PackageEntry* pkg_entry;
             HASH_FIND_STR(pkg_table, pkg, pkg_entry);
             if (!pkg_entry) {
@@ -668,20 +715,20 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
     cfg->mtime = st.st_mtime;
 
     if (last_mtime) *last_mtime = st.st_mtime;
-
-    // 添加详细统计
-    int has_default_rule = 0;
+    
+    // 统计默认规则数量
+    size_t default_count = 0;
     for (size_t i = 0; i < num_rules; i++) {
-        if (cfg->rules[i].priority == -1) {
-            has_default_rule = 1;
-            break;
+        if (rules[i].priority == -1) {
+            default_count++;
         }
     }
+    
     LOG_I("配置文件解析完成\n");
     LOG_I("总规则: %zu 条\n", num_rules);
-    LOG_I("精确匹配规则: %zu 条\n", num_rules - num_wildcard_rules);
+    LOG_I("精确匹配规则: %zu 条\n", num_rules - num_wildcard_rules - default_count);
     LOG_I("通配符规则: %zu 条\n", num_wildcard_rules);
-    LOG_I("默认规则: %d 条\n", has_default_rule);
+    LOG_I("默认规则: %zu 条\n", default_count);
     LOG_I("应用包: %zu 个\n", num_pkgs);
     return cfg;
 }
