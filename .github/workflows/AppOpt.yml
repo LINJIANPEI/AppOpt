@@ -5,7 +5,7 @@ on:
       prerelease:
         description: "是否为预发布版本"
         required: false
-        default: true
+        default: false # 默认不是预发布
         type: boolean
 
 permissions:
@@ -131,10 +131,19 @@ jobs:
     needs: [build-arm64, build-armv7, build-x86, build-x86_64]
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
+
+      - name: 生成版本标签
+        id: version
+        run: |
+          # 使用时间戳作为版本号，格式：YYYYMMDD-HHMMSS
+          TIMESTAMP=$(date -u '+%Y%m%d-%H%M%S')
+          TAG_NAME="build-${TIMESTAMP}"
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "版本标签: ${TAG_NAME}"
 
       - name: 复制二进制文件
         run: |
@@ -147,7 +156,8 @@ jobs:
 
       - name: 创建版本信息文件
         run: |
-          echo "构建编号: ${{ github.run_number }}" > release/VERSION.txt
+          echo "版本: ${{ steps.version.outputs.tag_name }}" > release/VERSION.txt
+          echo "构建编号: ${{ github.run_number }}" >> release/VERSION.txt
           echo "构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
           echo "提交哈希: ${{ github.sha }}" >> release/VERSION.txt
           echo "触发者: ${{ github.actor }}" >> release/VERSION.txt
@@ -187,7 +197,7 @@ jobs:
           ## 快速开始
           ```bash
           # 1. 解压
-          tar -xzf AppOpt-build-${{ github.run_number }}.tar.gz
+          tar -xzf AppOpt-${{ steps.version.outputs.tag_name }}.tar.gz
 
           # 2. 赋予执行权限
           chmod +x AppOpt-x86_64
