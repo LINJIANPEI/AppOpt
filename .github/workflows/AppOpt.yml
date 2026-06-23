@@ -5,7 +5,7 @@ on:
       prerelease:
         description: "是否为预发布版本"
         required: false
-        default: false # 默认不是预发布
+        default: false
         type: boolean
 
 permissions:
@@ -139,7 +139,6 @@ jobs:
       - name: 生成版本标签
         id: version
         run: |
-          # 使用时间戳作为版本号，格式：YYYYMMDD-HHMMSS
           TIMESTAMP=$(date -u '+%Y%m%d-%H%M%S')
           TAG_NAME="build-${TIMESTAMP}"
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
@@ -196,14 +195,18 @@ jobs:
 
           ## 快速开始
           ```bash
-          # 1. 解压
+          # 1. 下载并解压
           tar -xzf AppOpt-${{ steps.version.outputs.tag_name }}.tar.gz
 
-          # 2. 赋予执行权限
+          # 2. 进入目录
+          cd release
+
+          # 3. 赋予执行权限
           chmod +x AppOpt-x86_64
 
-          # 3. 编辑配置文件
+          # 4. 编辑配置文件
+          cp applist.conf.example applist.conf
           vim applist.conf
 
-          # 4. 运行
+          # 5. 运行
           sudo ./AppOpt-x86_64 -c applist.conf -s 2
