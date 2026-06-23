@@ -542,7 +542,6 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
         }
         if (is_duplicate) continue;
 
-
         if (num_rules >= rules_capacity) {
             rules_capacity *= 2;
             AffinityRule* temp_rules = realloc(rules, rules_capacity * sizeof(AffinityRule));
@@ -654,6 +653,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
                 HASH_ADD_STR(pkg_table, pkg, pkg_entry);
             }
         }
+    }  // <-- 这里需要添加这个闭合大括号来结束 while 循环
 
     munmap(data, st.st_size);
 
