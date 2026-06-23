@@ -133,7 +133,7 @@ jobs:
     if: always() && !failure()
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
@@ -159,7 +159,7 @@ jobs:
         run: |
           mkdir -p release/
           find artifacts/ -type f -name "AppOpt-*" -exec cp -v {} release/ \;
-          
+
           if [ -z "$(ls -A release/ 2>/dev/null)" ]; then
             echo "方法1失败，尝试方法2..."
             cp -v artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/ 2>/dev/null || true
@@ -167,9 +167,9 @@ jobs:
             cp -v artifacts/AppOpt-x86/AppOpt-x86 release/ 2>/dev/null || true
             cp -v artifacts/AppOpt-x86_64/AppOpt-x86_64 release/ 2>/dev/null || true
           fi
-          
+
           chmod +x release/* 2>/dev/null || true
-          
+
           echo "=== release 目录内容 ==="
           ls -la release/
 
