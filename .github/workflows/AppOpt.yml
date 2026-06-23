@@ -30,10 +30,16 @@ jobs:
       - name: 编译（使用本地 uthash）
         run: aarch64-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-arm64-v8a AppOpt.c
 
+      - name: 验证编译产物
+        run: |
+          ls -la AppOpt-arm64-v8a
+          file AppOpt-arm64-v8a
+
       - uses: actions/upload-artifact@v4
         with:
           name: AppOpt-arm64-v8a
           path: AppOpt-arm64-v8a
+          if-no-files-found: error  # 如果没有文件则报错
 
   build-armv7:
     name: 构建 armeabi-v7a 版本
@@ -53,10 +59,16 @@ jobs:
       - name: 编译（使用本地 uthash）
         run: arm-linux-gnueabihf-gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-armeabi-v7a AppOpt.c
 
+      - name: 验证编译产物
+        run: |
+          ls -la AppOpt-armeabi-v7a
+          file AppOpt-armeabi-v7a
+
       - uses: actions/upload-artifact@v4
         with:
           name: AppOpt-armeabi-v7a
           path: AppOpt-armeabi-v7a
+          if-no-files-found: error
 
   build-x86:
     name: 构建 x86 版本
@@ -76,10 +88,16 @@ jobs:
       - name: 编译（使用本地 uthash）
         run: i686-linux-gnu-gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-x86 AppOpt.c
 
+      - name: 验证编译产物
+        run: |
+          ls -la AppOpt-x86
+          file AppOpt-x86
+
       - uses: actions/upload-artifact@v4
         with:
           name: AppOpt-x86
           path: AppOpt-x86
+          if-no-files-found: error
 
   build-x86_64:
     name: 构建 x86_64 版本
@@ -96,10 +114,16 @@ jobs:
       - name: 编译（使用本地 uthash）
         run: gcc -static -O2 -pthread -D_GNU_SOURCE -I. -o AppOpt-x86_64 AppOpt.c
 
+      - name: 验证编译产物
+        run: |
+          ls -la AppOpt-x86_64
+          file AppOpt-x86_64
+
       - uses: actions/upload-artifact@v4
         with:
           name: AppOpt-x86_64
           path: AppOpt-x86_64
+          if-no-files-found: error
 
   create-release:
     name: 创建发布版本
@@ -110,14 +134,34 @@ jobs:
         with:
           path: artifacts/
 
-      - name: 复制二进制文件
+      - name: 检查下载的产物
+        run: |
+          echo "=== 检查 artifacts 目录 ==="
+          tree artifacts/ || ls -laR artifacts/
+          echo ""
+          echo "=== 查找所有二进制文件 ==="
+          find artifacts/ -type f -name "AppOpt-*" -exec ls -la {} \;
+
+      - name: 复制二进制文件到 release 目录
         run: |
           mkdir -p release/
-          cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/ 2>/dev/null || true
-          cp artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/ 2>/dev/null || true
-          cp artifacts/AppOpt-x86/AppOpt-x86 release/ 2>/dev/null || true
-          cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/ 2>/dev/null || true
-          chmod +x release/*
+          # 方法1: 直接复制（推荐）
+          find artifacts/ -type f -name "AppOpt-*" -exec cp -v {} release/ \;
+          
+          # 方法2: 如果方法1失败，尝试各个子目录
+          if [ -z "$(ls -A release/ 2>/dev/null)" ]; then
+            echo "方法1失败，尝试方法2..."
+            cp -v artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/ 2>/dev/null || true
+            cp -v artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/ 2>/dev/null || true
+            cp -v artifacts/AppOpt-x86/AppOpt-x86 release/ 2>/dev/null || true
+            cp -v artifacts/AppOpt-x86_64/AppOpt-x86_64 release/ 2>/dev/null || true
+          fi
+          
+          # 设置执行权限
+          chmod +x release/* 2>/dev/null || true
+          
+          echo "=== release 目录内容 ==="
+          ls -la release/
 
       - name: 创建版本信息文件
         run: |
@@ -125,126 +169,43 @@ jobs:
           echo "构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
           echo "提交哈希: ${{ github.sha }}" >> release/VERSION.txt
           echo "触发者: ${{ github.actor }}" >> release/VERSION.txt
+          echo "" >> release/VERSION.txt
+          echo "=== 二进制文件列表 ===" >> release/VERSION.txt
+          ls -la release/AppOpt-* >> release/VERSION.txt 2>/dev/null || echo "未找到二进制文件" >> release/VERSION.txt
 
       - name: 创建配置示例文件
         run: |
-          echo "# AppOpt 配置文件" > release/applist.conf.example
-          echo "# 格式: 进程名{线程名}=CPU核心范围" >> release/applist.conf.example
-          echo "# 示例: nginx{worker}=0-3" >> release/applist.conf.example
-          echo "" >> release/applist.conf.example
-          echo "# 示例规则" >> release/applist.conf.example
-          echo "nginx=0-3" >> release/applist.conf.example
-          echo "nginx{worker}=0-3" >> release/applist.conf.example
-          echo "mysql=4-7" >> release/applist.conf.example
-          echo "chrome*=8-11" >> release/applist.conf.example
-          echo "redis-server{*}=0-7" >> release/applist.conf.example
-          echo "java*{main}=0-1" >> release/applist.conf.example
+          cat > release/applist.conf.example << 'EOF'
+          # AppOpt 配置文件
+          # 格式: 进程名{线程名}=CPU核心范围
+          # 示例: nginx{worker}=0-3
+
+          # 示例规则
+          nginx=0-3
+          nginx{worker}=0-3
+          mysql=4-7
+          chrome*=8-11
+          redis-server{*}=0-7
+          java*{main}=0-1
+          EOF
 
       - name: 创建说明文档
         run: |
-          echo "# AppOpt - CPU 亲和性优化工具" > release/README.md
-          echo "" >> release/README.md
-          echo "## 简介" >> release/README.md
-          echo "AppOpt 是一个 Linux 进程 CPU 亲和性优化工具，可以自动将进程绑定到指定的 CPU 核心上。" >> release/README.md
-          echo "" >> release/README.md
-          echo "## 支持架构" >> release/README.md
-          echo "| 架构 | 文件名 | 说明 |" >> release/README.md
-          echo "|------|--------|------|" >> release/README.md
-          echo "| arm64-v8a | AppOpt-arm64-v8a | 64位 ARM 架构（Android/Linux） |" >> release/README.md
-          echo "| armeabi-v7a | AppOpt-armeabi-v7a | 32位 ARM 架构（Android/Linux） |" >> release/README.md
-          echo "| x86 | AppOpt-x86 | 32位 x86 架构 |" >> release/README.md
-          echo "| x86_64 | AppOpt-x86_64 | 64位 x86_64 架构 |" >> release/README.md
-          echo "" >> release/README.md
-          echo "## 快速开始" >> release/README.md
-          echo '```bash' >> release/README.md
-          echo "# 1. 解压" >> release/README.md
-          echo "tar -xzf AppOpt-build-*.tar.gz" >> release/README.md
-          echo "" >> release/README.md
-          echo "# 2. 赋予执行权限" >> release/README.md
-          echo "chmod +x AppOpt-x86_64" >> release/README.md
-          echo "" >> release/README.md
-          echo "# 3. 编辑配置文件" >> release/README.md
-          echo "vim applist.conf" >> release/README.md
-          echo "" >> release/README.md
-          echo "# 4. 运行" >> release/README.md
-          echo "sudo ./AppOpt-x86_64 -c applist.conf -s 2" >> release/README.md
-          echo '```' >> release/README.md
-          echo "" >> release/README.md
-          echo "## 配置说明" >> release/README.md
-          echo "配置文件格式: \`进程名{线程名}=CPU核心范围\`" >> release/README.md
-          echo "" >> release/README.md
-          echo "### 示例" >> release/README.md
-          echo '```' >> release/README.md
-          echo "# 绑定 nginx 的所有线程到 CPU 0-3" >> release/README.md
-          echo "nginx=0-3" >> release/README.md
-          echo "" >> release/README.md
-          echo "# 绑定 nginx 的 worker 线程到 CPU 0-3" >> release/README.md
-          echo "nginx{worker}=0-3" >> release/README.md
-          echo "" >> release/README.md
-          echo "# 绑定 mysql 到 CPU 4-7" >> release/README.md
-          echo "mysql=4-7" >> release/README.md
-          echo "" >> release/README.md
-          echo "# 绑定所有以 chrome 开头的进程到 CPU 8-11" >> release/README.md
-          echo "chrome*=8-11" >> release/README.md
-          echo '```' >> release/README.md
-          echo "" >> release/README.md
-          echo "## 命令行参数" >> release/README.md
-          echo '```' >> release/README.md
-          echo "./AppOpt-x86_64 -c <配置文件> -s <检查间隔(秒)>" >> release/README.md
-          echo "" >> release/README.md
-          echo "选项:" >> release/README.md
-          echo "  -c <配置文件>   指定配置文件路径 (默认: ./applist.conf)" >> release/README.md
-          echo "  -s <间隔>      检查间隔秒数 (默认: 2)" >> release/README.md
-          echo "  -v             显示版本信息" >> release/README.md
-          echo "  -h             显示帮助信息" >> release/README.md
-          echo '```' >> release/README.md
-          echo "" >> release/README.md
-          echo "## 注意事项" >> release/README.md
-          echo "1. 需要 root 权限运行" >> release/README.md
-          echo "2. 系统需要支持 cpuset（通常 Linux 默认支持）" >> release/README.md
-          echo "3. CPU 核心范围必须在系统可用范围内" >> release/README.md
+          cat > release/README.md << 'EOF'
+          # AppOpt - CPU 亲和性优化工具
 
-      - name: 打包成压缩文件
-        run: |
-          cd release
-          tar -czf ../AppOpt-build-${{ github.run_number }}.tar.gz .
-          cd ..
-          ls -lh AppOpt-build-*.tar.gz
+          ## 简介
+          AppOpt 是一个 Linux 进程 CPU 亲和性优化工具。
 
-      - name: 创建 GitHub 发布
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: "AppOpt 构建版本 ${{ github.run_number }}"
-          body: |
-            ## AppOpt 构建版本 #${{ github.run_number }}
+          ## 支持架构
+          | 架构 | 文件名 |
+          |------|--------|
+          | arm64-v8a | AppOpt-arm64-v8a |
+          | armeabi-v7a | AppOpt-armeabi-v7a |
+          | x86 | AppOpt-x86 |
+          | x86_64 | AppOpt-x86_64 |
 
-            ### 📦 构建信息
-            - **构建编号**: #${{ github.run_number }}
-            - **构建时间**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-            - **提交哈希**: `${{ github.sha }}`
-            - **触发者**: @${{ github.actor }}
-
-            ### 🏗️ 支持架构
-            - ✅ **arm64-v8a** - 64位 ARM（Android/Linux）
-            - ✅ **armeabi-v7a** - 32位 ARM（Android/Linux）
-            - ✅ **x86** - 32位 x86
-            - ✅ **x86_64** - 64位 x86_64
-
-            ### 🚀 快速开始
-            ```bash
-            # 1. 下载并解压
-            tar -xzf AppOpt-build-${{ github.run_number }}.tar.gz
-
-            # 2. 进入目录
-            cd release
-
-            # 3. 赋予执行权限
-            chmod +x AppOpt-x86_64
-
-            # 4. 编辑配置（根据需要修改）
-            cp applist.conf.example applist.conf
-            vim applist.conf
-
-            # 5. 运行
-            sudo ./AppOpt-x86_64 -c applist.conf -s 2
+          ## 快速开始
+          ```bash
+          chmod +x AppOpt-x86_64
+          sudo ./AppOpt-x86_64 -c applist.conf -s 2
