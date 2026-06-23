@@ -591,9 +591,10 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
         rule->cpuset_dir[sizeof(rule->cpuset_dir) - 1] = '\0';
         free(dir_name);
 
-        // ========== 修改这里：判断规则类型 ==========
-        // 判断是否是默认规则（包名为*，线程名为空或*）
-        bool is_default = (strcmp(pkg, "*") == 0);
+        // ========== 在 load_config 中 ==========
+        // 判断规则类型
+        bool is_default = (strcmp(pkg, "*") == 0 && (thread[0] == '\0' || strcmp(thread, "*") == 0));
+        bool is_pkg_wildcard = (strcmp(pkg, "*") == 0 && thread[0] != '\0' && strcmp(thread, "*") != 0);
 
         bool is_wildcard = false;
         if (!is_default) {
@@ -608,6 +609,10 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
         if (is_default) {
             rule->priority = -1;
             rule->is_wildcard = false;
+        } else if (is_pkg_wildcard) {
+            // 包名为 "*" 但线程名有具体值 → 通配符规则，计算优先级
+            rule->priority = calculate_rule_priority(thread);
+            rule->is_wildcard = true;
         } else {
             rule->priority = calculate_rule_priority(thread[0] ? thread : pkg);
             rule->is_wildcard = is_wildcard;
@@ -615,11 +620,25 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
 
         num_rules++;
 
-        // 默认规则不存入 pkg_table，也不存入 wildcard_rules
+        // 存储规则
         if (is_default) {
-            // 只保存在 rules 数组中，用于最后匹配
-            // 不加入任何索引
-        } else if (!rule->is_wildcard) {
+            // 默认规则：不加入索引
+        } else if (rule->is_wildcard) {
+            // 通配符规则：加入 wildcard_rules
+            if (num_wildcard_rules >= wildcard_capacity) {
+                wildcard_capacity *= 2;
+                AffinityRule** temp_wildcard_rules = realloc(wildcard_rules, wildcard_capacity * sizeof(AffinityRule*));
+                if (!temp_wildcard_rules) {
+                    munmap(data, st.st_size);
+                    cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                    free(cfg);
+                    return NULL;
+                }
+                wildcard_rules = temp_wildcard_rules;
+            }
+            wildcard_rules[num_wildcard_rules++] = rule;
+        } else {
+            // 精确匹配规则：存入 pkg_table
             PackageEntry* pkg_entry;
             HASH_FIND_STR(pkg_table, pkg, pkg_entry);
             if (!pkg_entry) {
@@ -634,21 +653,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
                 pkg_entry->pkg[MAX_PKG_LEN - 1] = '\0';
                 HASH_ADD_STR(pkg_table, pkg, pkg_entry);
             }
-        } else {
-            if (num_wildcard_rules >= wildcard_capacity) {
-                wildcard_capacity *= 2;
-                AffinityRule** temp_wildcard_rules = realloc(wildcard_rules, wildcard_capacity * sizeof(AffinityRule*));
-                if (!temp_wildcard_rules) {
-                    munmap(data, st.st_size);
-                    cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
-                    free(cfg);
-                    return NULL;
-                }
-                wildcard_rules = temp_wildcard_rules;
-            }
-            wildcard_rules[num_wildcard_rules++] = rule;
         }
-    }
 
     munmap(data, st.st_size);
 
@@ -715,7 +720,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
     cfg->mtime = st.st_mtime;
 
     if (last_mtime) *last_mtime = st.st_mtime;
-    
+
     // 统计默认规则数量
     size_t default_count = 0;
     for (size_t i = 0; i < num_rules; i++) {
@@ -723,7 +728,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
             default_count++;
         }
     }
-    
+
     LOG_I("配置文件解析完成\n");
     LOG_I("总规则: %zu 条\n", num_rules);
     LOG_I("精确匹配规则: %zu 条\n", num_rules - num_wildcard_rules - default_count);
@@ -865,6 +870,27 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                     }
                 }
             }
+
+            // ========== 如果还没有匹配，尝试默认规则 ==========
+            if (!matched) {
+                for (size_t i = 0; i < cfg->num_rules; i++) {
+                    const AffinityRule* rule = &cfg->rules[i];
+                    if (rule->priority == -1) {  // 默认规则
+                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                            size_t new_cap = proc->thread_rules_cap * 2;
+                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
+                            if (!tmp) break;
+                            proc->thread_rules = tmp;
+                            proc->thread_rules_cap = new_cap;
+                        }
+                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
+                        matched = true;
+                        LOG_I("进程 %s 使用默认规则\n", proc->pkg);
+                        break;
+                    }
+                }
+            }
+
             if (!matched) {
                 close(pid_fd);
                 pos += ent->d_reclen;
