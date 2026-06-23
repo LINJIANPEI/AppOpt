@@ -851,10 +851,10 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 proc->thread_rules_cap = new_cap;
             }
 
-            // ========== 进程级匹配（只匹配包名，不匹配线程名） ==========
+            // ========== 进程级匹配（只匹配包名） ==========
             bool matched = false;
 
-            // 1. 精确匹配包名（只匹配 thread 为空或与包名相同的规则）
+            // 1. 精确匹配包名（从 rules 中查找）
             PackageEntry* pkg_entry;
             HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
             if (pkg_entry) {
@@ -878,33 +878,9 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
             }
 
-            // 2. 通配符匹配包名（只匹配 thread 为空或与包名相同的规则）
-            if (!matched) {
-                for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
-                    const AffinityRule* rule = cfg->wildcard_rules[i];
-                    // ⚠️ 关键：跳过有具体线程名的规则（它们是线程级规则）
-                    // 包括 pkg="*" 且 thread 不为空的规则（如 *{RenderThread}）
-                    if (rule->thread[0] != '\0' && strcmp(rule->thread, name) != 0) {
-                        continue;
-                    }
-                    // 跳过 pkg="*" 且 thread 不为空的规则
-                    if (strcmp(rule->pkg, "*") == 0 && rule->thread[0] != '\0') {
-                        continue;
-                    }
-                    
-                    if (fnmatch(rule->pkg, name, 0) == 0) {
-                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
-                            size_t new_cap = proc->thread_rules_cap * 2;
-                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
-                            if (!tmp) break;
-                            proc->thread_rules = tmp;
-                            proc->thread_rules_cap = new_cap;
-                        }
-                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
-                        matched = true;
-                    }
-                }
-            }
+            // 2. ⚠️ 关键修改：进程级匹配不检查 wildcard_rules
+            // 通配符规则（如 *{RenderThread}）只在线程级匹配
+            // 所以这里直接跳过通配符匹配，不遍历 wildcard_rules
 
             // 3. 默认规则（*=0-5）
             if (!matched) {
@@ -1031,25 +1007,24 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
 
                 // 2. 通配符匹配线程名（包括 pkg="*" 的规则，如 *{RenderThread}）
                 if (!matched_dir) {
-                    for (size_t i = 0; i < proc->num_thread_rules; i++) {
-                        const AffinityRule* rule = proc->thread_rules[i];
-                        // 如果是通配符规则
-                        if (rule->is_wildcard) {
-                            // 检查包名是否匹配（包括 "*" 匹配所有）
-                            if (fnmatch(rule->pkg, proc->pkg, 0) == 0) {
-                                // 检查线程名是否匹配
-                                if (fnmatch(rule->thread, tname, 0) == 0) {
-                                    if (rule->priority > highest_priority) {
-                                        highest_priority = rule->priority;
-                                        best_rule_idx = i;
-                                    }
+                    // 遍历所有规则，包括 wildcard_rules 中的规则
+                    // 由于进程级没有添加 wildcard_rules，我们需要从 cfg 中查找
+                    for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
+                        const AffinityRule* rule = cfg->wildcard_rules[i];
+                        // 检查包名是否匹配（包括 "*" 匹配所有）
+                        if (fnmatch(rule->pkg, proc->pkg, 0) == 0) {
+                            // 检查线程名是否匹配
+                            if (fnmatch(rule->thread, tname, 0) == 0) {
+                                if (rule->priority > highest_priority) {
+                                    highest_priority = rule->priority;
+                                    best_rule_idx = i;
                                 }
                             }
                         }
                     }
                     
                     if (highest_priority >= 0) {
-                        const AffinityRule* best_rule = proc->thread_rules[best_rule_idx];
+                        const AffinityRule* best_rule = cfg->wildcard_rules[best_rule_idx];
                         CPU_OR(&ti->cpus, &ti->cpus, &best_rule->cpus);
                         matched_dir = best_rule->cpuset_dir;
                     }
