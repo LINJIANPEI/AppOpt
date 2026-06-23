@@ -17,11 +17,6 @@ on:
         required: false
         default: "0"
         type: string
-      confirm:
-        description: "输入 'yes' 确认删除"
-        required: true
-        default: ""
-        type: string
 
 permissions:
   contents: write
@@ -32,12 +27,15 @@ jobs:
     name: 清理历史和发布
     runs-on: ubuntu-latest
     steps:
-      - name: 检查确认
-        if: github.event.inputs.confirm != 'yes'
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Git 用户信息
         run: |
-          echo "❌ 未确认删除操作"
-          echo "请在输入框中输入 'yes' 确认"
-          exit 1
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: 删除 Actions 运行历史
         if: github.event.inputs.delete_runs == 'true'
@@ -54,10 +52,14 @@ jobs:
           echo "保留最近 ${KEEP_RECENT} 条记录"
 
           # 获取所有运行记录
-          RUNS=$(gh run list --limit 1000 --json databaseId,status,conclusion,createdAt)
+          RUNS=$(gh run list --limit 1000 --json databaseId,status,conclusion,createdAt 2>/dev/null)
 
-          # 计算要删除的数量
-          TOTAL_RUNS=$(echo "${RUNS}" | jq '. | length')
+          if [ -z "${RUNS}" ]; then
+            echo "✅ 没有运行记录需要删除"
+            exit 0
+          fi
+
+          TOTAL_RUNS=$(echo "${RUNS}" | jq '. | length' 2>/dev/null || echo "0")
           if [ "${TOTAL_RUNS}" -eq 0 ]; then
             echo "✅ 没有运行记录需要删除"
             exit 0
@@ -69,9 +71,14 @@ jobs:
           SKIP_COUNT=${KEEP_RECENT}
           if [ "${SKIP_COUNT}" -gt 0 ] && [ "${SKIP_COUNT}" -lt "${TOTAL_RUNS}" ]; then
             echo "跳过最近 ${SKIP_COUNT} 条记录"
-            RUNS_TO_DELETE=$(echo "${RUNS}" | jq -r ".[${SKIP_COUNT}:] | .[].databaseId")
+            RUNS_TO_DELETE=$(echo "${RUNS}" | jq -r ".[${SKIP_COUNT}:] | .[].databaseId" 2>/dev/null)
           else
-            RUNS_TO_DELETE=$(echo "${RUNS}" | jq -r ".[].databaseId")
+            RUNS_TO_DELETE=$(echo "${RUNS}" | jq -r ".[].databaseId" 2>/dev/null)
+          fi
+
+          if [ -z "${RUNS_TO_DELETE}" ]; then
+            echo "✅ 没有运行记录需要删除"
+            exit 0
           fi
 
           DELETED=0
@@ -87,7 +94,6 @@ jobs:
 
           echo "=== 完成 ==="
           echo "✅ 共删除 ${DELETED} 条运行记录"
-          echo "⏳ 注意：GitHub 可能会保留部分记录在缓存中，稍后会自动消失"
 
       - name: 删除 Releases 和 Tags
         if: github.event.inputs.delete_releases == 'true'
@@ -97,9 +103,13 @@ jobs:
           echo "=== 开始删除 Releases 和 Tags ==="
 
           # 获取所有 Releases
-          RELEASES=$(gh release list --limit 1000 --json tagName,name,isLatest)
-          TOTAL_RELEASES=$(echo "${RELEASES}" | jq '. | length')
+          RELEASES=$(gh release list --limit 1000 --json tagName,name,isLatest 2>/dev/null)
+          if [ -z "${RELEASES}" ]; then
+            echo "✅ 没有 Release 需要删除"
+            exit 0
+          fi
 
+          TOTAL_RELEASES=$(echo "${RELEASES}" | jq '. | length' 2>/dev/null || echo "0")
           if [ "${TOTAL_RELEASES}" -eq 0 ]; then
             echo "✅ 没有 Release 需要删除"
             exit 0
@@ -108,13 +118,17 @@ jobs:
           echo "总共找到 ${TOTAL_RELEASES} 个 Release"
 
           DELETED=0
-          for RELEASE in $(echo "${RELEASES}" | jq -r '.[] | @base64'); do
+          for RELEASE in $(echo "${RELEASES}" | jq -r '.[] | @base64' 2>/dev/null); do
             _jq() {
-              echo "${RELEASE}" | base64 --decode | jq -r "${1}"
+              echo "${RELEASE}" | base64 --decode 2>/dev/null | jq -r "${1}" 2>/dev/null
             }
             
             TAG_NAME=$(_jq '.tagName')
             IS_LATEST=$(_jq '.isLatest')
+            
+            if [ -z "${TAG_NAME}" ] || [ "${TAG_NAME}" == "null" ]; then
+              continue
+            fi
             
             # 跳过最新的 Release（GitHub 要求至少保留一个）
             if [ "${IS_LATEST}" == "true" ]; then
@@ -142,48 +156,24 @@ jobs:
 
           echo "=== 完成 ==="
           echo "✅ 共删除 ${DELETED} 个 Release"
-          echo "💡 最新的 Release 已被保留"
 
-      - name: 删除本地所有 Tags（可选）
+      - name: 清理本地 Tags
         if: github.event.inputs.delete_releases == 'true'
         run: |
           echo "=== 清理本地 Tags ==="
-
-          # 获取所有本地 tags
-          LOCAL_TAGS=$(git tag -l)
+          LOCAL_TAGS=$(git tag -l 2>/dev/null)
           if [ -z "${LOCAL_TAGS}" ]; then
             echo "✅ 没有本地 Tag 需要清理"
             exit 0
           fi
-
-          echo "找到以下本地 Tags:"
-          echo "${LOCAL_TAGS}"
-
-          # 删除所有本地 tags
           git tag -d ${LOCAL_TAGS} 2>/dev/null || true
           echo "✅ 本地 Tags 已清理"
-
-      - name: 清理缓存（可选）
-        run: |
-          echo "=== 清理 GitHub Actions 缓存 ==="
-
-          # 删除所有缓存
-          echo "💡 手动删除缓存请访问:"
-          echo "https://github.com/${{ github.repository }}/settings/actions/caches"
-          echo ""
-          echo "或者使用以下命令:"
-          echo "gh cache list --limit 1000 | while read -r cache; do gh cache delete \$(echo \$cache | cut -f1); done"
 
       - name: 完成
         run: |
           echo "=== 🎉 清理完成 ==="
           echo ""
-          echo "删除内容:"
+          echo "已删除:"
           echo "  - Actions 运行历史: ${{ github.event.inputs.delete_runs }}"
           echo "  - Releases 和 Tags: ${{ github.event.inputs.delete_releases }}"
           echo "  - 保留最近: ${{ github.event.inputs.keep_recent }} 条"
-          echo ""
-          echo "⚠️ 注意:"
-          echo "  1. 最新的 Release 已被保留（GitHub 要求）"
-          echo "  2. Actions 运行记录可能需要几分钟才能完全消失"
-          echo "  3. 缓存需要手动清理"
