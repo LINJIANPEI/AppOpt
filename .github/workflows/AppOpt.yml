@@ -148,47 +148,35 @@ jobs:
             TAG_NAME="build-${TIMESTAMP}"
           fi
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-          echo "version_tag=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "版本标签: ${TAG_NAME}"
 
       - name: 检查下载的产物
         run: |
           echo "=== 检查 artifacts 目录 ==="
           ls -laR artifacts/
-          echo ""
-          echo "=== 检查是否有二进制文件 ==="
-          find artifacts/ -name "AppOpt-*" -exec ls -la {} \;
 
       - name: 准备发布文件
         run: |
           mkdir -p release/
-          
-          # 复制二进制文件
-          cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/AppOpt-android-arm64 2>/dev/null || echo "警告: arm64-v8a 文件不存在"
-          cp artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/AppOpt-android-armv7 2>/dev/null || echo "警告: armeabi-v7a 文件不存在"
-          cp artifacts/AppOpt-x86/AppOpt-x86 release/AppOpt-linux-x86 2>/dev/null || echo "警告: x86 文件不存在"
-          cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/AppOpt-linux-x86_64 2>/dev/null || echo "警告: x86_64 文件不存在"
-          
-          # 添加执行权限
-          chmod +x release/* 2>/dev/null || true
+          cp artifacts/AppOpt-arm64-v8a/AppOpt-arm64-v8a release/AppOpt-android-arm64 2>/dev/null || true
+          cp artifacts/AppOpt-armeabi-v7a/AppOpt-armeabi-v7a release/AppOpt-android-armv7 2>/dev/null || true
+          cp artifacts/AppOpt-x86/AppOpt-x86 release/AppOpt-linux-x86 2>/dev/null || true
+          cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/AppOpt-linux-x86_64 2>/dev/null || true
+          chmod +x release/*
 
       - name: 检查 release 目录
         run: |
           echo "=== release 目录内容 ==="
           ls -la release/
-          echo ""
-          echo "=== 文件类型检查 ==="
-          file release/* 2>/dev/null || echo "没有文件"
 
       - name: 创建版本信息文件
         run: |
           cat > release/VERSION.txt << EOF
-          版本: ${{ steps.version.outputs.version_tag }}
+          版本: ${{ steps.version.outputs.tag_name }}
           构建编号: ${{ github.run_number }}
           构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           提交哈希: ${{ github.sha }}
           触发者: ${{ github.actor }}
-          仓库: ${{ github.repository }}
           EOF
 
       - name: 创建配置示例文件
@@ -196,20 +184,13 @@ jobs:
           cat > release/applist.conf.example << 'EOF'
           # AppOpt 配置文件
           # 格式: 进程名{线程名}=CPU核心范围
-          # 示例: nginx{worker}=0-3
-          
-          # 进程匹配规则
-          # 可以使用通配符 * 和 ?
-          # 例如: chrome* 匹配所有以 chrome 开头的进程
-          
+
           # 示例规则
           nginx=0-3
           nginx{worker}=0-3
           mysql=4-7
           chrome*=8-11
           redis-server{*}=0-7
-          java*{main}=0-1
-          systemd{*}=0-1
           EOF
 
       - name: 创建说明文档
@@ -217,23 +198,63 @@ jobs:
           cat > release/README.md << 'EOF'
           # AppOpt - CPU 亲和性优化工具
 
-          ## 简介
-          AppOpt 是一个 Linux 进程 CPU 亲和性优化工具，可以指定特定进程或线程运行在指定的 CPU 核心上。
-
           ## 支持架构
-          | 架构 | 文件名 | 适用场景 |
-          |------|--------|----------|
-          | arm64-v8a | AppOpt-android-arm64 | Android 64位设备 |
-          | armeabi-v7a | AppOpt-android-armv7 | Android 32位设备 |
-          | x86 | AppOpt-linux-x86 | 32位 Linux 系统 |
-          | x86_64 | AppOpt-linux-x86_64 | 64位 Linux 系统 |
+          | 架构 | 文件名 |
+          |------|--------|
+          | arm64-v8a | AppOpt-android-arm64 |
+          | armeabi-v7a | AppOpt-android-armv7 |
+          | x86 | AppOpt-linux-x86 |
+          | x86_64 | AppOpt-linux-x86_64 |
 
           ## 快速开始
-
-          ### 1. 下载对应架构的二进制文件
-          根据你的系统架构选择合适的文件。
-
-          ### 2. 创建配置文件
           ```bash
-          cp applist.conf.example applist.conf
-          vim applist.conf
+          chmod +x AppOpt-linux-x86_64
+          sudo ./AppOpt-linux-x86_64 -c applist.conf -s 2
+          ```
+          EOF
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: "AppOpt ${{ steps.version.outputs.tag_name }}"
+          body: |
+            ## 🚀 AppOpt 自动构建版本
+
+            ### 构建信息
+            - 构建编号: #${{ github.run_number }}
+            - 提交哈希: `${{ github.sha }}`
+            - 触发者: @${{ github.actor }}
+            - 构建时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+            ### 📦 包含的二进制文件
+            | 架构 | 文件 |
+            |------|------|
+            | ARM64 | AppOpt-android-arm64 |
+            | ARMv7 | AppOpt-android-armv7 |
+            | x86 | AppOpt-linux-x86 |
+            | x86_64 | AppOpt-linux-x86_64 |
+
+            ### 📖 使用方法
+            ```bash
+            chmod +x AppOpt-linux-x86_64
+            sudo ./AppOpt-linux-x86_64 -c applist.conf -s 2
+            ```
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease }}
+          files: |
+            release/AppOpt-android-arm64
+            release/AppOpt-android-armv7
+            release/AppOpt-linux-x86
+            release/AppOpt-linux-x86_64
+            release/VERSION.txt
+            release/applist.conf.example
+            release/README.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 输出成功信息
+        run: |
+          echo "✅ Release 创建成功！"
+          echo "标签: ${{ steps.version.outputs.tag_name }}"
+          echo "查看: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag_name }}"
