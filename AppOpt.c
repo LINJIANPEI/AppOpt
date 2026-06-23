@@ -12,23 +12,35 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/inotify.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/sysinfo.h>
+#include <time.h>
 #include <unistd.h>
-#include <stdarg.h>
-#include <limits.h>
-#include <signal.h>
+#include "uthash.h"
 
-#define VERSION            "1.8.1"
+#define VERSION            "1.6.3"
 #define BASE_CPUSET        "/dev/cpuset/Linlin"
 #define MAX_PKG_LEN        128
 #define MAX_THREAD_LEN     32
+#define INITIAL_PKG_CAPACITY 2560
+#define INITIAL_RULE_CAPACITY 2560
+#define INITIAL_WILDCARD_CAPACITY 128
+#define DENT_BUF_SIZE (128 * 1024)
+
+// 简单日志，用于检测错误规则提示
+#define LOG_I(fmt, ...) do { write_log("[I] " fmt, ##__VA_ARGS__); } while (0)
+#define LOG_W(fmt, ...) do { write_log("[W] " fmt, ##__VA_ARGS__); } while (0)
+#define LOG_E(fmt, ...) do { write_log("[E] " fmt, ##__VA_ARGS__); } while (0)
 
 typedef struct {
     char pkg[MAX_PKG_LEN];
     char thread[MAX_THREAD_LEN];
     char cpuset_dir[256];
     cpu_set_t cpus;
+    bool is_wildcard;
+    int priority;
 } AffinityRule;
 
 typedef struct {
@@ -59,17 +71,24 @@ typedef struct {
     int base_cpuset_fd;
 } CpuTopology;
 
+typedef struct PackageEntry {
+    char pkg[MAX_PKG_LEN];
+    UT_hash_handle hh;
+} PackageEntry;
+
 typedef struct {
     atomic_int ref_count;
     AffinityRule* rules;
     size_t num_rules;
-    AffinityRule** wildcard_thread_rules;   // 仅用于 pkg="*" 且 thread 非空的规则
-    size_t wildcard_thread_rule_count;
+    AffinityRule** wildcard_rules;
+    size_t num_wildcard_rules;
     time_t mtime;
     CpuTopology topo;
     char** pkgs;
     size_t num_pkgs;
+    struct PackageEntry* pkg_table;
     char config_file[4096];
+    char cpuset_base[256];
 } AppConfig;
 
 typedef struct {
@@ -77,36 +96,59 @@ typedef struct {
     size_t num_procs;
     size_t procs_cap;
     int last_proc_count;
+    int last_proc_total;
     bool scan_all_proc;
     pid_t* tracked_pids;
     size_t num_tracked_pids;
     size_t tracked_pids_cap;
-    int last_proc_total;
 } ProcCache;
+
+struct linux_dirent64 {
+    ino64_t d_ino;
+    off64_t d_off;
+    unsigned short d_reclen;
+    unsigned char d_type;
+    char d_name[];
+};
 
 static atomic_int config_updated = ATOMIC_VAR_INIT(0);
 static int inotify_fd = -1;
+static int inotify_wd = -1;
 static int inotify_supported = 0;
 static _Atomic(AppConfig*) current_config = NULL;
-static char** config_files = NULL;
-static size_t num_config_files = 0;
 
-typedef struct {
-    int wd;
-    char dir_path[PATH_MAX];
-    char file_name[PATH_MAX];
-} WatchEntry;
-static WatchEntry* watches = NULL;
-static size_t watch_count = 0;
+// 简单日志输出
+static void write_log(const char *fmt, ...) {
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char time_str[20];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+    fprintf(stderr, "[%s] ", time_str);
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    fflush(stderr);
+}
 
-/* ----- 辅助函数 ----- */
 static char* strtrim(char* s) {
+    char* end;
     while (isspace(*s)) s++;
     if (*s == 0) return s;
-    char* end = s + strlen(s) - 1;
+    end = s + strlen(s) - 1;
     while (end > s && isspace(*end)) end--;
     *(end + 1) = 0;
     return s;
+}
+
+static char* strtrim_line(char* s) {
+    char* start = s;
+    while (isspace((unsigned char)*start)) start++;
+    if (!*start) return start;
+    char* end = start + strlen(start) - 1;
+    while (end > start && (isspace((unsigned char)*end) || *end == '#')) end--;
+    end[1] = '\0';
+    return start;
 }
 
 static bool read_file(int dir_fd, const char* filename, char* buf, size_t buf_size) {
@@ -148,32 +190,56 @@ static int build_str(char *dest, size_t dest_size, ...) {
     return 1;
 }
 
-static void parse_cpu_ranges(const char* spec, cpu_set_t* set, const cpu_set_t* present) {
-    if (!spec) return;
+static bool parse_cpu_ranges(const char* spec, cpu_set_t* set, const cpu_set_t* present, char* invalid_range, size_t invalid_range_size) {
+    if (!spec) return true;
     char* copy = strdup(spec);
-    if (!copy) return;
+    if (!copy) return false;
     char* s = copy;
+    bool valid = true;
+
     while (*s) {
         char* end;
-        unsigned long a = strtoul(s, &end, 10);
+        unsigned long a = strtoul(s, &end,0);
         if (end == s) {
             s++;
             continue;
         }
+
         unsigned long b = a;
         if (*end == '-') {
             s = end + 1;
             b = strtoul(s, &end, 10);
             if (end == s) b = a;
         }
-        if (a > b) { unsigned long t = a; a = b; b = t; }
+
+        if (a > b) {
+            if (invalid_range && invalid_range_size > 0) {
+                snprintf(invalid_range, invalid_range_size, "%lu-%lu", a, b);
+            }
+            valid = false;
+            s = (*end == ',') ? end + 1 : end;
+            continue;
+        }
+        
         for (unsigned long i = a; i <= b && i < CPU_SETSIZE; i++) {
-            if (present && !CPU_ISSET(i, present)) continue;
+            if (present && !CPU_ISSET(i, present)) {
+                if (invalid_range && invalid_range_size > 0) {
+                    if (a == b) {
+                        snprintf(invalid_range, invalid_range_size, "%lu", i);
+                    } else {
+                        snprintf(invalid_range, invalid_range_size, "%lu-%lu", a, b);
+                    }
+                }
+                valid = false;
+                break;
+            }
             CPU_SET(i, set);
         }
+
         s = (*end == ',') ? end + 1 : end;
     }
     free(copy);
+    return valid;
 }
 
 static char* cpu_set_to_str(const cpu_set_t *set) {
@@ -184,6 +250,7 @@ static char* cpu_set_to_str(const cpu_set_t *set) {
     char *p = buf;
     size_t remain = buf_size - 1;
     bool first = true;
+
     for (int i = 0; i < CPU_SETSIZE; i++) {
         if (CPU_ISSET(i, set)) {
             if (start == -1) {
@@ -225,27 +292,8 @@ static char* cpu_set_to_str(const cpu_set_t *set) {
     return buf;
 }
 
-static int mkdir_p(const char *path, mode_t mode) {
-    char tmp[PATH_MAX];
-    char *p = NULL;
-    struct stat st;
-    size_t len;
-    snprintf(tmp, sizeof(tmp), "%s", path);
-    len = strlen(tmp);
-    if (tmp[len - 1] == '/') tmp[len - 1] = 0;
-    for (p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = 0;
-            if (mkdir(tmp, mode) != 0 && errno != EEXIST) return -1;
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, mode) != 0 && errno != EEXIST) return -1;
-    return 0;
-}
-
 static bool create_cpuset_dir(const char *path, const char *cpus, const char *mems) {
-    if (mkdir_p(path, 0755) != 0 && errno != EEXIST) return false;
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) return false;
     if (chmod(path, 0755) != 0) return false;
     if (chown(path, 0, 0) != 0) return false;
 
@@ -261,15 +309,19 @@ static bool create_cpuset_dir(const char *path, const char *cpus, const char *me
 static CpuTopology init_cpu_topo(void) {
     CpuTopology topo = { .cpuset_enabled = false, .base_cpuset_fd = -1 };
     CPU_ZERO(&topo.present_cpus);
+
     if (read_file(AT_FDCWD, "/sys/devices/system/cpu/present", topo.present_str, sizeof(topo.present_str))) {
         strtrim(topo.present_str);
     }
-    parse_cpu_ranges(topo.present_str, &topo.present_cpus, NULL);
+    parse_cpu_ranges(topo.present_str, &topo.present_cpus, NULL, NULL, 0);
+
     if (access("/dev/cpuset", F_OK) != 0) return topo;
+
     if (create_cpuset_dir(BASE_CPUSET, topo.present_str, "0")) {
         topo.base_cpuset_fd = open(BASE_CPUSET, O_RDONLY | O_DIRECTORY);
         if (topo.base_cpuset_fd != -1) topo.cpuset_enabled = true;
     }
+
     char mems_path[256];
     build_str(mems_path, sizeof(mems_path), BASE_CPUSET, "/mems", NULL);
     if (!read_file(AT_FDCWD, mems_path, topo.mems_str, sizeof(topo.mems_str))) {
@@ -277,541 +329,733 @@ static CpuTopology init_cpu_topo(void) {
     } else {
         strtrim(topo.mems_str);
     }
+
     return topo;
 }
 
-static void free_proc_resources(ProcessInfo* proc) {
-    if (proc->threads) free(proc->threads);
-    if (proc->thread_rules) free(proc->thread_rules);
-    memset(proc, 0, sizeof(*proc));
+static int calculate_rule_priority(const char* thread_pattern) {
+    if (!thread_pattern || !*thread_pattern) {
+        return 200;
+    }
+    int priority = 0;
+    size_t len = strlen(thread_pattern);
+    const char* p = thread_pattern;
+
+    if (strchr(p, '*') == NULL && strchr(p, '?') == NULL && strchr(p, '[') == NULL) {
+        return 1000 + len;
+    }
+
+    int non_wildcard_chars = 0;
+    bool has_range = false;
+    bool has_single_wildcard = false;
+    bool has_star = false;
+
+    while (*p) {
+        if (*p == '[') has_range = true;
+        else if (*p == '?') has_single_wildcard = true;
+        else if (*p == '*') has_star = true;
+        else non_wildcard_chars++;
+        p++;
+    }
+
+    if (has_range) {
+        priority = 500 + non_wildcard_chars;
+    } else if (has_single_wildcard) {
+        priority = 300 + non_wildcard_chars;
+    } else if (has_star) {
+        priority = 100 + non_wildcard_chars;
+    }
+
+    return priority;
 }
 
-static AppConfig* merge_configs(const CpuTopology* topo, const char** files, size_t num_files) {
-    AppConfig* merged = calloc(1, sizeof(AppConfig));
-    if (!merged) return NULL;
-    merged->ref_count = 1;
-    merged->topo = *topo;
-    merged->rules = NULL;
-    merged->num_rules = 0;
-    merged->pkgs = NULL;
-    merged->num_pkgs = 0;
-    merged->wildcard_thread_rules = NULL;
-    merged->wildcard_thread_rule_count = 0;
+static void cleanup_temp_resources(AffinityRule** rules, size_t num_rules, AffinityRule*** wildcard_rules, size_t num_wildcard_rules, PackageEntry** pkg_table) {
+    if (rules && *rules) {
+        free(*rules);
+        *rules = NULL;
+    }
+    if (wildcard_rules && *wildcard_rules) {
+        free(*wildcard_rules);
+        *wildcard_rules = NULL;
+    }
+    if (pkg_table && *pkg_table) {
+        PackageEntry* entry, *tmp;
+        HASH_ITER(hh, *pkg_table, entry, tmp) {
+            HASH_DEL(*pkg_table, entry);
+            free(entry);
+        }
+        *pkg_table = NULL;
+    }
+}
 
-    AffinityRule* tmp_rules = NULL;
-    size_t tmp_cap = 0, tmp_cnt = 0;
+static AppConfig* load_config(const char* config_file, const CpuTopology* topo, time_t* last_mtime) {
+    struct stat st;
+    if (stat(config_file, &st) != 0) {
+        const char* initial_content = "# 规则编写与使用说明请参考 http://AppOpt.suto.top\n\n";
+        if (write_file(AT_FDCWD, config_file, initial_content, O_WRONLY | O_CREAT | O_TRUNC)) {
+            LOG_W("配置文件不存在，创建空的配置文件: %s\n", config_file);
+        }
+        return NULL;
+    }
 
-    for (size_t fi = 0; fi < num_files; fi++) {
-        FILE* fp = fopen(files[fi], "r");
-        if (!fp) {
-            fprintf(stderr, "警告: 无法打开配置文件 %s\n", files[fi]);
+    if (last_mtime && *last_mtime == st.st_mtime && *last_mtime != -1) {
+        return NULL;
+    }
+
+    int fd = open(config_file, O_RDONLY);
+    if (fd < 0) {
+        LOG_E("无法打开配置文件 %s: %s\n", config_file, strerror(errno));
+        return NULL;
+    }
+
+    char* data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (data == MAP_FAILED) {
+        LOG_E("无法映射配置文件 %s: %s\n", config_file, strerror(errno));
+        return NULL;
+    }
+
+    AppConfig* cfg = calloc(1, sizeof(AppConfig));
+    if (!cfg) {
+        munmap(data, st.st_size);
+        return NULL;
+    }
+    cfg->ref_count = 1;
+    cfg->topo = *topo;
+    build_str(cfg->config_file, sizeof(cfg->config_file), config_file, NULL);
+    build_str(cfg->cpuset_base, sizeof(cfg->cpuset_base), BASE_CPUSET, NULL);
+
+    AffinityRule* rules = malloc(INITIAL_RULE_CAPACITY * sizeof(AffinityRule));
+    size_t rules_capacity = INITIAL_RULE_CAPACITY;
+    size_t num_rules = 0;
+    AffinityRule** wildcard_rules = malloc(INITIAL_WILDCARD_CAPACITY * sizeof(AffinityRule*));
+    size_t wildcard_capacity = INITIAL_WILDCARD_CAPACITY;
+    size_t num_wildcard_rules = 0;
+    PackageEntry* pkg_table = NULL;
+
+    if (!rules || !wildcard_rules) {
+        munmap(data, st.st_size);
+        free(rules);
+        free(wildcard_rules);
+        free(cfg);
+        return NULL;
+    }
+
+    char line[256];
+    char* line_ptr = data;
+    char* end = data + st.st_size;
+    size_t line_number = 0;
+
+    while (line_ptr < end) {
+        char* newline = memchr(line_ptr, '\n', end - line_ptr);
+        if (!newline) newline = end;
+        size_t line_len = newline - line_ptr;
+        line_number++;
+
+        if (line_len >= sizeof(line)) {
+            LOG_W("第 %zu 行过长，跳过\n", line_number);
+            line_ptr = newline + 1;
             continue;
         }
-        char line[256];
-        int line_num = 0;
-        while (fgets(line, sizeof(line), fp)) {
-            line_num++;
-            char* p = strtrim(line);
-            if (*p == '#' || !*p) continue;
-            char* eq = strchr(p, '=');
-            if (!eq) continue;
-            *eq++ = 0;
-            char* br = strchr(p, '{');
-            char* thread = "";
-            if (br) {
-                *br++ = 0;
-                char* eb = strchr(br, '}');
-                if (!eb) continue;
-                *eb = 0;
-                thread = strtrim(br);
-            }
-            char* pkg = strtrim(p);
-            char* cpus = strtrim(eq);
-            if (strlen(pkg) >= MAX_PKG_LEN || strlen(thread) >= MAX_THREAD_LEN) {
-                fprintf(stderr, "%s:%d: 规则校验失败: 包名或线程名过长 (%s{%s})\n", files[fi], line_num, pkg, thread);
+
+        strncpy(line, line_ptr, line_len);
+        line[line_len] = '\0';
+        line_ptr = newline + 1;
+
+        char* p = strtrim_line(line);
+        if (!*p || *p == '#') continue;
+
+        char* eq = strchr(p, '=');
+        if (!eq) {
+            LOG_W("第 %zu 行无效规则：缺少 '=': %s\n", line_number, p);
+            continue;
+        }
+        *eq++ = '\0';
+
+        char* key = strtrim(p);
+        char* value = strtrim(eq);
+
+        char* comment = strchr(value, '#');
+        if (comment) *comment = '\0';
+        value = strtrim(value);
+
+        if (!*key || !*value) {
+            LOG_W("第 %zu 行无效规则：键或值为空: %s\n", line_number, p);
+            continue;
+        }
+
+        char* br = strchr(key, '{');
+        char* thread = "";
+        if (br) {
+            *br++ = '\0';
+            char* eb = strchr(br, '}');
+            if (!eb) {
+                LOG_W("第 %zu 行无效规则：缺少闭合 '}': %s\n", line_number, p);
                 continue;
             }
-            cpu_set_t set;
-            CPU_ZERO(&set);
-            parse_cpu_ranges(cpus, &set, &merged->topo.present_cpus);
-            if (CPU_COUNT(&set) == 0) {
-                fprintf(stderr, "%s:%d: 规则校验失败: CPU 范围无效或不包含任何在线 CPU (%s=%s)\n", files[fi], line_num, pkg, cpus);
-                continue;
-            }
-            char* dir_name = cpu_set_to_str(&set);
-            if (!dir_name) {
-                fprintf(stderr, "%s:%d: 规则校验失败: 无法生成 cpuset 目录名\n", files[fi], line_num);
-                continue;
-            }
-            char path[256];
-            build_str(path, sizeof(path), BASE_CPUSET, "/", dir_name, NULL);
-            if (!create_cpuset_dir(path, dir_name, merged->topo.mems_str)) {
-                fprintf(stderr, "%s:%d: 规则校验失败: 无法创建 cpuset 目录 %s\n", files[fi], line_num, path);
-                free(dir_name);
-                continue;
-            }
-            AffinityRule rule = {0};
-            build_str(rule.pkg, sizeof(rule.pkg), pkg, NULL);
-            build_str(rule.thread, sizeof(rule.thread), thread, NULL);
-            build_str(rule.cpuset_dir, sizeof(rule.cpuset_dir), dir_name, NULL);
-            rule.cpus = set;
-            free(dir_name);
-
-            if (tmp_cnt >= tmp_cap) {
-                size_t new_cap = tmp_cap ? tmp_cap * 2 : 64;
-                AffinityRule* tmp = realloc(tmp_rules, new_cap * sizeof(AffinityRule));
-                if (!tmp) {
-                    fprintf(stderr, "内存不足，跳过规则 %s{%s}\n", pkg, thread);
-                    continue;
-                }
-                tmp_rules = tmp;
-                tmp_cap = new_cap;
-            }
-            tmp_rules[tmp_cnt++] = rule;
-
-            if (strcmp(pkg, "*") != 0) {
-                bool pkg_exists = false;
-                for (size_t i = 0; i < merged->num_pkgs; i++) {
-                    if (strcmp(merged->pkgs[i], pkg) == 0) {
-                        pkg_exists = true;
-                        break;
-                    }
-                }
-                if (!pkg_exists) {
-                    char** tmp = realloc(merged->pkgs, (merged->num_pkgs + 1) * sizeof(char*));
-                    if (tmp) {
-                        merged->pkgs = tmp;
-                        merged->pkgs[merged->num_pkgs] = strdup(pkg);
-                        if (merged->pkgs[merged->num_pkgs]) merged->num_pkgs++;
-                    }
-                }
-            }
+            *eb = '\0';
+            thread = strtrim(br);
         }
-        fclose(fp);
-    }
 
-    if (tmp_cnt) {
-        merged->rules = malloc(tmp_cnt * sizeof(AffinityRule));
-        if (merged->rules) {
-            memcpy(merged->rules, tmp_rules, tmp_cnt * sizeof(AffinityRule));
-            merged->num_rules = tmp_cnt;
+        char* pkg = strtrim(key);
+        if (strlen(pkg) >= MAX_PKG_LEN || strlen(thread) >= MAX_THREAD_LEN) {
+            LOG_W("第 %zu 行无效规则：包名或线程名过长: %s\n", line_number, p);
+            continue;
         }
-    }
-    free(tmp_rules);
 
-    // 预构建通配线程规则（pkg="*" 且 thread 非空）
-    size_t wcnt = 0;
-    for (size_t i = 0; i < merged->num_rules; i++) {
-        AffinityRule* r = &merged->rules[i];
-        if (strcmp(r->pkg, "*") == 0 && r->thread[0]) wcnt++;
-    }
-    if (wcnt > 0) {
-        merged->wildcard_thread_rules = malloc(wcnt * sizeof(AffinityRule*));
-        if (merged->wildcard_thread_rules) {
-            size_t idx = 0;
-            for (size_t i = 0; i < merged->num_rules; i++) {
-                AffinityRule* r = &merged->rules[i];
-                if (strcmp(r->pkg, "*") == 0 && r->thread[0]) {
-                    merged->wildcard_thread_rules[idx++] = r;
-                }
-            }
-            merged->wildcard_thread_rule_count = wcnt;
-        }
-    }
-
-    printf("配置合并完成，共加载 %zu 条规则，%zu 个包名，%zu 条通配线程规则\n",
-           merged->num_rules, merged->num_pkgs, merged->wildcard_thread_rule_count);
-    return merged;
-}
-
-static AppConfig* load_configs(const char** files, size_t num_files, const CpuTopology* topo) {
-    return merge_configs(topo, files, num_files);
-}
-
-static void config_release(AppConfig* cfg) {
-    if (!cfg) return;
-    if (atomic_fetch_sub(&cfg->ref_count, 1) == 1) {
-        if (cfg->rules) free(cfg->rules);
-        if (cfg->wildcard_thread_rules) free(cfg->wildcard_thread_rules);
-        if (cfg->pkgs) {
-            for (size_t i = 0; i < cfg->num_pkgs; i++) free(cfg->pkgs[i]);
-            free(cfg->pkgs);
-        }
-        free(cfg);
-    }
-}
-
-static AppConfig* get_config(void) {
-    AppConfig* cfg = atomic_load_explicit(&current_config, memory_order_acquire);
-    if (!cfg) return NULL;
-    int old_ref = atomic_fetch_add_explicit(&cfg->ref_count, 1, memory_order_acq_rel);
-    if (old_ref <= 0) {
-        atomic_fetch_sub_explicit(&cfg->ref_count, 1, memory_order_release);
-        return NULL;
-    }
-    if (atomic_load_explicit(&current_config, memory_order_acquire) != cfg) {
-        atomic_fetch_sub_explicit(&cfg->ref_count, 1, memory_order_release);
-        return NULL;
-    }
-    return cfg;
-}
-
-static void add_watch_for_config(const char* config_path) {
-    if (!inotify_supported || inotify_fd == -1) return;
-    char dir_path[PATH_MAX];
-    char file_name[PATH_MAX];
-    char* last_slash = strrchr(config_path, '/');
-    if (last_slash) {
-        size_t dirlen = last_slash - config_path;
-        if (dirlen >= PATH_MAX) return;
-        memcpy(dir_path, config_path, dirlen);
-        dir_path[dirlen] = '\0';
-        strcpy(file_name, last_slash + 1);
-    } else {
-        strcpy(dir_path, ".");
-        strcpy(file_name, config_path);
-    }
-    int wd = inotify_add_watch(inotify_fd, dir_path, IN_CLOSE_WRITE | IN_CREATE | IN_DELETE | IN_MOVE);
-    if (wd < 0) {
-        fprintf(stderr, "警告: 无法监控目录 %s\n", dir_path);
-        return;
-    }
-    WatchEntry* tmp = realloc(watches, (watch_count + 1) * sizeof(WatchEntry));
-    if (!tmp) return;
-    watches = tmp;
-    watches[watch_count].wd = wd;
-    strcpy(watches[watch_count].dir_path, dir_path);
-    strcpy(watches[watch_count].file_name, file_name);
-    watch_count++;
-}
-
-static void handle_inotify_events(void) {
-    char buf[4096] __attribute__((aligned(8)));
-    ssize_t len = read(inotify_fd, buf, sizeof(buf));
-    if (len <= 0) return;
-    for (char* p = buf; p < buf + len; ) {
-        struct inotify_event* ev = (struct inotify_event*)p;
-        if (ev->len) {
-            for (size_t i = 0; i < watch_count; i++) {
-                if (watches[i].wd == ev->wd && strcmp(ev->name, watches[i].file_name) == 0) {
-                    if (ev->mask & (IN_CLOSE_WRITE | IN_CREATE | IN_MOVED_TO)) {
-                        atomic_store(&config_updated, 1);
-                    }
-                }
-            }
-        }
-        p += sizeof(struct inotify_event) + ev->len;
-    }
-}
-
-static void* config_loader_thread(void* arg) {
-    int interval = *(int*)arg;
-    free(arg);
-    pthread_setname_np(pthread_self(), "ConfigLoader");
-    time_t last_reload = 0;
-    if (inotify_supported && inotify_fd != -1) {
-        for (size_t i = 0; i < num_config_files; i++) {
-            add_watch_for_config(config_files[i]);
-        }
-    }
-    while (1) {
-        int need_reload = 0;
-        if (inotify_supported && inotify_fd != -1) {
-            fd_set rfds;
-            struct timeval tv;
-            FD_ZERO(&rfds);
-            FD_SET(inotify_fd, &rfds);
-            tv.tv_sec = interval;
-            tv.tv_usec = 0;
-            int ret = select(inotify_fd + 1, &rfds, NULL, NULL, &tv);
-            if (ret < 0) continue;
-            if (ret > 0) {
-                handle_inotify_events();
-                need_reload = atomic_load(&config_updated);
-            }
-        } else {
-            time_t now = time(NULL);
-            if (now - last_reload >= interval) {
-                need_reload = 1;
-                last_reload = now;
-            }
-        }
-        if (need_reload) {
-            AppConfig* cfg = get_config();
-            CpuTopology topo = cfg ? cfg->topo : init_cpu_topo();
-            if (cfg) config_release(cfg);
-            AppConfig* new_config = load_configs((const char**)config_files, num_config_files, &topo);
-            if (new_config) {
-                AppConfig* old = atomic_exchange(&current_config, new_config);
-                atomic_store(&config_updated, 1);
-                if (old) config_release(old);
-            }
-            need_reload = 0;
-        }
-        if (!inotify_supported) sleep(interval);
-        else usleep(100000);
-    }
-    return NULL;
-}
-
-static bool is_pid_tracked(ProcCache* cache, pid_t pid) {
-    for (size_t i = 0; i < cache->num_tracked_pids; i++) {
-        if (cache->tracked_pids[i] == pid) return true;
-    }
-    return false;
-}
-
-static void add_tracked_pid(ProcCache* cache, pid_t pid) {
-    if (cache->num_tracked_pids >= cache->tracked_pids_cap) {
-        size_t new_cap = cache->tracked_pids_cap ? cache->tracked_pids_cap * 2 : 64;
-        pid_t* tmp = realloc(cache->tracked_pids, new_cap * sizeof(pid_t));
-        if (!tmp) return;
-        cache->tracked_pids = tmp;
-        cache->tracked_pids_cap = new_cap;
-    }
-    cache->tracked_pids[cache->num_tracked_pids++] = pid;
-}
-
-// 修正后的 process_thread_rules：无论 wildcard_thread_rules 是否为空，都检查进程级通配规则
-static void process_thread_rules(ProcessInfo* proc, const AppConfig* cfg, size_t* out_idx) {
-    bool base_rule_set = false;
-    // 第一轮：具体包名规则
-    for (size_t i = 0; i < cfg->num_rules; i++) {
-        const AffinityRule* rule = &cfg->rules[i];
-        if (strcmp(rule->pkg, proc->pkg) != 0) continue;
-        if (rule->thread[0]) {
-            if (proc->num_thread_rules >= proc->thread_rules_cap) {
-                size_t new_cap = proc->thread_rules_cap ? proc->thread_rules_cap * 2 : 8;
-                AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
-                if (!tmp) return;
-                proc->thread_rules = tmp;
-                proc->thread_rules_cap = new_cap;
-            }
-            proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
-        } else {
-            if (!base_rule_set) {
-                CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
-                build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
-                base_rule_set = true;
-            } else {
-                fprintf(stderr, "警告: 进程 %s (PID %d) 匹配多个进程级规则，仅第一个生效\n", proc->pkg, proc->pid);
-            }
-        }
-    }
-    // 第二轮：通配包名规则（进程级）- 不再依赖 wildcard_thread_rule_count
-    if (!base_rule_set && CPU_COUNT(&proc->base_cpus) == 0) {
-        for (size_t i = 0; i < cfg->num_rules; i++) {
-            const AffinityRule* rule = &cfg->rules[i];
-            if (!(rule->pkg[0] == '*' && rule->pkg[1] == '\0')) continue;
-            if (!rule->thread[0]) {
-                CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
-                build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
-                base_rule_set = true;
+        bool is_duplicate = false;
+        for (size_t i = 0; i < num_rules; i++) {
+            if (!strcmp(rules[i].pkg, pkg) && !strcmp(rules[i].thread, thread)) {
+                LOG_W("第 %zu 行重复规则：%s{%s}=%s，请检查配置\n", line_number, pkg, thread, value);
+                is_duplicate = true;
                 break;
             }
         }
-    }
-    // 如果仍然没有规则，标记无效
-    if (CPU_COUNT(&proc->base_cpus) == 0 && proc->num_thread_rules == 0) {
-        *out_idx = (size_t)-1;
-        return;
-    }
-    *out_idx = 0;
-}
+        if (is_duplicate) continue;
 
-static void collect_threads(ProcessInfo* proc, int task_fd, const AppConfig* cfg) {
-    DIR* task_dir = fdopendir(task_fd);
-    if (!task_dir) return;
-    struct dirent* tent;
-    while ((tent = readdir(task_dir))) {
-        char* end;
-        long tid = strtol(tent->d_name, &end, 10);
-        if (*end != '\0') continue;
-        char tname[MAX_THREAD_LEN] = {0};
-        int tid_fd = openat(task_fd, tent->d_name, O_RDONLY | O_DIRECTORY);
-        if (tid_fd == -1) continue;
-        if (!read_file(tid_fd, "comm", tname, sizeof(tname))) {
-            close(tid_fd);
+        if (num_rules >= rules_capacity) {
+            rules_capacity *= 2;
+            AffinityRule* temp_rules = realloc(rules, rules_capacity * sizeof(AffinityRule));
+            if (!temp_rules) {
+                munmap(data, st.st_size);
+                cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                free(cfg);
+                return NULL;
+            }
+            rules = temp_rules;
+        }
+
+        AffinityRule* rule = &rules[num_rules];
+        strncpy(rule->pkg, pkg, MAX_PKG_LEN - 1);
+        rule->pkg[MAX_PKG_LEN - 1] = '\0';
+        strncpy(rule->thread, thread, MAX_THREAD_LEN - 1);
+        rule->thread[MAX_THREAD_LEN - 1] = '\0';
+        CPU_ZERO(&rule->cpus);
+
+        char invalid_range[64] = {0};
+        if (!parse_cpu_ranges(value, &rule->cpus, &cfg->topo.present_cpus, invalid_range, sizeof(invalid_range))) {
+            LOG_W("第 %zu 行无效 CPU 范围：%s 在规则 %s{%s}=%s，超出可用 CPU (%s)\n",
+                  line_number, invalid_range, pkg, thread, value, cfg->topo.present_str);
             continue;
         }
-        close(tid_fd);
-        strtrim(tname);
 
-        if (proc->num_threads >= proc->threads_cap) {
-            size_t new_cap = proc->threads_cap ? proc->threads_cap * 2 : 64;
-            ThreadInfo* tmp = realloc(proc->threads, new_cap * sizeof(ThreadInfo));
-            if (!tmp) continue;
-            proc->threads = tmp;
-            proc->threads_cap = new_cap;
+        if (CPU_COUNT(&rule->cpus) == 0) {
+            LOG_W("第 %zu 行无效 CPU 范围：%s 在规则 %s{%s}=%s，无有效 CPU\n",
+                  line_number, value, pkg, thread, value);
+            continue;
         }
-        ThreadInfo* ti = &proc->threads[proc->num_threads];
-        ti->tid = tid;
-        build_str(ti->name, sizeof(ti->name), tname, NULL);
-        CPU_ZERO(&ti->cpus);
-        const char* matched = NULL;
 
-        // 具体包名的线程规则（最长匹配）
-        const AffinityRule* best_rule = NULL;
-        size_t best_len = 0;
-        for (size_t i = 0; i < proc->num_thread_rules; i++) {
-            const AffinityRule* rule = proc->thread_rules[i];
-            if (fnmatch(rule->thread, ti->name, FNM_NOESCAPE) == 0) {
-                size_t len = strlen(rule->thread);
-                if (!best_rule || len > best_len) {
-                    best_rule = rule;
-                    best_len = len;
+        char* dir_name = cpu_set_to_str(&rule->cpus);
+        if (!dir_name) {
+            LOG_W("第 %zu 行无法将 CPU 集合转换为字符串\n", line_number);
+            continue;
+        }
+        char cpuset_path[256];
+        build_str(cpuset_path, sizeof(cpuset_path), cfg->cpuset_base, "/", dir_name, NULL);
+        if (!create_cpuset_dir(cpuset_path, dir_name, cfg->topo.mems_str)) {
+            LOG_W("第 %zu 行无法创建 cpuset 目录 %s\n", line_number, cpuset_path);
+            free(dir_name);
+            continue;
+        }
+        strncpy(rule->cpuset_dir, dir_name, sizeof(rule->cpuset_dir) - 1);
+        rule->cpuset_dir[sizeof(rule->cpuset_dir) - 1] = '\0';
+        free(dir_name);
+
+        // ========== 判断是否为默认规则 ==========
+        bool is_default_rule = (strcmp(pkg, "*") == 0 && thread[0] == '\0');
+        bool is_default_thread_rule = (strcmp(pkg, "*") == 0 && strcmp(thread, "*") == 0);
+
+        if (is_default_rule || is_default_thread_rule) {
+            // 默认规则：优先级设为 -1（最低）
+            rule->priority = -1;
+            rule->is_wildcard = true;  // 作为通配符处理
+            // 不加入 pkg_table，只加入 wildcard_rules
+        } else {
+            // 普通规则：正常计算优先级
+            rule->is_wildcard = (strchr(pkg, '*') != NULL || 
+                                 strchr(pkg, '?') != NULL || 
+                                 strchr(pkg, '[') != NULL);
+            // 如果线程名包含通配符，也应该标记为通配符规则
+            if (!rule->is_wildcard) {
+                rule->is_wildcard = (strchr(thread, '*') != NULL || 
+                                     strchr(thread, '?') != NULL || 
+                                     strchr(thread, '[') != NULL);
+            }
+            rule->priority = calculate_rule_priority(thread[0] ? thread : pkg);
+        }
+        // ========== 默认规则判断结束 ==========
+
+        num_rules++;
+
+        // 存储规则到对应的数据结构
+        if (!rule->is_wildcard) {
+            PackageEntry* pkg_entry;
+            HASH_FIND_STR(pkg_table, pkg, pkg_entry);
+            if (!pkg_entry) {
+                pkg_entry = malloc(sizeof(PackageEntry));
+                if (!pkg_entry) {
+                    munmap(data, st.st_size);
+                    cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                    free(cfg);
+                    return NULL;
                 }
+                strncpy(pkg_entry->pkg, pkg, MAX_PKG_LEN - 1);
+                pkg_entry->pkg[MAX_PKG_LEN - 1] = '\0';
+                HASH_ADD_STR(pkg_table, pkg, pkg_entry);
             }
-        }
-        if (best_rule) {
-            ti->cpus = best_rule->cpus;
-            matched = best_rule->cpuset_dir;
-        }
-        // 通配包名的线程规则
-        if (CPU_COUNT(&ti->cpus) == 0 && cfg->wildcard_thread_rule_count > 0) {
-            const AffinityRule* best_wild = NULL;
-            size_t best_wild_len = 0;
-            for (size_t i = 0; i < cfg->wildcard_thread_rule_count; i++) {
-                const AffinityRule* rule = cfg->wildcard_thread_rules[i];
-                if (fnmatch(rule->thread, ti->name, FNM_NOESCAPE) == 0) {
-                    size_t len = strlen(rule->thread);
-                    if (!best_wild || len > best_wild_len) {
-                        best_wild = rule;
-                        best_wild_len = len;
-                    }
+        } else {
+            if (num_wildcard_rules >= wildcard_capacity) {
+                wildcard_capacity *= 2;
+                AffinityRule** temp_wildcard_rules = realloc(wildcard_rules, wildcard_capacity * sizeof(AffinityRule*));
+                if (!temp_wildcard_rules) {
+                    munmap(data, st.st_size);
+                    cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                    free(cfg);
+                    return NULL;
                 }
+                wildcard_rules = temp_wildcard_rules;
             }
-            if (best_wild) {
-                ti->cpus = best_wild->cpus;
-                matched = best_wild->cpuset_dir;
-            }
+            wildcard_rules[num_wildcard_rules++] = rule;
         }
-        if (matched) {
-            build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), matched, NULL);
-        } else if (CPU_COUNT(&proc->base_cpus) > 0) {
-            ti->cpus = proc->base_cpus;
-            build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), proc->base_cpuset, NULL);
-        }
-        proc->num_threads++;
     }
-    closedir(task_dir);
+
+    munmap(data, st.st_size);
+
+    if (!num_rules) {
+        LOG_W("从 %s 未加载有效规则\n", config_file);
+        cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+        free(cfg);
+        return NULL;
+    }
+
+    size_t num_pkgs = HASH_COUNT(pkg_table);
+    char** pkgs = malloc(INITIAL_PKG_CAPACITY * sizeof(char*));
+    size_t pkgs_capacity = INITIAL_PKG_CAPACITY;
+    if (!pkgs) {
+        cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+        free(cfg);
+        return NULL;
+    }
+    PackageEntry* entry, *tmp;
+    size_t i = 0;
+    HASH_ITER(hh, pkg_table, entry, tmp) {
+        if (i >= pkgs_capacity) {
+            pkgs_capacity *= 2;
+            char** temp_pkgs = realloc(pkgs, pkgs_capacity * sizeof(char*));
+            if (!temp_pkgs) {
+                for (size_t j = 0; j < i; j++) free(pkgs[j]);
+                free(pkgs);
+                cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                free(cfg);
+                return NULL;
+            }
+            pkgs = temp_pkgs;
+        }
+        pkgs[i] = strdup(entry->pkg);
+        if (!pkgs[i]) {
+            for (size_t j = 0; j < i; j++) free(pkgs[j]);
+            free(pkgs);
+            cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+            free(cfg);
+            return NULL;
+        }
+        i++;
+    }
+
+    if (cfg->rules) free(cfg->rules);
+    if (cfg->wildcard_rules) free(cfg->wildcard_rules);
+    if (cfg->pkgs) {
+        for (size_t j = 0; j < cfg->num_pkgs; j++) free(cfg->pkgs[j]);
+        free(cfg->pkgs);
+    }
+    HASH_CLEAR(hh, cfg->pkg_table);
+    HASH_ITER(hh, cfg->pkg_table, entry, tmp) {
+        HASH_DEL(cfg->pkg_table, entry);
+        free(entry);
+    }
+
+    cfg->rules = rules;
+    cfg->num_rules = num_rules;
+    cfg->wildcard_rules = wildcard_rules;
+    cfg->num_wildcard_rules = num_wildcard_rules;
+    cfg->pkgs = pkgs;
+    cfg->num_pkgs = num_pkgs;
+    cfg->pkg_table = pkg_table;
+    cfg->mtime = st.st_mtime;
+
+    if (last_mtime) *last_mtime = st.st_mtime;
+    LOG_I("配置文件解析完成，共加载 %zu 条规则，%zu 个应用，%zu 条通配符规则\n", num_rules, num_pkgs, num_wildcard_rules);
+    return cfg;
+}
+
+static int compare_rules(const void* a, const void* b) {
+    AffinityRule* ra = *(AffinityRule**)a;
+    AffinityRule* rb = *(AffinityRule**)b;
+    return rb->priority - ra->priority;
 }
 
 static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) {
-    DIR* proc_dir = opendir("/proc");
-    if (!proc_dir) return;
-    int proc_fd = dirfd(proc_dir);
+    char* dent_buf = malloc(DENT_BUF_SIZE);
+    int proc_fd = open("/proc", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int current_proc_total = 0;
     *count = 0;
-
-    if (cache->procs) {
-        for (size_t i = 0; i < cache->num_procs; i++) {
-            free_proc_resources(&cache->procs[i]);
-        }
-    }
-    cache->num_procs = 0;
-    if (cache->procs_cap == 0) {
+    if (cache->procs == NULL) {
         cache->procs_cap = 2048;
         cache->procs = calloc(cache->procs_cap, sizeof(ProcessInfo));
         if (!cache->procs) {
-            closedir(proc_dir);
+            close(proc_fd);
+            free(dent_buf);
             return;
         }
     }
 
-    // 判断是否存在通配包名（无论是否有线程名）
-    bool has_wildcard_pkg = false;
-    for (size_t i = 0; i < cfg->num_rules; i++) {
-        if (strcmp(cfg->rules[i].pkg, "*") == 0) {
-            has_wildcard_pkg = true;
+    time_t current_time = time(NULL);
+    while (1) {
+        int nread = syscall(__NR_getdents64, proc_fd, (struct linux_dirent64*)dent_buf, DENT_BUF_SIZE);
+        if (nread == -1) {
             break;
         }
-    }
+        if (nread == 0) break;
 
-    struct dirent* ent;
-    time_t current_time = time(NULL);
-    int current_proc_total = 0;
-    while ((ent = readdir(proc_dir))) {
-        char *end;
-        long pid = strtol(ent->d_name, &end, 10);
-        if (*end != '\0') continue;
-        current_proc_total++;
-
-        if (!cache->scan_all_proc && !is_pid_tracked(cache, pid)) {
-            struct stat statbuf;
-            if (fstatat(proc_fd, ent->d_name, &statbuf, AT_SYMLINK_NOFOLLOW) != 0) continue;
-            if (current_time - statbuf.st_mtime > 60) continue;
-        }
-
-        int pid_fd = openat(proc_fd, ent->d_name, O_RDONLY | O_DIRECTORY);
-        if (pid_fd == -1) continue;
-
-        char cmd[MAX_PKG_LEN] = {0};
-        if (!read_file(pid_fd, "cmdline", cmd, sizeof(cmd))) {
-            close(pid_fd);
-            continue;
-        }
-        char* name = strrchr(cmd, '/');
-        name = name ? name + 1 : cmd;
-
-        bool found = false;
-        for (size_t j = 0; j < cfg->num_pkgs; j++) {
-            if (strcmp(name, cfg->pkgs[j]) == 0) {
-                found = true;
-                break;
-            }
-        }
-        if (!found && !has_wildcard_pkg) {
-            close(pid_fd);
-            continue;
-        }
-
-        if (*count >= cache->procs_cap) {
-            size_t new_cap = cache->procs_cap * 2;
-            ProcessInfo* new_procs = realloc(cache->procs, new_cap * sizeof(ProcessInfo));
-            if (!new_procs) {
-                close(pid_fd);
+        for (int pos = 0; pos < nread;) {
+            struct linux_dirent64* ent = (struct linux_dirent64*)(dent_buf + pos);
+            if (ent->d_type != DT_DIR || !isdigit(ent->d_name[0])) {
+                pos += ent->d_reclen;
                 continue;
             }
-            memset(new_procs + cache->procs_cap, 0, (new_cap - cache->procs_cap) * sizeof(ProcessInfo));
-            cache->procs = new_procs;
-            cache->procs_cap = new_cap;
-        }
 
-        ProcessInfo* proc = &cache->procs[*count];
-        proc->pid = pid;
-        build_str(proc->pkg, sizeof(proc->pkg), name, NULL);
-        CPU_ZERO(&proc->base_cpus);
-        proc->base_cpuset[0] = '\0';
-        proc->num_threads = 0;
-        proc->num_thread_rules = 0;
-        proc->threads_cap = 0;
-        proc->thread_rules_cap = 0;
-        proc->threads = NULL;
-        proc->thread_rules = NULL;
+            char *end;
+            long pid = strtol(ent->d_name, &end, 10);
+            if (*end != '\0') {
+                pos += ent->d_reclen;
+                continue;
+            }
+            current_proc_total++;
 
-        size_t valid_flag = 0;
-        process_thread_rules(proc, cfg, &valid_flag);
-        if (valid_flag == (size_t)-1) {
+            bool is_tracked = false;
+            for (size_t i = 0; i < cache->num_tracked_pids; i++) {
+                if (cache->tracked_pids[i] == pid) {
+                    is_tracked = true;
+                    break;
+                }
+            }
+
+            if (!cache->scan_all_proc && !is_tracked) {
+                struct stat statbuf;
+                if (fstatat(proc_fd, ent->d_name, &statbuf, AT_SYMLINK_NOFOLLOW) != 0) {
+                    pos += ent->d_reclen;
+                    continue;
+                }
+                if (current_time - statbuf.st_mtime > 60) {
+                    pos += ent->d_reclen;
+                    continue;
+                }
+            }
+
+            int pid_fd = openat(proc_fd, ent->d_name, O_RDONLY | O_DIRECTORY);
+            if (pid_fd == -1) {
+                pos += ent->d_reclen;
+                continue;
+            }
+
+            char cmd[MAX_PKG_LEN] = {0};
+            if (!read_file(pid_fd, "cmdline", cmd, sizeof(cmd))) {
+                close(pid_fd);
+                pos += ent->d_reclen;
+                continue;
+            }
+            char* name = strrchr(cmd, '/');
+            name = name ? name + 1 : cmd;
+
+            if (*count >= cache->procs_cap) {
+                size_t new_cap = cache->procs_cap * 2;
+                ProcessInfo* new_procs = realloc(cache->procs, new_cap * sizeof(ProcessInfo));
+                if (!new_procs) {
+                    close(pid_fd);
+                    pos += ent->d_reclen;
+                    continue;
+                }
+                memset(new_procs + cache->procs_cap, 0, (new_cap - cache->procs_cap) * sizeof(ProcessInfo));
+                cache->procs = new_procs;
+                cache->procs_cap = new_cap;
+            }
+
+            ProcessInfo* proc = &cache->procs[*count];
+
+            proc->pid = pid;
+            build_str(proc->pkg, sizeof(proc->pkg), name, NULL);
+            CPU_ZERO(&proc->base_cpus);
+            proc->base_cpuset[0] = '\0';
+            proc->num_threads = 0;
+            proc->num_thread_rules = 0;
+
+            if (!proc->thread_rules || proc->thread_rules_cap < 8) {
+                size_t new_cap = proc->thread_rules_cap ? proc->thread_rules_cap * 2 : 8;
+                AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
+                if (!tmp) {
+                    close(pid_fd);
+                    pos += ent->d_reclen;
+                    continue;
+                }
+                proc->thread_rules = tmp;
+                proc->thread_rules_cap = new_cap;
+            }
+
+            // ========== 包名匹配逻辑（支持默认规则） ==========
+            bool matched = false;
+            bool has_default_rule = false;
+            AffinityRule* default_rule = NULL;
+
+            // 1. 先查找精确匹配
+            PackageEntry* pkg_entry;
+            HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
+            if (pkg_entry) {
+                for (size_t i = 0; i < cfg->num_rules; i++) {
+                    const AffinityRule* rule = &cfg->rules[i];
+                    if (strcmp(rule->pkg, proc->pkg) == 0) {
+                        // 检查是否是默认规则（优先级 -1）
+                        if (rule->priority == -1) {
+                            if (!default_rule) {
+                                default_rule = (AffinityRule*)rule;
+                                has_default_rule = true;
+                            }
+                            continue;
+                        }
+                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                            size_t new_cap = proc->thread_rules_cap * 2;
+                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
+                            if (!tmp) break;
+                            proc->thread_rules = tmp;
+                            proc->thread_rules_cap = new_cap;
+                        }
+                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
+                        matched = true;
+                    }
+                }
+            }
+
+            // 2. 如果没有精确匹配，尝试通配符匹配（排除默认规则）
+            if (!matched) {
+                for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
+                    const AffinityRule* rule = cfg->wildcard_rules[i];
+                    
+                    // 跳过默认规则（稍后处理）
+                    if (rule->priority == -1) {
+                        if (!default_rule) {
+                            default_rule = (AffinityRule*)rule;
+                            has_default_rule = true;
+                        }
+                        continue;
+                    }
+                    
+                    if (fnmatch(rule->pkg, name, 0) == 0) {
+                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                            size_t new_cap = proc->thread_rules_cap * 2;
+                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
+                            if (!tmp) break;
+                            proc->thread_rules = tmp;
+                            proc->thread_rules_cap = new_cap;
+                        }
+                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
+                        matched = true;
+                    }
+                }
+            }
+
+            // 3. 如果没有任何规则匹配，且存在默认规则，应用默认规则
+            if (!matched && has_default_rule && default_rule) {
+                if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                    size_t new_cap = proc->thread_rules_cap * 2;
+                    AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
+                    if (tmp) {
+                        proc->thread_rules = tmp;
+                        proc->thread_rules_cap = new_cap;
+                    }
+                }
+                if (proc->num_thread_rules < proc->thread_rules_cap) {
+                    proc->thread_rules[proc->num_thread_rules++] = default_rule;
+                    matched = true;
+                }
+            }
+
+            if (!matched) {
+                close(pid_fd);
+                pos += ent->d_reclen;
+                continue;
+            }
+            // ========== 包名匹配逻辑结束 ==========
+
+            // 按优先级排序规则
+            if (proc->num_thread_rules > 1) {
+                qsort(proc->thread_rules, proc->num_thread_rules, sizeof(AffinityRule*), compare_rules);
+            }
+
+            // 设置 base_cpus（第一个非默认规则）
+            for (size_t i = 0; i < proc->num_thread_rules; i++) {
+                const AffinityRule* rule = proc->thread_rules[i];
+                // 跳过默认规则（优先级 -1）
+                if (rule->priority == -1) {
+                    continue;
+                }
+                if (!rule->thread[0]) {
+                    CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
+                    build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
+                    break;
+                }
+            }
+
+            // 如果没有 base_cpus，尝试使用默认规则
+            if (CPU_COUNT(&proc->base_cpus) == 0 && proc->num_thread_rules > 0) {
+                for (size_t i = 0; i < proc->num_thread_rules; i++) {
+                    const AffinityRule* rule = proc->thread_rules[i];
+                    if (rule->priority == -1 && !rule->thread[0]) {
+                        CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
+                        build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
+                        break;
+                    }
+                }
+            }
+
+            if (CPU_COUNT(&proc->base_cpus) == 0 && proc->num_thread_rules == 0) {
+                close(pid_fd);
+                pos += ent->d_reclen;
+                continue;
+            }
+
+            int task_fd = openat(pid_fd, "task", O_RDONLY | O_DIRECTORY);
             close(pid_fd);
-            continue;
+            if (task_fd == -1) {
+                pos += ent->d_reclen;
+                continue;
+            }
+
+            DIR* task_dir = fdopendir(task_fd);
+            if (!task_dir) {
+                close(task_fd);
+                pos += ent->d_reclen;
+                continue;
+            }
+
+            if (!proc->threads || proc->threads_cap < 512) {
+                size_t new_cap = proc->threads_cap ? proc->threads_cap * 2 : 64;
+                ThreadInfo* tmp = realloc(proc->threads, new_cap * sizeof(ThreadInfo));
+                if (!tmp) {
+                    closedir(task_dir);
+                    pos += ent->d_reclen;
+                    continue;
+                }
+                proc->threads = tmp;
+                proc->threads_cap = new_cap;
+            }
+
+            struct dirent* tent;
+            while ((tent = readdir(task_dir))) {
+                char *end2;
+                long tid = strtol(tent->d_name, &end2, 10);
+                if (*end2 != '\0') continue;
+                char tname[MAX_THREAD_LEN] = {0};
+
+                int tid_fd = openat(task_fd, tent->d_name, O_RDONLY | O_DIRECTORY);
+                if (tid_fd == -1) continue;
+
+                if (!read_file(tid_fd, "comm", tname, sizeof(tname))) {
+                    close(tid_fd);
+                    continue;
+                }
+                close(tid_fd);
+
+                strtrim(tname);
+
+                if (proc->num_threads >= proc->threads_cap) {
+                    size_t new_cap = proc->threads_cap * 2;
+                    ThreadInfo* tmp = realloc(proc->threads, new_cap * sizeof(ThreadInfo));
+                    if (!tmp) continue;
+                    proc->threads = tmp;
+                    proc->threads_cap = new_cap;
+                }
+
+                ThreadInfo* ti = &proc->threads[proc->num_threads];
+                ti->tid = tid;
+                build_str(ti->name, sizeof(ti->name), tname, NULL);
+                CPU_ZERO(&ti->cpus);
+                
+                // ========== 线程匹配逻辑（支持默认规则） ==========
+                const char* matched_cpuset = NULL;
+                bool thread_matched = false;
+                size_t best_rule_idx = 0;
+                int highest_priority = -1;
+                bool has_default_thread_rule = false;
+                const AffinityRule* default_thread_rule = NULL;
+
+                for (size_t i = 0; i < proc->num_thread_rules; i++) {
+                    const AffinityRule* rule = proc->thread_rules[i];
+                    const char* rule_thread = rule->thread;
+                    
+                    // 跳过默认规则（优先级 -1），稍后处理
+                    if (rule->priority == -1) {
+                        if (!default_thread_rule) {
+                            default_thread_rule = rule;
+                            has_default_thread_rule = true;
+                        }
+                        continue;
+                    }
+                    
+                    // 精确匹配（包括空线程名）
+                    if (strcmp(rule_thread, tname) == 0 ||
+                        (rule_thread[0] == '\0' && (tname[0] == '\0' || strcmp(tname, " ") == 0))) {
+                        CPU_OR(&ti->cpus, &ti->cpus, &rule->cpus);
+                        matched_cpuset = rule->cpuset_dir;
+                        thread_matched = true;
+                        break;
+                    } 
+                    // 通配符匹配（只对通配符规则进行）
+                    else if (rule->priority < 1000 && fnmatch(rule_thread, tname, 0) == 0) {
+                        if (rule->priority > highest_priority) {
+                            highest_priority = rule->priority;
+                            best_rule_idx = i;
+                        }
+                    }
+                }
+
+                // 如果没有精确匹配，但有通配符匹配
+                if (!thread_matched && highest_priority >= 0) {
+                    const AffinityRule* rule = proc->thread_rules[best_rule_idx];
+                    CPU_OR(&ti->cpus, &ti->cpus, &rule->cpus);
+                    matched_cpuset = rule->cpuset_dir;
+                    thread_matched = true;
+                }
+
+                // 如果仍然没有匹配，尝试使用默认规则（优先级 -1）
+                if (!thread_matched && has_default_thread_rule && default_thread_rule) {
+                    // 默认规则：匹配所有线程（线程名为空或 *）
+                    if (default_thread_rule->thread[0] == '\0' || 
+                        strcmp(default_thread_rule->thread, "*") == 0) {
+                        CPU_OR(&ti->cpus, &ti->cpus, &default_thread_rule->cpus);
+                        matched_cpuset = default_thread_rule->cpuset_dir;
+                        thread_matched = true;
+                    }
+                }
+                // ========== 线程匹配逻辑结束 ==========
+
+                // 如果仍然没有匹配，使用 base_cpus
+                if (!thread_matched) {
+                    CPU_OR(&ti->cpus, &ti->cpus, &proc->base_cpus);
+                    build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), proc->base_cpuset, NULL);
+                } else if (matched_cpuset) {
+                    build_str(ti->cpuset_dir, sizeof(ti->cpuset_dir), matched_cpuset, NULL);
+                }
+
+                proc->num_threads++;
+            }
+
+            closedir(task_dir);
+            (*count)++;
+            pos += ent->d_reclen;
         }
-
-        int task_fd = openat(pid_fd, "task", O_RDONLY | O_DIRECTORY);
-        close(pid_fd);
-        if (task_fd == -1) continue;
-
-        collect_threads(proc, task_fd, cfg);
-        close(task_fd);
-
-        if (proc->num_threads == 0) {
-            free_proc_resources(proc);
-            continue;
-        }
-        (*count)++;
-        add_tracked_pid(cache, pid);
     }
-    closedir(proc_dir);
-    if (current_proc_total > cache->last_proc_total) {
+    free(dent_buf);
+    close(proc_fd);
+    if (current_proc_total > cache->last_proc_total || atomic_load(&config_updated)) {
         cache->scan_all_proc = true;
     } else {
         cache->scan_all_proc = false;
@@ -820,13 +1064,13 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
 }
 
 static void update_cache(ProcCache* cache, const AppConfig* cfg, int* affinity_counter) {
-    bool need_reload = false;
+    bool need_reload = atomic_load(&config_updated);
     struct sysinfo info;
     if (sysinfo(&info) != 0) {
         need_reload = true;
     } else {
         int current_proc_count = info.procs;
-        if (current_proc_count > cache->last_proc_count + 11) {
+        if (current_proc_count > cache->last_proc_count + 10) {
             need_reload = true;
         } else if (current_proc_count > cache->last_proc_count) {
             *affinity_counter = 0;
@@ -841,9 +1085,29 @@ static void update_cache(ProcCache* cache, const AppConfig* cfg, int* affinity_c
             }
         }
     }
-    if (need_reload) {
+
+    if (need_reload || cache->scan_all_proc ) {
         size_t new_count = 0;
         proc_collect(cfg, cache, &new_count);
+
+        if (new_count > cache->tracked_pids_cap) {
+            size_t new_cap = cache->tracked_pids_cap ? cache->tracked_pids_cap * 2 : new_count;
+            pid_t* new_pids = realloc(cache->tracked_pids, new_cap * sizeof(pid_t));
+            if (new_pids) {
+                cache->tracked_pids = new_pids;
+                cache->tracked_pids_cap = new_cap;
+            }
+        }
+
+        if (cache->tracked_pids) {
+            cache->num_tracked_pids = 0;
+            for (size_t i = 0; i < new_count; i++) {
+                if (cache->num_tracked_pids < cache->tracked_pids_cap) {
+                    cache->tracked_pids[cache->num_tracked_pids++] = cache->procs[i].pid;
+                }
+            }
+        }
+        
         cache->num_procs = new_count;
         *affinity_counter = 0;
     }
@@ -861,9 +1125,7 @@ static void apply_affinity(ProcCache* cache, const CpuTopology* topo) {
                     cpu_set_t curr;
                     if (sched_getaffinity(ti->tid, sizeof(curr), &curr) == -1) continue;
                     if (CPU_EQUAL(&topo->present_cpus, &curr)) continue;
-                    if (!write_file(topo->base_cpuset_fd, "tasks", tid_str, O_WRONLY | O_APPEND)) {
-                        fprintf(stderr, "警告: 无法将线程 %d 移入 base cpuset\n", ti->tid);
-                    }
+                    write_file(topo->base_cpuset_fd, "tasks", tid_str, O_WRONLY | O_APPEND);
                 } else {
                     cpu_set_t curr;
                     if (sched_getaffinity(ti->tid, sizeof(curr), &curr) == -1) continue;
@@ -871,56 +1133,175 @@ static void apply_affinity(ProcCache* cache, const CpuTopology* topo) {
                     if (ti->cpuset_dir[0]) {
                         int fd = openat(topo->base_cpuset_fd, ti->cpuset_dir, O_RDONLY | O_DIRECTORY);
                         if (fd != -1) {
-                            if (!write_file(fd, "tasks", tid_str, O_WRONLY | O_APPEND)) {
-                                fprintf(stderr, "警告: 无法将线程 %d 移入 cpuset %s\n", ti->tid, ti->cpuset_dir);
-                            }
+                            write_file(fd, "tasks", tid_str, O_WRONLY | O_APPEND);
                             close(fd);
                         }
                     }
                 }
             }
             if (CPU_COUNT(&ti->cpus) == 0) continue;
-            if (sched_setaffinity(ti->tid, sizeof(ti->cpus), &ti->cpus) == -1) {
-                if (errno == ESRCH) {
-                    cache->last_proc_count = 0;
-                } else {
-                    fprintf(stderr, "警告: 设置线程 %d (%.15s) 亲和性失败: %s\n", ti->tid, ti->name, strerror(errno));
-                }
+            if (sched_setaffinity(ti->tid, sizeof(ti->cpus), &ti->cpus) == -1 && errno == ESRCH) {
+                cache->last_proc_count = 0;
             }
         }
     }
 }
 
+static void config_release(AppConfig* cfg) {
+    if (!cfg) return;
+    if (atomic_fetch_sub(&cfg->ref_count, 1) == 1) {
+        if (cfg->rules) free(cfg->rules);
+        if (cfg->wildcard_rules) free(cfg->wildcard_rules);
+        if (cfg->pkgs) {
+            for (size_t i = 0; i < cfg->num_pkgs; i++) free(cfg->pkgs[i]);
+            free(cfg->pkgs);
+        }
+        PackageEntry* entry, *tmp;
+        HASH_ITER(hh, cfg->pkg_table, entry, tmp) {
+            HASH_DEL(cfg->pkg_table, entry);
+            free(entry);
+        }
+        free(cfg);
+    }
+}
+
+static AppConfig* get_config() {
+    AppConfig* cfg = atomic_load_explicit(&current_config, memory_order_acquire);
+    if (!cfg) return NULL;
+    int old_ref = atomic_fetch_add_explicit(&cfg->ref_count, 1, memory_order_acq_rel);
+    if (old_ref <= 0) {
+        atomic_fetch_sub_explicit(&cfg->ref_count, 1, memory_order_release);
+        return NULL;
+    }
+    if (atomic_load_explicit(&current_config, memory_order_acquire) != cfg) {
+        atomic_fetch_sub_explicit(&cfg->ref_count, 1, memory_order_release);
+        return NULL;
+    }
+    return cfg;
+}
+
+static void* config_loader_thread(void* arg) {
+    int interval = *(int*)arg;
+    free(arg);
+    pthread_setname_np(pthread_self(), "ConfigLoader");
+
+    time_t last_mtime = -1;
+    while (1) {
+        if (inotify_supported) {
+            fd_set rfds;
+            struct timeval tv;
+            FD_ZERO(&rfds);
+            FD_SET(inotify_fd, &rfds);
+            tv.tv_sec = interval;
+            tv.tv_usec = 0;
+
+            int ret = select(inotify_fd + 1, &rfds, NULL, NULL, &tv);
+            if (ret < 0) {
+                if (errno == EINTR) continue;
+                inotify_supported = 0;
+                close(inotify_fd);
+                inotify_fd = -1;
+                continue;
+            } else if (ret == 0) {
+                continue;
+            }
+
+            char buf[4096] __attribute__((aligned(8)));
+            ssize_t len = read(inotify_fd, buf, sizeof(buf));
+            if (len <= 0) {
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    inotify_supported = 0;
+                    close(inotify_fd);
+                    inotify_fd = -1;
+                }
+                continue;
+            }
+
+            bool reload_needed = false;
+            for (char* p = buf; p < buf + len;) {
+                struct inotify_event* event = (struct inotify_event*)p;
+                if (event->mask & (IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF)) {
+                    reload_needed = true;
+
+                    if (event->mask & (IN_DELETE_SELF | IN_MOVE_SELF)) {
+                        sleep(interval);
+                        AppConfig* cfg = get_config();
+                        if (cfg) {
+                            inotify_rm_watch(inotify_fd, inotify_wd);
+                            inotify_wd = inotify_add_watch(inotify_fd, cfg->config_file, IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF);
+                            last_mtime = -1;
+                            config_release(cfg);
+                        }
+                        if (inotify_wd < 0) {
+                            inotify_supported = 0;
+                            close(inotify_fd);
+                            inotify_fd = -1;
+                            break;
+                        }
+                    }
+                }
+                p += sizeof(struct inotify_event) + event->len;
+            }
+
+            if (reload_needed) {
+                AppConfig* cfg = get_config();
+                if (cfg) {
+                    AppConfig* new_config = load_config(cfg->config_file, &cfg->topo, &last_mtime);
+                    if (new_config) {
+                        AppConfig* old_config = atomic_exchange(&current_config, new_config);
+                        atomic_store(&config_updated, 1);
+                        if (old_config) {
+                            usleep(10000);
+                            config_release(old_config);
+                        }
+                    }
+                    config_release(cfg);
+                }
+            }
+        } else {
+            AppConfig* cfg = get_config();
+            if (cfg) {
+                AppConfig* new_config = load_config(cfg->config_file, &cfg->topo, &last_mtime);
+                if (new_config) {
+                    AppConfig* old_config = atomic_exchange(&current_config, new_config);
+                    atomic_store(&config_updated, 1);
+                    if (old_config) {
+                        usleep(10000);
+                        config_release(old_config);
+                    }
+                }
+                config_release(cfg);
+            }
+            sleep(interval);
+        }
+    }
+    return NULL;
+}
+
 static void print_help(const char* prog_name) {
-    printf("Usage: %s [OPTIONS]\n", prog_name);
-    printf("Options:\n");
-    printf("  -c <config_file>   指定配置文件 (可多次使用，合并所有配置)\n");
-    printf("  -s <interval>      设置检查间隔(秒) (必须>=1, 默认: 2)\n");
-    printf("  -v                 显示程序版本\n");
-    printf("  -h                 显示帮助信息\n");
+    printf("用法: %s [选项]\n", prog_name);
+    printf("选项:\n");
+    printf("  -c <配置文件>   指定配置文件 (默认: ./applist.conf)\n");
+    printf("  -s <间隔>      设置检查间隔(秒) (必须>=1, 默认: 2)\n");
+    printf("  -v             显示程序版本\n");
+    printf("  -h             显示帮助信息\n");
     printf("\n示例:\n");
-    printf("  %s -c /data/app1.conf -c /data/app2.conf -s 3\n", prog_name);
+    printf("  %s -c /data/applist.conf -s 3\n", prog_name);
 }
 
 int main(int argc, char **argv) {
-    setvbuf(stdout, NULL, _IONBF, 0);
     CpuTopology topo = init_cpu_topo();
+    char config_file[4096] = "./applist.conf";
     int sleep_interval = 2;
     int opt;
     while ((opt = getopt(argc, argv, "c:s:hv")) != -1) {
         switch (opt) {
-            case 'c': {
-                char** tmp = realloc(config_files, (num_config_files + 1) * sizeof(char*));
-                if (!tmp) {
-                    perror("realloc config_files");
-                    exit(EXIT_FAILURE);
-                }
-                config_files = tmp;
-                config_files[num_config_files] = strdup(optarg);
-                num_config_files++;
+            case 'c':
+                build_str(config_file, sizeof(config_file), optarg, NULL);
+                printf("配置文件: %s\n", config_file);
                 break;
-            }
-            case 's': {
+            case 's':
+            {
                 char *endptr;
                 long val = strtol(optarg, &endptr, 10);
                 if (endptr == optarg || *endptr != '\0' || val < 1) {
@@ -944,23 +1325,15 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (num_config_files == 0) {
-        config_files = malloc(sizeof(char*));
-        config_files[0] = strdup("./applist.conf");
-        num_config_files = 1;
-    }
-
-    for (size_t i = 0; i < num_config_files; i++) {
-        struct stat st;
-        if (stat(config_files[i], &st) != 0) {
-            const char* initial_content = "# 规则编写与使用说明请参考 http://AppOpt.suto.top\n\n";
-            if (write_file(AT_FDCWD, config_files[i], initial_content, O_WRONLY | O_CREAT | O_TRUNC)) {
-                printf("配置文件 %s 不存在，已创建空配置文件\n", config_files[i]);
-            }
+    struct stat st;
+    if (stat(config_file, &st) != 0) {
+        const char* initial_content = "# 规则编写与使用说明请参考 http://AppOpt.suto.top\n\n";
+        if (write_file(AT_FDCWD, config_file, initial_content, O_WRONLY | O_CREAT | O_TRUNC)) {
+            LOG_W("配置文件不存在，重建一个空的配置文件: %s\n", config_file);
         }
     }
 
-    AppConfig* initial_config = load_configs((const char**)config_files, num_config_files, &topo);
+    AppConfig* initial_config = load_config(config_file, &topo, NULL);
     if (!initial_config) {
         fprintf(stderr, "初始配置加载失败\n");
         exit(EXIT_FAILURE);
@@ -972,39 +1345,46 @@ int main(int argc, char **argv) {
     if (inotify_fd >= 0) {
         int flags = fcntl(inotify_fd, F_GETFL);
         if (flags >= 0) fcntl(inotify_fd, F_SETFL, flags | O_NONBLOCK);
-        inotify_supported = 1;
-        printf("启用 inotify 监控配置文件变更\n");
-    } else {
-        inotify_supported = 0;
-        printf("inotify 初始化失败，使用轮询模式\n");
+        inotify_wd = inotify_add_watch(inotify_fd, config_file, IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF);
+        if (inotify_wd >= 0) {
+            inotify_supported = 1;
+            LOG_I("启用inotify监控配置文件变更\n");
+        } else {
+            close(inotify_fd);
+            inotify_fd = -1;
+            LOG_W("inotify初始化失败，使用轮询模式\n");
+        }
     }
 
     pthread_t loader_thread;
     int* interval_ptr = malloc(sizeof(int));
     if (!interval_ptr) {
         config_release(initial_config);
-        if (inotify_fd >= 0) close(inotify_fd);
+        if (inotify_supported) close(inotify_fd);
         exit(EXIT_FAILURE);
     }
     *interval_ptr = sleep_interval;
+
     if (pthread_create(&loader_thread, NULL, config_loader_thread, interval_ptr) != 0) {
         perror("配置加载器线程创建失败");
         free(interval_ptr);
         config_release(initial_config);
-        if (inotify_fd >= 0) close(inotify_fd);
+        if (inotify_supported) close(inotify_fd);
         exit(EXIT_FAILURE);
     }
     pthread_detach(loader_thread);
 
     ProcCache cache = {0};
     int affinity_counter = 0;
-    printf("启动 AppOpt 服务 v%s\n", VERSION);
+    LOG_I("启动AppOpt服务 v%s [PID:%d]\n", VERSION, getpid());
 
     for (;;) {
+    
         if (atomic_exchange(&config_updated, 0)) {
-            cache.scan_all_proc = true;
-            cache.last_proc_count = 0;
+          cache.scan_all_proc = true;
+          cache.last_proc_count = 0;
         }
+
         AppConfig* cfg = get_config();
         if (cfg) {
             update_cache(&cache, cfg, &affinity_counter);
@@ -1017,5 +1397,4 @@ int main(int argc, char **argv) {
         }
         sleep(sleep_interval);
     }
-    return 0;
 }
