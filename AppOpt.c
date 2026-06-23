@@ -226,7 +226,7 @@ static bool parse_cpu_ranges(const char* spec, cpu_set_t* set, const cpu_set_t* 
             s = (*end == ',') ? end + 1 : end;
             continue;
         }
-        
+
         for (unsigned long i = a; i <= b && i < CPU_SETSIZE; i++) {
             if (present && !CPU_ISSET(i, present)) {
                 if (invalid_range && invalid_range_size > 0) {
@@ -668,7 +668,21 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
     cfg->mtime = st.st_mtime;
 
     if (last_mtime) *last_mtime = st.st_mtime;
-    LOG_I("配置文件解析完成，共加载 %zu 条规则，%zu 个应用，%zu 条通配符规则\n", num_rules, num_pkgs, num_wildcard_rules);
+
+    // 添加详细统计
+    int has_default_rule = 0;
+    for (size_t i = 0; i < num_rules; i++) {
+        if (cfg->rules[i].priority == -1) {
+            has_default_rule = 1;
+            break;
+        }
+    }
+    LOG_I("配置文件解析完成\n");
+    LOG_I("总规则: %zu 条\n", num_rules);
+    LOG_I("精确匹配规则: %zu 条\n", num_rules - num_wildcard_rules);
+    LOG_I("通配符规则: %zu 条\n", num_wildcard_rules);
+    LOG_I("默认规则: %d 条\n", has_default_rule);
+    LOG_I("应用包: %zu 个\n", num_pkgs);
     return cfg;
 }
 
@@ -1011,7 +1025,7 @@ static void update_cache(ProcCache* cache, const AppConfig* cfg, int* affinity_c
                 }
             }
         }
-        
+
         cache->num_procs = new_count;
         *affinity_counter = 0;
     }
