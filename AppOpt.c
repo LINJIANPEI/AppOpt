@@ -567,7 +567,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
         rule->cpuset_dir[sizeof(rule->cpuset_dir) - 1] = '\0';
         free(dir_name);
 
-        rule->is_wildcard = (strchr(pkg, '*') != NULL || strchr(pkg, '?') != NULL || strchr(pkg, '[') != NULL);
+        rule->is_wildcard = (strchr(pkg, '*') != NULL || strchr(pkg, '?') != NULL || strchr(pkg, '[') != NULL || strchr(thread, '*') != NULL || strchr(thread, '?') != NULL || strchr(thread, '[') != NULL);
         rule->priority = calculate_rule_priority(thread[0] ? thread : pkg);
 
         num_rules++;
