@@ -5,7 +5,7 @@ on:
       prerelease:
         description: "是否为预发布版本"
         required: false
-        default: false  # 改为 false，默认不是预发布
+        default: false
         type: boolean
 
 permissions:
@@ -129,6 +129,8 @@ jobs:
     name: 创建发布版本
     runs-on: ubuntu-latest
     needs: [build-arm64, build-armv7, build-x86, build-x86_64]
+    # 确保即使有失败也运行
+    if: always() && !failure()
     steps:
       - uses: actions/checkout@v4
       
@@ -139,7 +141,7 @@ jobs:
       - name: 检查下载的产物
         run: |
           echo "=== 检查 artifacts 目录 ==="
-          tree artifacts/ || ls -laR artifacts/
+          ls -laR artifacts/
           echo ""
           echo "=== 查找所有二进制文件 ==="
           find artifacts/ -type f -name "AppOpt-*" -exec ls -la {} \;
