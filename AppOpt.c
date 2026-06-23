@@ -378,7 +378,7 @@ static int calculate_rule_priority(const char* pkg, const char* thread) {
     } else if (pkg_wildcard && thread_wildcard) {
         return 20000;   // 5. 包名通配符+线程通配符
     } else { // pkg_default
-        return 0;       // 6. 默认规则（最低）
+        return -1;      // 6. 默认规则（最低）- 统一为 -1
     }
 }
 
@@ -440,16 +440,117 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     LOG_I("  - 包名通配符+线程通配符: 很低 (20000)\n");
     LOG_I("  - 默认规则: 最低 (-1)\n");
     
-    // 检查是否有规则被其他规则覆盖
+    // 检测规则冲突
     for (size_t i = 0; i < num_rules; i++) {
         for (size_t j = i + 1; j < num_rules; j++) {
-            if (rules[i].priority > 0 && rules[j].priority > 0) {
-                // 检查是否有可能的冲突
-                if (strstr(rules[i].pkg, rules[j].pkg) != NULL || 
-                    strstr(rules[j].pkg, rules[i].pkg) != NULL) {
-                    LOG_I("  注意: 规则 %s{%s}(%d) 可能与 %s{%s}(%d) 存在匹配重叠\n",
-                          rules[i].pkg, rules[i].thread, rules[i].priority,
-                          rules[j].pkg, rules[j].thread, rules[j].priority);
+            // 跳过默认规则
+            if (rules[i].priority < 0 || rules[j].priority < 0) continue;
+            
+            // 检查包名是否可能匹配同一个进程
+            bool pkg_overlap = false;
+            
+            // 情况1：包名完全相同
+            if (strcmp(rules[i].pkg, rules[j].pkg) == 0) {
+                pkg_overlap = true;
+            }
+            // 情况2：精确包名包含在另一个包名中（如 com.example 和 com.example.app）
+            else if (!rules[i].is_wildcard && !rules[j].is_wildcard) {
+                // 两个都是精确包名，检查是否是父子关系
+                if (strncmp(rules[i].pkg, rules[j].pkg, strlen(rules[i].pkg)) == 0 ||
+                    strncmp(rules[j].pkg, rules[i].pkg, strlen(rules[j].pkg)) == 0) {
+                    pkg_overlap = true;
+                }
+            }
+            // 情况3：精确包名匹配通配符模式
+            else if (!rules[i].is_wildcard && rules[j].is_wildcard) {
+                if (fnmatch(rules[j].pkg, rules[i].pkg, 0) == 0) {
+                    pkg_overlap = true;
+                }
+            }
+            else if (rules[i].is_wildcard && !rules[j].is_wildcard) {
+                if (fnmatch(rules[i].pkg, rules[j].pkg, 0) == 0) {
+                    pkg_overlap = true;
+                }
+            }
+            // 情况4：两个都是通配符
+            else if (rules[i].is_wildcard && rules[j].is_wildcard) {
+                // 简化检测：如果包名相同或非常相似
+                if (strcmp(rules[i].pkg, rules[j].pkg) == 0) {
+                    pkg_overlap = true;
+                } else {
+                    // 尝试检测可能的重叠（简化版本）
+                    char pkg_i[256], pkg_j[256];
+                    strncpy(pkg_i, rules[i].pkg, sizeof(pkg_i) - 1);
+                    strncpy(pkg_j, rules[j].pkg, sizeof(pkg_j) - 1);
+                    pkg_i[sizeof(pkg_i) - 1] = '\0';
+                    pkg_j[sizeof(pkg_j) - 1] = '\0';
+                    
+                    // 移除通配符进行简单比较
+                    char* star_i = strchr(pkg_i, '*');
+                    char* star_j = strchr(pkg_j, '*');
+                    if (star_i) *star_i = '\0';
+                    if (star_j) *star_j = '\0';
+                    
+                    if (strcmp(pkg_i, pkg_j) == 0) {
+                        pkg_overlap = true;
+                    }
+                }
+            }
+            
+            if (!pkg_overlap) continue;
+            
+            // 检查线程名是否可能匹配同一个线程
+            bool thread_overlap = false;
+            
+            // 情况1：线程名完全相同
+            if (strcmp(rules[i].thread, rules[j].thread) == 0) {
+                thread_overlap = true;
+            }
+            // 情况2：无线程规则 vs 有线程规则
+            else if (rules[i].thread[0] == '\0' || rules[j].thread[0] == '\0') {
+                // 无线程规则匹配所有线程，所以肯定重叠
+                thread_overlap = true;
+            }
+            // 情况3：精确线程包含在另一个中
+            else if (strchr(rules[i].thread, '*') == NULL && strchr(rules[j].thread, '*') == NULL) {
+                if (strncmp(rules[i].thread, rules[j].thread, strlen(rules[i].thread)) == 0 ||
+                    strncmp(rules[j].thread, rules[i].thread, strlen(rules[j].thread)) == 0) {
+                    thread_overlap = true;
+                }
+            }
+            // 情况4：精确线程匹配通配符线程
+            else if (strchr(rules[i].thread, '*') != NULL || strchr(rules[j].thread, '*') != NULL) {
+                if (fnmatch(rules[i].thread, rules[j].thread, 0) == 0 ||
+                    fnmatch(rules[j].thread, rules[i].thread, 0) == 0) {
+                    thread_overlap = true;
+                }
+            }
+            
+            if (!thread_overlap) continue;
+            
+            // 如果包名和线程名都可能重叠，输出警告
+            LOG_W("  潜在冲突: %s{%s}(%d) 与 %s{%s}(%d) 可能匹配相同线程\n",
+                  rules[i].pkg, rules[i].thread, rules[i].priority,
+                  rules[j].pkg, rules[j].thread, rules[j].priority);
+            
+            // 检查优先级是否合理（更高优先级应该更具体）
+            if (rules[i].priority > rules[j].priority) {
+                // i 的优先级更高，检查是否 i 比 j 更具体
+                bool i_more_specific = true;
+                
+                // 如果 i 是通配符而 j 是精确的，则 i 不够具体
+                if (rules[i].is_wildcard && !rules[j].is_wildcard) {
+                    i_more_specific = false;
+                }
+                
+                // 如果 i 的线程是通配符而 j 是精确的，则 i 不够具体
+                if (strchr(rules[i].thread, '*') && !strchr(rules[j].thread, '*')) {
+                    i_more_specific = false;
+                }
+                
+                if (!i_more_specific) {
+                    LOG_W("    警告: 优先级更高的规则 (%d) 可能不够具体，会被优先级较低的规则 (%d) 覆盖\n",
+                          rules[i].priority, rules[j].priority);
                 }
             }
         }
@@ -518,7 +619,188 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
     size_t line_number = 0;
 
     while (line_ptr < end) {
-        // ... 解析规则的代码 ...
+        char* newline = memchr(line_ptr, '\n', end - line_ptr);
+        if (!newline) newline = end;
+        size_t line_len = newline - line_ptr;
+        line_number++;
+
+        if (line_len >= sizeof(line)) {
+            LOG_W("第 %zu 行过长，跳过\n", line_number);
+            line_ptr = newline + 1;
+            continue;
+        }
+
+        strncpy(line, line_ptr, line_len);
+        line[line_len] = '\0';
+        line_ptr = newline + 1;
+
+        char* p = strtrim_line(line);
+        if (!*p || *p == '#') continue;
+
+        char* eq = strchr(p, '=');
+        if (!eq) {
+            LOG_W("第 %zu 行无效规则：缺少 '=': %s\n", line_number, p);
+            continue;
+        }
+        *eq++ = '\0';
+
+        char* key = strtrim(p);
+        char* value = strtrim(eq);
+
+        char* comment = strchr(value, '#');
+        if (comment) *comment = '\0';
+        value = strtrim(value);
+
+        if (!*key || !*value) {
+            LOG_W("第 %zu 行无效规则：键或值为空: %s\n", line_number, p);
+            continue;
+        }
+
+        // ========== 解析包名{线程名} ==========
+        char* br = strchr(key, '{');
+        char* thread = NULL;
+        char* pkg = NULL;
+
+        if (br) {
+            *br++ = '\0';
+            char* eb = strchr(br, '}');
+            if (!eb) {
+                LOG_W("第 %zu 行无效规则：缺少闭合 '}': %s\n", line_number, p);
+                continue;
+            }
+            *eb = '\0';
+            thread = strtrim(br);
+            pkg = strtrim(key);
+
+            if (thread[0] == '\0') {
+                LOG_W("第 %zu 行无效规则：线程名为空，已跳过: %s{%s}=%s\n", 
+                      line_number, pkg, thread, value);
+                continue;
+            }
+        } else {
+            pkg = strtrim(key);
+            thread = pkg;
+        }
+
+        if (!pkg || pkg[0] == '\0') {
+            LOG_W("第 %zu 行无效规则：包名为空，已跳过: %s\n", line_number, p);
+            continue;
+        }
+
+        if (strlen(pkg) >= MAX_PKG_LEN || strlen(thread) >= MAX_THREAD_LEN) {
+            LOG_W("第 %zu 行无效规则：包名或线程名过长，已跳过: %s\n", line_number, p);
+            continue;
+        }
+
+        // 检查重复规则
+        bool is_duplicate = false;
+        for (size_t i = 0; i < num_rules; i++) {
+            if (!strcmp(rules[i].pkg, pkg) && !strcmp(rules[i].thread, thread)) {
+                LOG_W("第 %zu 行重复规则：%s{%s}=%s，已跳过\n", line_number, pkg, thread, value);
+                is_duplicate = true;
+                break;
+            }
+        }
+        if (is_duplicate) continue;
+
+        if (num_rules >= rules_capacity) {
+            rules_capacity *= 2;
+            AffinityRule* temp_rules = realloc(rules, rules_capacity * sizeof(AffinityRule));
+            if (!temp_rules) {
+                munmap(data, st.st_size);
+                cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                free(cfg);
+                return NULL;
+            }
+            rules = temp_rules;
+        }
+
+        AffinityRule* rule = &rules[num_rules];
+        strncpy(rule->pkg, pkg, MAX_PKG_LEN - 1);
+        rule->pkg[MAX_PKG_LEN - 1] = '\0';
+        strncpy(rule->thread, thread, MAX_THREAD_LEN - 1);
+        rule->thread[MAX_THREAD_LEN - 1] = '\0';
+        CPU_ZERO(&rule->cpus);
+
+        char invalid_range[64] = {0};
+        if (!parse_cpu_ranges(value, &rule->cpus, &cfg->topo.present_cpus, invalid_range, sizeof(invalid_range))) {
+            LOG_W("第 %zu 行无效 CPU 范围：%s 在规则 %s{%s}=%s，超出可用 CPU (%s)\n",
+                  line_number, invalid_range, pkg, thread, value, cfg->topo.present_str);
+            continue;
+        }
+
+        if (CPU_COUNT(&rule->cpus) == 0) {
+            LOG_W("第 %zu 行无效 CPU 范围：%s 在规则 %s{%s}=%s，无有效 CPU\n",
+                  line_number, value, pkg, thread, value);
+            continue;
+        }
+
+        char* dir_name = cpu_set_to_str(&rule->cpus);
+        if (!dir_name) {
+            LOG_W("第 %zu 行无法将 CPU 集合转换为字符串\n", line_number);
+            continue;
+        }
+        char cpuset_path[256];
+        build_str(cpuset_path, sizeof(cpuset_path), cfg->cpuset_base, "/", dir_name, NULL);
+        if (!create_cpuset_dir(cpuset_path, dir_name, cfg->topo.mems_str)) {
+            LOG_W("第 %zu 行无法创建 cpuset 目录 %s\n", line_number, cpuset_path);
+            free(dir_name);
+            continue;
+        }
+        strncpy(rule->cpuset_dir, dir_name, sizeof(rule->cpuset_dir) - 1);
+        rule->cpuset_dir[sizeof(rule->cpuset_dir) - 1] = '\0';
+        free(dir_name);
+
+        // 计算优先级
+        bool is_default = (strcmp(pkg, "*") == 0 && (thread[0] == '\0' || strcmp(thread, "*") == 0));
+
+        if (is_default) {
+            rule->priority = -1;
+            rule->is_wildcard = false;
+        } else {
+            bool is_wildcard = (strchr(pkg, '*') != NULL || 
+                               strchr(pkg, '?') != NULL || 
+                               strchr(pkg, '[') != NULL ||
+                               strchr(thread, '*') != NULL || 
+                               strchr(thread, '?') != NULL || 
+                               strchr(thread, '[') != NULL);
+            rule->is_wildcard = is_wildcard;
+            rule->priority = calculate_rule_priority(pkg, thread);
+        }
+
+        num_rules++;
+
+        if (is_default) {
+            // 默认规则：不加入索引
+        } else if (rule->is_wildcard) {
+            if (num_wildcard_rules >= wildcard_capacity) {
+                wildcard_capacity *= 2;
+                AffinityRule** temp_wildcard_rules = realloc(wildcard_rules, wildcard_capacity * sizeof(AffinityRule*));
+                if (!temp_wildcard_rules) {
+                    munmap(data, st.st_size);
+                    cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                    free(cfg);
+                    return NULL;
+                }
+                wildcard_rules = temp_wildcard_rules;
+            }
+            wildcard_rules[num_wildcard_rules++] = rule;
+        } else {
+            PackageEntry* pkg_entry;
+            HASH_FIND_STR(pkg_table, pkg, pkg_entry);
+            if (!pkg_entry) {
+                pkg_entry = malloc(sizeof(PackageEntry));
+                if (!pkg_entry) {
+                    munmap(data, st.st_size);
+                    cleanup_temp_resources(&rules, num_rules, &wildcard_rules, num_wildcard_rules, &pkg_table);
+                    free(cfg);
+                    return NULL;
+                }
+                strncpy(pkg_entry->pkg, pkg, MAX_PKG_LEN - 1);
+                pkg_entry->pkg[MAX_PKG_LEN - 1] = '\0';
+                HASH_ADD_STR(pkg_table, pkg, pkg_entry);
+            }
+        }
     }
 
     munmap(data, st.st_size);
@@ -570,7 +852,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
     validate_rule_priorities(rules, num_rules);
     // =======================================
 
-    // 10. 清理旧配置并赋值新配置
+     // 10. 清理旧配置并赋值新配置
     if (cfg->rules) free(cfg->rules);
     if (cfg->wildcard_rules) free(cfg->wildcard_rules);
     if (cfg->pkgs) {
@@ -594,7 +876,8 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
 
     if (last_mtime) *last_mtime = st.st_mtime;
 
-    // 11. 统计并输出日志
+    // ========== 【在这里】替换下面的统计代码 ==========
+    // 原有的统计代码（需要替换）：
     size_t default_count = 0;
     for (size_t j = 0; j < num_rules; j++) {
         if (rules[j].priority == -1) {
@@ -608,6 +891,44 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
     LOG_I("通配符规则: %zu 条\n", num_wildcard_rules);
     LOG_I("默认规则: %zu 条\n", default_count);
     LOG_I("应用包: %zu 个\n", num_pkgs);
+    // ==============================================
+    
+    // 替换为新的统计代码：
+    // ========== 【新的统计代码】 ==========
+    size_t exact_pkg_exact_thread = 0;      // 精确包名+精确线程
+    size_t exact_pkg_wildcard_thread = 0;   // 精确包名+线程通配符
+    size_t exact_pkg_no_thread = 0;         // 精确包名（无线程）
+    size_t wildcard_pkg_exact_thread = 0;   // 包名通配符+精确线程
+    size_t wildcard_pkg_wildcard_thread = 0;// 包名通配符+线程通配符
+    size_t default_rules = 0;               // 默认规则
+
+    for (size_t i = 0; i < num_rules; i++) {
+        int prio = rules[i].priority;
+        if (prio == 100000) {
+            exact_pkg_exact_thread++;
+        } else if (prio == 80000) {
+            exact_pkg_wildcard_thread++;
+        } else if (prio == 60000) {
+            exact_pkg_no_thread++;
+        } else if (prio == 40000) {
+            wildcard_pkg_exact_thread++;
+        } else if (prio == 20000) {
+            wildcard_pkg_wildcard_thread++;
+        } else if (prio == -1 || prio == 0) {
+            default_rules++;
+        }
+    }
+
+    LOG_I("配置文件解析完成\n");
+    LOG_I("总规则: %zu 条\n", num_rules);
+    LOG_I("  - 精确包名+精确线程: %zu 条 (优先级: 100000)\n", exact_pkg_exact_thread);
+    LOG_I("  - 精确包名+线程通配符: %zu 条 (优先级: 80000)\n", exact_pkg_wildcard_thread);
+    LOG_I("  - 精确包名（无线程）: %zu 条 (优先级: 60000)\n", exact_pkg_no_thread);
+    LOG_I("  - 包名通配符+精确线程: %zu 条 (优先级: 40000)\n", wildcard_pkg_exact_thread);
+    LOG_I("  - 包名通配符+线程通配符: %zu 条 (优先级: 20000)\n", wildcard_pkg_wildcard_thread);
+    LOG_I("  - 默认规则: %zu 条 (优先级: -1)\n", default_rules);
+    LOG_I("应用包: %zu 个\n", num_pkgs);
+    // ===================================
     
     return cfg;
 }
@@ -759,6 +1080,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             }
 
             if (!matched) {
+                free(proc->thread_rules);
                 close(proc_dir_fd);
                 continue;
             }
