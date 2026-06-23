@@ -25,7 +25,7 @@
 #define VERSION            "1.6.3"
 #define BASE_CPUSET        "/dev/cpuset/AppOpt"
 #define MAX_PKG_LEN        128
-#define MAX_THREAD_LEN     32
+#define MAX_THREAD_LEN     128
 #define INITIAL_PKG_CAPACITY 2560
 #define INITIAL_RULE_CAPACITY 2560
 #define INITIAL_WILDCARD_CAPACITY 128
