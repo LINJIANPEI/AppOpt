@@ -144,6 +144,14 @@ jobs:
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "版本标签: ${TAG_NAME}"
 
+      - name: 检查下载的产物
+        run: |
+          echo "=== 检查 artifacts 目录 ==="
+          ls -laR artifacts/
+          echo ""
+          echo "=== 检查是否有二进制文件 ==="
+          find artifacts/ -name "AppOpt-*" -exec ls -la {} \;
+
       - name: 复制二进制文件
         run: |
           mkdir -p release/
@@ -152,6 +160,11 @@ jobs:
           cp artifacts/AppOpt-x86/AppOpt-x86 release/ 2>/dev/null || true
           cp artifacts/AppOpt-x86_64/AppOpt-x86_64 release/ 2>/dev/null || true
           chmod +x release/*
+
+      - name: 检查 release 目录
+        run: |
+          echo "=== release 目录内容 ==="
+          ls -la release/
 
       - name: 创建版本信息文件
         run: |
@@ -183,30 +196,17 @@ jobs:
           # AppOpt - CPU 亲和性优化工具
 
           ## 简介
-          AppOpt 是一个 Linux 进程 CPU 亲和性优化工具，可以自动将进程绑定到指定的 CPU 核心上。
+          AppOpt 是一个 Linux 进程 CPU 亲和性优化工具。
 
           ## 支持架构
-          | 架构 | 文件名 | 说明 |
-          |------|--------|------|
-          | arm64-v8a | AppOpt-arm64-v8a | 64位 ARM 架构（Android/Linux） |
-          | armeabi-v7a | AppOpt-armeabi-v7a | 32位 ARM 架构（Android/Linux） |
-          | x86 | AppOpt-x86 | 32位 x86 架构 |
-          | x86_64 | AppOpt-x86_64 | 64位 x86_64 架构 |
+          | 架构 | 文件名 |
+          |------|--------|
+          | arm64-v8a | AppOpt-arm64-v8a |
+          | armeabi-v7a | AppOpt-armeabi-v7a |
+          | x86 | AppOpt-x86 |
+          | x86_64 | AppOpt-x86_64 |
 
           ## 快速开始
           ```bash
-          # 1. 下载并解压
-          tar -xzf AppOpt-${{ steps.version.outputs.tag_name }}.tar.gz
-
-          # 2. 进入目录
-          cd release
-
-          # 3. 赋予执行权限
           chmod +x AppOpt-x86_64
-
-          # 4. 编辑配置文件
-          cp applist.conf.example applist.conf
-          vim applist.conf
-
-          # 5. 运行
           sudo ./AppOpt-x86_64 -c applist.conf -s 2
