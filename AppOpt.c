@@ -851,10 +851,10 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 proc->thread_rules_cap = new_cap;
             }
 
-            // ========== 进程级匹配（只匹配包名） ==========
+            // ========== 进程级匹配（只匹配包名，不匹配线程名） ==========
             bool matched = false;
 
-            // 1. 精确匹配包名
+            // 1. 精确匹配包名（只匹配 thread 为空或与包名相同的规则）
             PackageEntry* pkg_entry;
             HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
             if (pkg_entry) {
@@ -862,25 +862,35 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                     const AffinityRule* rule = &cfg->rules[i];
                     if (rule->priority == -1) continue;
                     if (!rule->is_wildcard && strcmp(rule->pkg, name) == 0) {
-                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
-                            size_t new_cap = proc->thread_rules_cap * 2;
-                            AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
-                            if (!tmp) break;
-                            proc->thread_rules = tmp;
-                            proc->thread_rules_cap = new_cap;
+                        // 只有线程名为空或与包名相同的才作为进程规则
+                        if (rule->thread[0] == '\0' || strcmp(rule->thread, name) == 0) {
+                            if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                                size_t new_cap = proc->thread_rules_cap * 2;
+                                AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
+                                if (!tmp) break;
+                                proc->thread_rules = tmp;
+                                proc->thread_rules_cap = new_cap;
+                            }
+                            proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
+                            matched = true;
                         }
-                        proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
-                        matched = true;
                     }
                 }
             }
 
-            // 2. 通配符匹配包名（排除 pkg="*" 的规则）
+            // 2. 通配符匹配包名（只匹配 thread 为空或与包名相同的规则）
             if (!matched) {
                 for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
                     const AffinityRule* rule = cfg->wildcard_rules[i];
-                    // 跳过 pkg="*" 的规则（它们作为默认规则处理）
-                    if (strcmp(rule->pkg, "*") == 0) continue;
+                    // ⚠️ 关键：跳过有具体线程名的规则（它们是线程级规则）
+                    // 包括 pkg="*" 且 thread 不为空的规则（如 *{RenderThread}）
+                    if (rule->thread[0] != '\0' && strcmp(rule->thread, name) != 0) {
+                        continue;
+                    }
+                    // 跳过 pkg="*" 且 thread 不为空的规则
+                    if (strcmp(rule->pkg, "*") == 0 && rule->thread[0] != '\0') {
+                        continue;
+                    }
                     
                     if (fnmatch(rule->pkg, name, 0) == 0) {
                         if (proc->num_thread_rules >= proc->thread_rules_cap) {
@@ -986,6 +996,9 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 }
                 close(tid_fd);
 
+                // 去除末尾换行符
+                char* nl = strchr(tname, '\n');
+                if (nl) *nl = '\0';
                 strtrim(tname);
 
                 if (proc->num_threads >= proc->threads_cap) {
@@ -1016,7 +1029,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                     }
                 }
 
-                // 2. 通配符匹配线程名（包括 pkg="*" 的规则）
+                // 2. 通配符匹配线程名（包括 pkg="*" 的规则，如 *{RenderThread}）
                 if (!matched_dir) {
                     for (size_t i = 0; i < proc->num_thread_rules; i++) {
                         const AffinityRule* rule = proc->thread_rules[i];
