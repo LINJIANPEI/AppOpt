@@ -593,7 +593,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
 
         // ========== 修改这里：判断规则类型 ==========
         // 判断是否是默认规则（包名为*，线程名为空或*）
-        bool is_default = (strcmp(pkg, "*") == 0 && (thread[0] == '\0' || strcmp(thread, "*") == 0));
+        bool is_default = (strcmp(pkg, "*") == 0);
 
         bool is_wildcard = false;
         if (!is_default) {
