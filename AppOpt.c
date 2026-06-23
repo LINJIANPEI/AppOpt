@@ -339,40 +339,30 @@ static CpuTopology init_cpu_topo(void) {
     return topo;
 }
 
-static int calculate_rule_priority(const char* thread_pattern) {
-    if (!thread_pattern || !*thread_pattern) {
-        return 200;
+static int calculate_rule_priority(const char* pkg, const char* thread) {
+    int pkg_score = 0;
+    int thread_score = 0;
+    
+    // 计算包名分数
+    if (strcmp(pkg, "*") == 0) {
+        pkg_score = 0;  // 通配包名分数最低
+    } else if (strchr(pkg, '*') != NULL || strchr(pkg, '?') != NULL || strchr(pkg, '[') != NULL) {
+        pkg_score = 100;  // 包名有通配符
+    } else {
+        pkg_score = 1000 + strlen(pkg);  // 精确包名分数最高
     }
-    int priority = 0;
-    size_t len = strlen(thread_pattern);
-    const char* p = thread_pattern;
-
-    if (strchr(p, '*') == NULL && strchr(p, '?') == NULL && strchr(p, '[') == NULL) {
-        return 1000 + len;
+    
+    // 计算线程名分数
+    if (thread[0] == '\0' || strcmp(thread, "*") == 0) {
+        thread_score = 0;  // 空线程名或通配线程名（进程级规则）
+    } else if (strchr(thread, '*') != NULL || strchr(thread, '?') != NULL || strchr(thread, '[') != NULL) {
+        thread_score = 200;  // 线程名有通配符
+    } else {
+        thread_score = 1000 + strlen(thread);  // 精确线程名分数最高
     }
-
-    int non_wildcard_chars = 0;
-    bool has_range = false;
-    bool has_single_wildcard = false;
-    bool has_star = false;
-
-    while (*p) {
-        if (*p == '[') has_range = true;
-        else if (*p == '?') has_single_wildcard = true;
-        else if (*p == '*') has_star = true;
-        else non_wildcard_chars++;
-        p++;
-    }
-
-    if (has_range) {
-        priority = 500 + non_wildcard_chars;
-    } else if (has_single_wildcard) {
-        priority = 300 + non_wildcard_chars;
-    } else if (has_star) {
-        priority = 100 + non_wildcard_chars;
-    }
-
-    return priority;
+    
+    // 总分 = 包名分数 + 线程名分数
+    return pkg_score + thread_score;
 }
 
 static void cleanup_temp_resources(AffinityRule** rules, size_t num_rules, AffinityRule*** wildcard_rules, size_t num_wildcard_rules, PackageEntry** pkg_table) {
@@ -590,31 +580,23 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
         rule->cpuset_dir[sizeof(rule->cpuset_dir) - 1] = '\0';
         free(dir_name);
 
-        // ========== 在 load_config 中 ==========
-        // 判断规则类型
+        // ========== 计算优先级 ==========
         bool is_default = (strcmp(pkg, "*") == 0 && (thread[0] == '\0' || strcmp(thread, "*") == 0));
-        bool is_pkg_wildcard = (strcmp(pkg, "*") == 0 && thread[0] != '\0' && strcmp(thread, "*") != 0);
-
-        bool is_wildcard = false;
-        if (!is_default) {
-            is_wildcard = (strchr(pkg, '*') != NULL || 
-                           strchr(pkg, '?') != NULL || 
-                           strchr(pkg, '[') != NULL ||
-                           strchr(thread, '*') != NULL || 
-                           strchr(thread, '?') != NULL || 
-                           strchr(thread, '[') != NULL);
-        }
-
+        
         if (is_default) {
             rule->priority = -1;
             rule->is_wildcard = false;
-        } else if (is_pkg_wildcard) {
-            // 包名为 "*" 但线程名有具体值 → 通配符规则，计算优先级
-            rule->priority = calculate_rule_priority(thread);
-            rule->is_wildcard = true;
         } else {
-            rule->priority = calculate_rule_priority(thread[0] ? thread : pkg);
+            // 判断是否为通配符规则
+            bool is_wildcard = (strchr(pkg, '*') != NULL || 
+                               strchr(pkg, '?') != NULL || 
+                               strchr(pkg, '[') != NULL ||
+                               strchr(thread, '*') != NULL || 
+                               strchr(thread, '?') != NULL || 
+                               strchr(thread, '[') != NULL);
             rule->is_wildcard = is_wildcard;
+            // 使用新的优先级计算函数，同时考虑包名和线程名
+            rule->priority = calculate_rule_priority(pkg, thread);
         }
 
         num_rules++;
@@ -653,7 +635,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
                 HASH_ADD_STR(pkg_table, pkg, pkg_entry);
             }
         }
-    }  // <-- 这里需要添加这个闭合大括号来结束 while 循环
+    }
 
     munmap(data, st.st_size);
 
@@ -873,20 +855,29 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                             }
                             proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
                             matched = true;
+                            LOG_I("进程 %s: 精确匹配规则 %s\n", proc->pkg, rule->pkg);
+                            break;
                         }
                     }
                 }
             }
 
-            // 2. ⚠️ 关键修改：进程级匹配不检查 wildcard_rules
+            // 2. ⚠️ 进程级匹配不检查 wildcard_rules
             // 通配符规则（如 *{RenderThread}）只在线程级匹配
-            // 所以这里直接跳过通配符匹配，不遍历 wildcard_rules
 
-            // 3. 默认规则（*=0-5）
-            if (!matched) {
-                for (size_t i = 0; i < cfg->num_rules; i++) {
-                    const AffinityRule* rule = &cfg->rules[i];
-                    if (rule->priority == -1) {  // 默认规则
+            // 3. 默认规则（*=0-5）- 始终添加作为兜底
+            bool has_default = false;
+            for (size_t i = 0; i < cfg->num_rules; i++) {
+                const AffinityRule* rule = &cfg->rules[i];
+                if (rule->priority == -1) {  // 默认规则
+                    // 检查是否已经添加过默认规则
+                    for (size_t j = 0; j < proc->num_thread_rules; j++) {
+                        if (proc->thread_rules[j]->priority == -1) {
+                            has_default = true;
+                            break;
+                        }
+                    }
+                    if (!has_default) {
                         if (proc->num_thread_rules >= proc->thread_rules_cap) {
                             size_t new_cap = proc->thread_rules_cap * 2;
                             AffinityRule** tmp = realloc(proc->thread_rules, new_cap * sizeof(AffinityRule*));
@@ -895,10 +886,10 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                             proc->thread_rules_cap = new_cap;
                         }
                         proc->thread_rules[proc->num_thread_rules++] = (AffinityRule*)rule;
-                        matched = true;
-                        LOG_I("进程 %s 使用默认规则\n", proc->pkg);
-                        break;
+                        LOG_I("进程 %s: 添加默认规则 *=0-5\n", proc->pkg);
                     }
+                    matched = true;
+                    break;
                 }
             }
 
@@ -913,13 +904,15 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 qsort(proc->thread_rules, proc->num_thread_rules, sizeof(AffinityRule*), compare_rules);
             }
 
-            // 设置基础 CPU 亲和性（主线程）
+            // 设置基础 CPU 亲和性（主线程）- 使用优先级最高的规则
             for (size_t i = 0; i < proc->num_thread_rules; i++) {
                 const AffinityRule* rule = proc->thread_rules[i];
                 // 只有线程名为空或与包名相同的规则才作为基础规则
                 if (rule->thread[0] == '\0' || strcmp(rule->thread, name) == 0) {
                     CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
                     build_str(proc->base_cpuset, sizeof(proc->base_cpuset), rule->cpuset_dir, NULL);
+                    LOG_I("进程 %s: 基础规则使用 %s (priority=%d)\n", 
+                          proc->pkg, rule->cpuset_dir, rule->priority);
                     break;
                 }
             }
@@ -995,7 +988,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 int highest_priority = -1;
                 size_t best_rule_idx = 0;
 
-                // 1. 精确匹配线程名
+                // 1. 精确匹配线程名（在 proc->thread_rules 中查找）
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
                     const AffinityRule* rule = proc->thread_rules[i];
                     if (strcmp(rule->thread, tname) == 0) {
@@ -1005,10 +998,8 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                     }
                 }
 
-                // 2. 通配符匹配线程名（包括 pkg="*" 的规则，如 *{RenderThread}）
+                // 2. 通配符匹配线程名（从 cfg->wildcard_rules 中查找）
                 if (!matched_dir) {
-                    // 遍历所有规则，包括 wildcard_rules 中的规则
-                    // 由于进程级没有添加 wildcard_rules，我们需要从 cfg 中查找
                     for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
                         const AffinityRule* rule = cfg->wildcard_rules[i];
                         // 检查包名是否匹配（包括 "*" 匹配所有）
