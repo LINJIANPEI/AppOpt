@@ -1027,9 +1027,23 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             proc->pid = pid;
             build_str(proc->pkg, sizeof(proc->pkg), name, NULL);
 
+            // ========== 设置默认的 base_cpuset ==========
+            // 使用 cpuset base 作为默认值，确保 base_cpuset 始终有值
+            if (!build_str(proc->base_cpuset, sizeof(proc->base_cpuset), 
+                           cfg->cpuset_base, NULL)) {
+                // 如果 build_str 失败，使用硬编码的默认值
+                strncpy(proc->base_cpuset, BASE_CPUSET, sizeof(proc->base_cpuset) - 1);
+                proc->base_cpuset[sizeof(proc->base_cpuset) - 1] = '\0';
+            }
+            // ===========================================
+
             CPU_ZERO(&proc->base_cpus);
             proc->thread_rules_cap = 8;
             proc->thread_rules = malloc(proc->thread_rules_cap * sizeof(AffinityRule*));
+            if (!proc->thread_rules) {
+                close(proc_dir_fd);
+                continue;
+            }
             proc->num_thread_rules = 0;
 
             bool matched = false;
@@ -1216,6 +1230,17 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
                 // 3. fallback → base CPU（关键）
                 if (!matched_dir) {
                     CPU_OR(&ti->cpus, &ti->cpus, &proc->base_cpus);
+                    
+                    // ========== 确保 base_cpuset 不为空 ==========
+                    if (proc->base_cpuset[0] == '\0') {
+                        // 理论上不应该发生，但为了安全还是加上
+                        LOG_W("进程 %d (TID %d) 的 base_cpuset 为空！使用默认值 %s\n", 
+                              proc->pid, ti->tid, cfg->cpuset_base);
+                        build_str(proc->base_cpuset, sizeof(proc->base_cpuset), 
+                                  cfg->cpuset_base, NULL);
+                    }
+                    // ===========================================
+                    
                     build_str(ti->cpuset_dir,
                               sizeof(ti->cpuset_dir),
                               proc->base_cpuset,
