@@ -876,25 +876,6 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
 
     if (last_mtime) *last_mtime = st.st_mtime;
 
-    // ========== 【在这里】替换下面的统计代码 ==========
-    // 原有的统计代码（需要替换）：
-    size_t default_count = 0;
-    for (size_t j = 0; j < num_rules; j++) {
-        if (rules[j].priority == -1) {
-            default_count++;
-        }
-    }
-
-    LOG_I("配置文件解析完成\n");
-    LOG_I("总规则: %zu 条\n", num_rules);
-    LOG_I("精确匹配规则: %zu 条\n", num_rules - num_wildcard_rules - default_count);
-    LOG_I("通配符规则: %zu 条\n", num_wildcard_rules);
-    LOG_I("默认规则: %zu 条\n", default_count);
-    LOG_I("应用包: %zu 个\n", num_pkgs);
-    // ==============================================
-
-    // 替换为新的统计代码：
-    // ========== 【新的统计代码】 ==========
     size_t exact_pkg_exact_thread = 0;      // 精确包名+精确线程
     size_t exact_pkg_wildcard_thread = 0;   // 精确包名+线程通配符
     size_t exact_pkg_no_thread = 0;         // 精确包名（无线程）
