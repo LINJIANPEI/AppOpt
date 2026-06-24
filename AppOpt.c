@@ -1003,16 +1003,11 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
             build_str(proc->base_cpuset, sizeof(proc->base_cpuset),
                       cfg->cpuset_base, NULL);
 
-            // ============================
-            // ✅ FIX 1: threads 初始化（关键）
-            // ============================
+            // init
             proc->threads_cap = 32;
             proc->threads = malloc(proc->threads_cap * sizeof(ThreadInfo));
             proc->num_threads = 0;
 
-            // ============================
-            // thread_rules 初始化
-            // ============================
             proc->thread_rules_cap = 16;
             proc->thread_rules = malloc(proc->thread_rules_cap * sizeof(AffinityRule*));
             proc->num_thread_rules = 0;
@@ -1022,50 +1017,34 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
             PackageEntry* pkg_entry;
             HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
 
-            // 精确规则
+            // 1. 精确规则
             if (pkg_entry) {
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     const AffinityRule* rule = &cfg->rules[i];
                     if (rule->priority < 0) continue;
 
                     if (!rule->is_wildcard && strcmp(rule->pkg, name) == 0) {
-
-                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
-                            proc->thread_rules_cap *= 2;
-                            proc->thread_rules = realloc(proc->thread_rules,
-                                proc->thread_rules_cap * sizeof(AffinityRule*));
-                        }
-
                         proc->thread_rules[proc->num_thread_rules++] =
                             (AffinityRule*)rule;
 
-                        CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
                         matched_any = true;
                     }
                 }
             }
 
-            // wildcard规则
+            // 2. wildcard规则
             for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
                 const AffinityRule* r = cfg->wildcard_rules[i];
 
                 if (fnmatch(r->pkg, proc->pkg, 0) == 0) {
-
-                    if (proc->num_thread_rules >= proc->thread_rules_cap) {
-                        proc->thread_rules_cap *= 2;
-                        proc->thread_rules = realloc(proc->thread_rules,
-                            proc->thread_rules_cap * sizeof(AffinityRule*));
-                    }
-
                     proc->thread_rules[proc->num_thread_rules++] =
                         (AffinityRule*)r;
 
-                    CPU_OR(&proc->base_cpus, &proc->base_cpus, &r->cpus);
                     matched_any = true;
                 }
             }
 
-            // 默认规则
+            // 3. 默认规则
             for (size_t i = 0; i < cfg->num_rules; i++) {
                 const AffinityRule* rule = &cfg->rules[i];
                 if (rule->priority != -1) continue;
@@ -1073,7 +1052,6 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                 proc->thread_rules[proc->num_thread_rules++] =
                     (AffinityRule*)rule;
 
-                CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
                 matched_any = true;
             }
 
@@ -1091,9 +1069,9 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                       compare_rules);
             }
 
-            // ============================
-            // thread scan
-            // ============================
+            // =========================
+            // thread scan (核心已改)
+            // =========================
             int task_fd = openat(proc_dir_fd, "task",
                                   O_RDONLY | O_DIRECTORY);
             close(proc_dir_fd);
@@ -1123,9 +1101,19 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
 
                 strtrim(tname);
 
-                // ============================
-                // FIX 2: threads 扩容
-                // ============================
+                // ========== ⭐ 关键改动：winner 选择 ==========
+                const AffinityRule* best = NULL;
+
+                for (size_t i = 0; i < proc->num_thread_rules; i++) {
+                    AffinityRule* r = proc->thread_rules[i];
+
+                    if (strcmp(r->thread, tname) != 0)
+                        continue;
+
+                    if (!best || r->priority > best->priority)
+                        best = r;
+                }
+
                 if (proc->num_threads >= proc->threads_cap) {
                     proc->threads_cap *= 2;
                     proc->threads = realloc(proc->threads,
@@ -1140,27 +1128,18 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
 
                 CPU_ZERO(&ti->cpus);
 
-                const char* dir = NULL;
+                if (best) {
+                    CPU_OR(&ti->cpus, &ti->cpus, &best->cpus);
 
-                for (size_t i = 0; i < proc->num_thread_rules; i++) {
-                    AffinityRule* r = proc->thread_rules[i];
-
-                    if (strcmp(r->thread, tname) == 0) {
-                        CPU_OR(&ti->cpus, &ti->cpus, &r->cpus);
-                        dir = r->cpuset_dir;
-                        break;
-                    }
-                }
-
-                if (!dir) {
+                    build_str(ti->cpuset_dir,
+                              sizeof(ti->cpuset_dir),
+                              best->cpuset_dir, NULL);
+                } else {
                     CPU_OR(&ti->cpus, &ti->cpus, &proc->base_cpus);
+
                     build_str(ti->cpuset_dir,
                               sizeof(ti->cpuset_dir),
                               proc->base_cpuset, NULL);
-                } else {
-                    build_str(ti->cpuset_dir,
-                              sizeof(ti->cpuset_dir),
-                              dir, NULL);
                 }
             }
 
