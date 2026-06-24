@@ -936,8 +936,9 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
 static int compare_rules(const void* a, const void* b) {
     AffinityRule* ra = *(AffinityRule**)a;
     AffinityRule* rb = *(AffinityRule**)b;
-    // 降序排列，优先级高的在前
-    return rb->priority - ra->priority;
+    if (rb->priority > ra->priority) return 1;
+    if (rb->priority < ra->priority) return -1;
+    return 0;
 }
 
 static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) {
@@ -945,6 +946,24 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
     int proc_fd = open("/proc", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     int current_proc_total = 0;
     *count = 0;
+
+    // ========== 清理旧的进程数据 ==========
+    for (size_t i = 0; i < cache->num_procs; i++) {
+        ProcessInfo* old_proc = &cache->procs[i];
+        if (old_proc->threads) {
+            free(old_proc->threads);
+            old_proc->threads = NULL;
+        }
+        if (old_proc->thread_rules) {
+            free(old_proc->thread_rules);
+            old_proc->thread_rules = NULL;
+        }
+        old_proc->num_threads = 0;
+        old_proc->threads_cap = 0;
+        old_proc->num_thread_rules = 0;
+        old_proc->thread_rules_cap = 0;
+    }
+    // =====================================
 
     if (cache->procs == NULL) {
         cache->procs_cap = 2048;
@@ -956,7 +975,6 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
         }
     }
 
-    time_t current_time = time(NULL);
 
     while (1) {
         int nread = syscall(__NR_getdents64, proc_fd,
@@ -1025,21 +1043,26 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             if (pkg_entry) {
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     const AffinityRule* rule = &cfg->rules[i];
-
+                
                     if (rule->priority == -1)
                         continue;
-
+                
                     if (!rule->is_wildcard && strcmp(rule->pkg, name) == 0) {
                         if (rule->thread[0] == '\0' ||
                             strcmp(rule->thread, name) == 0) {
-
+                            
                             proc->thread_rules[proc->num_thread_rules++] =
                                 (AffinityRule*)rule;
-
+                            
                             CPU_OR(&proc->base_cpus,
                                    &proc->base_cpus,
                                    &rule->cpus);
-
+                            
+                            // ========== 添加这行 ==========
+                            build_str(proc->base_cpuset, sizeof(proc->base_cpuset), 
+                                      rule->cpuset_dir, NULL);
+                            // ==============================
+                            
                             matched = true;
                             break;
                         }
@@ -1053,27 +1076,32 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             if (proc->num_thread_rules == 0) {
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     const AffinityRule* rule = &cfg->rules[i];
-
+                
                     if (rule->priority == -1) {
-
+                    
                         if (proc->num_thread_rules >= proc->thread_rules_cap) {
                             size_t new_cap = proc->thread_rules_cap * 2;
                             AffinityRule** tmp =
                                 realloc(proc->thread_rules,
                                         new_cap * sizeof(AffinityRule*));
                             if (!tmp) break;
-
+                                
                             proc->thread_rules = tmp;
                             proc->thread_rules_cap = new_cap;
                         }
-
+                    
                         proc->thread_rules[proc->num_thread_rules++] =
                             (AffinityRule*)rule;
-
+                    
                         CPU_OR(&proc->base_cpus,
                                &proc->base_cpus,
                                &rule->cpus);
-
+                        
+                        // ========== 添加这行 ==========
+                        build_str(proc->base_cpuset, sizeof(proc->base_cpuset), 
+                                  rule->cpuset_dir, NULL);
+                        // ==============================
+                        
                         matched = true;
                     }
                 }
@@ -1088,11 +1116,11 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count) 
             // ================================
             // 3. 排序规则
             // ================================
-            if (proc->num_thread_rules > 1) {
+            if (proc->num_thread_rules > 1 && proc->thread_rules != NULL) {
                 qsort(proc->thread_rules,
-                      proc->num_thread_rules,
-                      sizeof(AffinityRule*),
-                      compare_rules);
+                proc->num_thread_rules,
+                sizeof(AffinityRule*),
+                compare_rules);
             }
 
             // ================================
@@ -1439,6 +1467,7 @@ static void print_help(const char* prog_name) {
     printf("\n示例:\n");
     printf("  %s -c /data/applist.conf -s 3\n", prog_name);
 }
+
 
 int main(int argc, char **argv) {
     CpuTopology topo = init_cpu_topo();
