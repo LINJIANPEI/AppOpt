@@ -925,7 +925,14 @@ static int compare_rules(const void* a, const void* b) {
 static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
 {
     char* dent_buf = malloc(DENT_BUF_SIZE);
+    if (!dent_buf) return;
+
     int proc_fd = open("/proc", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (proc_fd < 0) {
+        free(dent_buf);
+        return;
+    }
+
     int current_proc_total = 0;
     *count = 0;
 
@@ -941,7 +948,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
     }
 
     if (!cache->procs) {
-        cache->procs_cap = 2048;
+        cache->procs_cap = 1024;
         cache->procs = calloc(cache->procs_cap, sizeof(ProcessInfo));
     }
 
@@ -952,7 +959,8 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
         if (nread <= 0) break;
 
         for (int pos = 0; pos < nread;) {
-            struct linux_dirent64* ent = (struct linux_dirent64*)(dent_buf + pos);
+            struct linux_dirent64* ent =
+                (struct linux_dirent64*)(dent_buf + pos);
             pos += ent->d_reclen;
 
             if (ent->d_type != DT_DIR || !isdigit(ent->d_name[0]))
@@ -961,7 +969,8 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
             long pid = strtol(ent->d_name, NULL, 10);
             current_proc_total++;
 
-            int proc_dir_fd = openat(proc_fd, ent->d_name, O_RDONLY | O_DIRECTORY);
+            int proc_dir_fd = openat(proc_fd, ent->d_name,
+                                      O_RDONLY | O_DIRECTORY);
             if (proc_dir_fd == -1) continue;
 
             char cmd[MAX_PKG_LEN] = {0};
@@ -977,6 +986,11 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                 cache->procs_cap *= 2;
                 cache->procs = realloc(cache->procs,
                     cache->procs_cap * sizeof(ProcessInfo));
+                if (!cache->procs) {
+                    close(proc_dir_fd);
+                    free(dent_buf);
+                    return;
+                }
             }
 
             ProcessInfo* proc = &cache->procs[*count];
@@ -986,81 +1000,90 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
             build_str(proc->pkg, sizeof(proc->pkg), name, NULL);
 
             CPU_ZERO(&proc->base_cpus);
-
             build_str(proc->base_cpuset, sizeof(proc->base_cpuset),
                       cfg->cpuset_base, NULL);
 
+            // ============================
+            // ✅ FIX 1: threads 初始化（关键）
+            // ============================
+            proc->threads_cap = 32;
+            proc->threads = malloc(proc->threads_cap * sizeof(ThreadInfo));
+            proc->num_threads = 0;
+
+            // ============================
+            // thread_rules 初始化
+            // ============================
             proc->thread_rules_cap = 16;
             proc->thread_rules = malloc(proc->thread_rules_cap * sizeof(AffinityRule*));
+            proc->num_thread_rules = 0;
 
             bool matched_any = false;
 
             PackageEntry* pkg_entry;
             HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
 
-            // ============================
-            // 1. 精确规则
-            // ============================
+            // 精确规则
             if (pkg_entry) {
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     const AffinityRule* rule = &cfg->rules[i];
-
                     if (rule->priority < 0) continue;
 
                     if (!rule->is_wildcard && strcmp(rule->pkg, name) == 0) {
+
+                        if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                            proc->thread_rules_cap *= 2;
+                            proc->thread_rules = realloc(proc->thread_rules,
+                                proc->thread_rules_cap * sizeof(AffinityRule*));
+                        }
 
                         proc->thread_rules[proc->num_thread_rules++] =
                             (AffinityRule*)rule;
 
                         CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
-
-                        // ⚠️ 不再覆盖 base_cpuset（关键修复）
                         matched_any = true;
                     }
                 }
             }
 
-            // ============================
-            // 2. wildcard规则
-            // ============================
+            // wildcard规则
             for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
                 const AffinityRule* r = cfg->wildcard_rules[i];
 
                 if (fnmatch(r->pkg, proc->pkg, 0) == 0) {
 
+                    if (proc->num_thread_rules >= proc->thread_rules_cap) {
+                        proc->thread_rules_cap *= 2;
+                        proc->thread_rules = realloc(proc->thread_rules,
+                            proc->thread_rules_cap * sizeof(AffinityRule*));
+                    }
+
                     proc->thread_rules[proc->num_thread_rules++] =
                         (AffinityRule*)r;
 
                     CPU_OR(&proc->base_cpus, &proc->base_cpus, &r->cpus);
-
                     matched_any = true;
                 }
             }
 
-            // ============================
-            // 3. ⭐ 默认规则（修复核心）
-            // ============================
+            // 默认规则
             for (size_t i = 0; i < cfg->num_rules; i++) {
                 const AffinityRule* rule = &cfg->rules[i];
-
-                if (rule->priority != -1)
-                    continue;
+                if (rule->priority != -1) continue;
 
                 proc->thread_rules[proc->num_thread_rules++] =
                     (AffinityRule*)rule;
 
                 CPU_OR(&proc->base_cpus, &proc->base_cpus, &rule->cpus);
-
                 matched_any = true;
             }
 
             if (!matched_any) {
+                free(proc->threads);
                 free(proc->thread_rules);
                 close(proc_dir_fd);
                 continue;
             }
 
-            // 排序
             if (proc->num_thread_rules > 1) {
                 qsort(proc->thread_rules,
                       proc->num_thread_rules,
@@ -1069,14 +1092,19 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
             }
 
             // ============================
-            // 4. 线程扫描
+            // thread scan
             // ============================
-            int task_fd = openat(proc_dir_fd, "task", O_RDONLY | O_DIRECTORY);
+            int task_fd = openat(proc_dir_fd, "task",
+                                  O_RDONLY | O_DIRECTORY);
             close(proc_dir_fd);
+
             if (task_fd == -1) continue;
 
             DIR* task_dir = fdopendir(task_fd);
-            if (!task_dir) continue;
+            if (!task_dir) {
+                close(task_fd);
+                continue;
+            }
 
             while (1) {
                 struct dirent* d = readdir(task_dir);
@@ -1085,13 +1113,24 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                 long tid = strtol(d->d_name, NULL, 10);
                 if (tid <= 0) continue;
 
-                int tid_fd = openat(task_fd, d->d_name, O_RDONLY | O_DIRECTORY);
+                int tid_fd = openat(task_fd, d->d_name,
+                                    O_RDONLY | O_DIRECTORY);
                 if (tid_fd == -1) continue;
 
                 char tname[MAX_THREAD_LEN] = {0};
                 read_file(tid_fd, "comm", tname, sizeof(tname));
                 close(tid_fd);
+
                 strtrim(tname);
+
+                // ============================
+                // FIX 2: threads 扩容
+                // ============================
+                if (proc->num_threads >= proc->threads_cap) {
+                    proc->threads_cap *= 2;
+                    proc->threads = realloc(proc->threads,
+                        proc->threads_cap * sizeof(ThreadInfo));
+                }
 
                 ThreadInfo* ti = &proc->threads[proc->num_threads++];
                 memset(ti, 0, sizeof(ThreadInfo));
@@ -1103,7 +1142,6 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
 
                 const char* dir = NULL;
 
-                // 精确线程
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
                     AffinityRule* r = proc->thread_rules[i];
 
@@ -1114,29 +1152,27 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                     }
                 }
 
-                // fallback
                 if (!dir) {
                     CPU_OR(&ti->cpus, &ti->cpus, &proc->base_cpus);
-
                     build_str(ti->cpuset_dir,
                               sizeof(ti->cpuset_dir),
-                              proc->base_cpuset,
-                              NULL);
+                              proc->base_cpuset, NULL);
                 } else {
                     build_str(ti->cpuset_dir,
                               sizeof(ti->cpuset_dir),
-                              dir,
-                              NULL);
+                              dir, NULL);
                 }
             }
 
             closedir(task_dir);
+
             (*count)++;
         }
     }
 
     free(dent_buf);
     close(proc_fd);
+
     cache->last_proc_total = current_proc_total;
 }
 
