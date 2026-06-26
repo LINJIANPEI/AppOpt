@@ -444,10 +444,9 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
             const char* pkg_i = rules[i].pkg;
             const char* pkg_j = rules[j].pkg;
 
-            /* =========================
-             * ⭐ 新增：子进程解析
-             * ========================= */
+            /* ====== ⭐ 修改1：统一 base package（去掉 :xxx 子进程）====== */
             char base_i[128], base_j[128];
+
             const char *sub_i = strchr(pkg_i, ':');
             const char *sub_j = strchr(pkg_j, ':');
 
@@ -463,20 +462,10 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
             memcpy(base_j, pkg_j, len_j);
             base_j[len_j] = '\0';
 
-            /* =========================
-             * ⭐ 关键：层级关系直接跳过冲突
-             * ========================= */
-            bool hierarchical =
-                (strcmp(base_i, base_j) == 0);
-
-            if (hierarchical) {
-                /* 父子关系 => 不算冲突 */
+            /* ====== ⭐ 修改2：如果 base 相同 -> 直接跳过冲突 ====== */
+            if (strcmp(base_i, base_j) == 0) {
                 continue;
             }
-
-            /* =========================
-             * 以下才是真冲突检测
-             * ========================= */
 
             bool pkg_overlap = false;
 
@@ -497,9 +486,6 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
             if (!pkg_overlap)
                 continue;
 
-            /* =========================
-             * 线程冲突检测（保留你原逻辑）
-             * ========================= */
             bool thread_overlap = false;
 
             if (strcmp(rules[i].thread, rules[j].thread) == 0) {
@@ -939,6 +925,19 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
             char* name = strrchr(cmd, '/');
             name = name ? name + 1 : cmd;
 
+            /* ===== ⭐ 新增：去掉 :sandbox / :peak / :lite ===== */
+            char base_name[MAX_PKG_LEN] = {0};
+            const char* colon = strchr(name, ':');
+
+            if (colon) {
+                size_t len = colon - name;
+                if (len >= MAX_PKG_LEN) len = MAX_PKG_LEN - 1;
+                memcpy(base_name, name, len);
+                base_name[len] = '\0';
+            } else {
+                strncpy(base_name, name, MAX_PKG_LEN - 1);
+            }
+
             /* =========================
              * ⭐ 子进程识别（核心）
              * ========================= */
@@ -959,7 +958,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
             memset(proc, 0, sizeof(ProcessInfo));
 
             proc->pid = pid;
-            build_str(proc->pkg, sizeof(proc->pkg), name, NULL);
+            build_str(proc->pkg, sizeof(proc->pkg), base_name, NULL);
 
             CPU_ZERO(&proc->base_cpus);
             build_str(proc->base_cpuset, sizeof(proc->base_cpuset),
@@ -980,7 +979,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
              * ========================= */
             PackageEntry* pkg_entry = NULL;
             if (!is_sandbox_child) {
-                HASH_FIND_STR(cfg->pkg_table, name, pkg_entry);
+                HASH_FIND_STR(cfg->pkg_table, base_name, pkg_entry);
             }
 
             /* =========================
@@ -993,7 +992,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                     if (r->priority < 0) continue;
 
                     if (!r->is_wildcard &&
-                        strcmp(r->pkg, name) == 0) {
+                        strcmp(r->pkg, base_name) == 0) {
 
                         proc->thread_rules[proc->num_thread_rules++] =
                             (AffinityRule*)r;
