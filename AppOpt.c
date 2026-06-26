@@ -438,72 +438,71 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
     for (size_t i = 0; i < num_rules; i++) {
         for (size_t j = i + 1; j < num_rules; j++) {
 
-            if (rules[i].priority < 0 || rules[j].priority < 0)
+            const AffinityRule* r1 = &rules[i];
+            const AffinityRule* r2 = &rules[j];
+
+            /* =====================================================
+             * 0. 过滤无效规则
+             * ===================================================== */
+            if (r1->priority < 0 || r2->priority < 0)
                 continue;
 
-            const char* pkg_i = rules[i].pkg;
-            const char* pkg_j = rules[j].pkg;
+            /* =====================================================
+             * 1. 跳过 runtime/system 线程（关键优化）
+             * ===================================================== */
+            const char* t1 = r1->thread;
+            const char* t2 = r2->thread;
 
-            /* ====== ⭐ 修改1：统一 base package（去掉 :xxx 子进程）====== */
-            char base_i[128], base_j[128];
-
-            const char *sub_i = strchr(pkg_i, ':');
-            const char *sub_j = strchr(pkg_j, ':');
-
-            size_t len_i = sub_i ? (size_t)(sub_i - pkg_i) : strlen(pkg_i);
-            size_t len_j = sub_j ? (size_t)(sub_j - pkg_j) : strlen(pkg_j);
-
-            if (len_i >= sizeof(base_i)) len_i = sizeof(base_i) - 1;
-            if (len_j >= sizeof(base_j)) len_j = sizeof(base_j) - 1;
-
-            memcpy(base_i, pkg_i, len_i);
-            base_i[len_i] = '\0';
-
-            memcpy(base_j, pkg_j, len_j);
-            base_j[len_j] = '\0';
-
-            /* ====== ⭐ 修改2：如果 base 相同 -> 直接跳过冲突 ====== */
-            if (strcmp(base_i, base_j) == 0) {
+            if ((strcmp(t1, "HeapTaskDaemon") == 0 && strcmp(t2, "HeapTaskDaemon") == 0) ||
+                (strcmp(t1, "FinalizerDaemon") == 0 && strcmp(t2, "FinalizerDaemon") == 0) ||
+                (strcmp(t1, "ReferenceQueueDaemon") == 0 && strcmp(t2, "ReferenceQueueDaemon") == 0) ||
+                (strcmp(t1, "Signal Catcher") == 0 && strcmp(t2, "Signal Catcher") == 0)) {
                 continue;
             }
 
+            /* =====================================================
+             * 2. 严格 pkg 比较（不做任何归一化）
+             * ===================================================== */
             bool pkg_overlap = false;
 
-            if (strcmp(pkg_i, pkg_j) == 0) {
+            if (strcmp(r1->pkg, r2->pkg) == 0) {
                 pkg_overlap = true;
-            } else if (!rules[i].is_wildcard && !rules[j].is_wildcard) {
-                if (strncmp(pkg_i, pkg_j, strlen(pkg_i)) == 0 ||
-                    strncmp(pkg_j, pkg_i, strlen(pkg_j)) == 0) {
-                    pkg_overlap = true;
-                }
-            } else if (rules[i].is_wildcard != rules[j].is_wildcard) {
-                if (fnmatch(pkg_i, pkg_j, 0) == 0 ||
-                    fnmatch(pkg_j, pkg_i, 0) == 0) {
-                    pkg_overlap = true;
+            } else {
+                /* 仅 wildcard 支持 */
+                if (r1->is_wildcard || r2->is_wildcard) {
+                    if (fnmatch(r1->pkg, r2->pkg, 0) == 0 ||
+                        fnmatch(r2->pkg, r1->pkg, 0) == 0) {
+                        pkg_overlap = true;
+                    }
                 }
             }
 
             if (!pkg_overlap)
                 continue;
 
+            /* =====================================================
+             * 3. thread 冲突检测
+             * ===================================================== */
             bool thread_overlap = false;
 
-            if (strcmp(rules[i].thread, rules[j].thread) == 0) {
+            if (strcmp(r1->thread, r2->thread) == 0) {
                 thread_overlap = true;
-            } else if (rules[i].thread[0] == '\0' ||
-                       rules[j].thread[0] == '\0') {
+            } else if (r1->thread[0] == '\0' || r2->thread[0] == '\0') {
                 thread_overlap = true;
-            } else if (fnmatch(rules[i].thread, rules[j].thread, 0) == 0 ||
-                       fnmatch(rules[j].thread, rules[i].thread, 0) == 0) {
+            } else if (fnmatch(r1->thread, r2->thread, 0) == 0 ||
+                       fnmatch(r2->thread, r1->thread, 0) == 0) {
                 thread_overlap = true;
             }
 
             if (!thread_overlap)
                 continue;
 
-            LOG_W("  潜在冲突: %s{%s}(%d) 与 %s{%s}(%d)\n",
-                  rules[i].pkg, rules[i].thread, rules[i].priority,
-                  rules[j].pkg, rules[j].thread, rules[j].priority);
+            /* =====================================================
+             * 4. 真正冲突输出
+             * ===================================================== */
+            LOG_W("潜在冲突: %s{%s}(%d) 与 %s{%s}(%d)\n",
+                  r1->pkg, r1->thread, r1->priority,
+                  r2->pkg, r2->thread, r2->priority);
         }
     }
 }
