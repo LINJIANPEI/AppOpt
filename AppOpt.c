@@ -679,7 +679,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
             }
         } else {
             pkg = strtrim(key);
-            thread = pkg;
+            thread = "";
         }
 
         if (!pkg || pkg[0] == '\0') {
