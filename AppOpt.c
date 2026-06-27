@@ -167,12 +167,15 @@ static bool read_file(int dir_fd, const char* filename, char* buf, size_t buf_si
     return true;
 }
 
-static bool write_file(int dir_fd, const char* filename, const char* content, int flags) {
-    int fd = openat(dir_fd, filename, flags | O_CLOEXEC, 0644);
+static bool write_file(int dir_fd, const char* filename, const char* content)
+{
+    int fd = openat(dir_fd, filename, O_WRONLY | O_CLOEXEC);
     if (fd == -1) return false;
+
     ssize_t n = write(fd, content, strlen(content));
     close(fd);
-    return (n == (ssize_t)strlen(content));
+
+    return n == (ssize_t)strlen(content);
 }
 
 static int build_str(char *dest, size_t dest_size, ...) {
@@ -454,14 +457,14 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
 
 static int compare_rules(const void* a, const void* b)
 {
-    AffinityRule* ra = *(AffinityRule**)a;
-    AffinityRule* rb = *(AffinityRule**)b;
+    const AffinityRule* ra = (const AffinityRule*)a;
+    const AffinityRule* rb = (const AffinityRule*)b;
 
-    // 优先级高的排前面
+    // priority 高的排前面
     if (rb->priority != ra->priority)
         return rb->priority - ra->priority;
 
-    // 同优先级：越具体越优先（字符串越长越具体）
+    // 越具体（字符串越长）优先级越高
     size_t sa = strlen(ra->pkg) + strlen(ra->thread);
     size_t sb = strlen(rb->pkg) + strlen(rb->thread);
 
@@ -709,8 +712,25 @@ static void proc_collect(const AppConfig* cfg,
                 strncpy(base, name, sizeof(base) - 1);
             }
 
-            ProcessInfo* proc = &cache->procs[(*count)++];
+            // ===== ⭐ 关键：扩容防崩 =====
+            if (*count >= cache->procs_cap) {
+                size_t new_cap = cache->procs_cap * 2;
+
+                ProcessInfo* new_buf =
+                    realloc(cache->procs, new_cap * sizeof(ProcessInfo));
+
+                if (!new_buf) {
+                    close(pfd);
+                    break;
+                }
+
+                cache->procs = new_buf;
+                cache->procs_cap = new_cap;
+            }
+
+            ProcessInfo* proc = &cache->procs[*count];
             memset(proc, 0, sizeof(*proc));
+            (*count)++;
 
             proc->pid = pid;
             strncpy(proc->pkg, base, sizeof(proc->pkg) - 1);
@@ -725,11 +745,10 @@ static void proc_collect(const AppConfig* cfg,
 
             bool matched = false;
 
-            // ===== 规则收集 =====
+            // ===== 规则匹配 =====
             PackageEntry* pe = NULL;
             HASH_FIND_STR(cfg->pkg_table, base, pe);
 
-            // 1. exact rules
             if (pe) {
                 for (size_t i = 0; i < cfg->num_rules; i++) {
                     AffinityRule* r = &cfg->rules[i];
@@ -745,7 +764,6 @@ static void proc_collect(const AppConfig* cfg,
                 }
             }
 
-            // 2. wildcard rules
             for (size_t i = 0; i < cfg->num_wildcard_rules; i++) {
                 AffinityRule* r = cfg->wildcard_rules[i];
 
@@ -780,28 +798,38 @@ static void proc_collect(const AppConfig* cfg,
                 int tid = atoi(de->d_name);
                 if (tid <= 0) continue;
 
-                int tf = openat(tfd, de->d_name,
-                                O_RDONLY | O_DIRECTORY);
-                if (tf < 0) continue;
+                // ===== thread 扩容 =====
+                if (proc->num_threads >= proc->threads_cap) {
+                    size_t new_cap = proc->threads_cap ? proc->threads_cap * 2 : 32;
 
-                char tname[64] = {0};
-                read_file(tf, "comm", tname, sizeof(tname));
-                close(tf);
+                    ThreadInfo* new_buf =
+                        realloc(proc->threads, new_cap * sizeof(ThreadInfo));
 
-                strtrim(tname);
+                    if (!new_buf) continue;
+
+                    proc->threads = new_buf;
+                    proc->threads_cap = new_cap;
+                }
 
                 ThreadInfo* ti =
                     &proc->threads[proc->num_threads++];
 
+                memset(ti, 0, sizeof(*ti));
+
                 ti->tid = tid;
-                strncpy(ti->name, tname, sizeof(ti->name) - 1);
+
+                int tf = openat(tfd, de->d_name,
+                                O_RDONLY | O_DIRECTORY);
+                if (tf >= 0) {
+                    read_file(tf, "comm", ti->name, sizeof(ti->name));
+                    close(tf);
+                    strtrim(ti->name);
+                }
 
                 CPU_ZERO(&ti->cpus);
 
                 const AffinityRule* best = NULL;
 
-                // ===== 统一 best 选择（问题三修复核心）=====
-
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
 
                     AffinityRule* r = proc->thread_rules[i];
@@ -810,36 +838,18 @@ static void proc_collect(const AppConfig* cfg,
                         fnmatch(r->pkg, proc->pkg, 0) != 0)
                         continue;
 
-                    if (strcmp(r->thread, tname) == 0) {
+                    if (strcmp(r->thread, ti->name) == 0) {
                         if (!best || r->priority > best->priority)
                             best = r;
                     }
-                }
-
-                for (size_t i = 0; i < proc->num_thread_rules; i++) {
-
-                    AffinityRule* r = proc->thread_rules[i];
-
-                    if (strcmp(r->pkg, proc->pkg) != 0 &&
-                        fnmatch(r->pkg, proc->pkg, 0) != 0)
-                        continue;
 
                     if (r->thread[0] &&
                         strcmp(r->thread, "*") != 0 &&
-                        fnmatch(r->thread, tname, 0) == 0) {
+                        fnmatch(r->thread, ti->name, 0) == 0) {
 
                         if (!best || r->priority > best->priority)
                             best = r;
                     }
-                }
-
-                for (size_t i = 0; i < proc->num_thread_rules; i++) {
-
-                    AffinityRule* r = proc->thread_rules[i];
-
-                    if (strcmp(r->pkg, proc->pkg) != 0 &&
-                        fnmatch(r->pkg, proc->pkg, 0) != 0)
-                        continue;
 
                     if (r->thread[0] == '\0' ||
                         strcmp(r->thread, "*") == 0) {
