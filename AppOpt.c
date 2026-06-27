@@ -167,17 +167,22 @@ static bool read_file(int dir_fd, const char* filename, char* buf, size_t buf_si
     return true;
 }
 
-static bool write_file(int dir_fd, const char* filename, const char* content)
+static bool write_file(int dir_fd,
+                       const char* filename,
+                       const char* content,
+                       int flags,
+                       mode_t mode)
 {
-    int fd = openat(dir_fd, filename, O_WRONLY | O_CLOEXEC);
+    int fd = openat(dir_fd, filename, flags | O_CLOEXEC, mode);
     if (fd == -1) return false;
 
-    ssize_t n = write(fd, content, strlen(content));
+    size_t len = strlen(content);
+    ssize_t n = write(fd, content, len);
+
     close(fd);
 
-    return n == (ssize_t)strlen(content);
+    return (n == (ssize_t)len);
 }
-
 static int build_str(char *dest, size_t dest_size, ...) {
     va_list args;
     const char *segment;
