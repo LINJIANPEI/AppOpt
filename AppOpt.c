@@ -340,6 +340,7 @@ static CpuTopology init_cpu_topo(void) {
 }
 
 static int calculate_rule_priority(const char* pkg, const char* thread) {
+    return 0;
     // 检测规则类型并返回对应的优先级值
     bool pkg_exact = false;
     bool pkg_wildcard = false;
@@ -433,7 +434,7 @@ static void cleanup_temp_resources(AffinityRule** rules, size_t num_rules, Affin
 
 static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
 {
-    LOG_I("规则优先级验证:\n");
+    LOG_I("规则验证（DEBUG模式，仅提示，不参与决策）\n");
 
     for (size_t i = 0; i < num_rules; i++) {
         for (size_t j = i + 1; j < num_rules; j++) {
@@ -441,68 +442,9 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
             const AffinityRule* r1 = &rules[i];
             const AffinityRule* r2 = &rules[j];
 
-            /* =====================================================
-             * 0. 过滤无效规则
-             * ===================================================== */
-            if (r1->priority < 0 || r2->priority < 0)
-                continue;
-
-            /* =====================================================
-             * 1. 跳过 runtime/system 线程（关键优化）
-             * ===================================================== */
-            const char* t1 = r1->thread;
-            const char* t2 = r2->thread;
-
-            if ((strcmp(t1, "HeapTaskDaemon") == 0 && strcmp(t2, "HeapTaskDaemon") == 0) ||
-                (strcmp(t1, "FinalizerDaemon") == 0 && strcmp(t2, "FinalizerDaemon") == 0) ||
-                (strcmp(t1, "ReferenceQueueDaemon") == 0 && strcmp(t2, "ReferenceQueueDaemon") == 0) ||
-                (strcmp(t1, "Signal Catcher") == 0 && strcmp(t2, "Signal Catcher") == 0)) {
-                continue;
-            }
-
-            /* =====================================================
-             * 2. 严格 pkg 比较（不做任何归一化）
-             * ===================================================== */
-            bool pkg_overlap = false;
-
-            if (strcmp(r1->pkg, r2->pkg) == 0) {
-                pkg_overlap = true;
-            } else {
-                /* 仅 wildcard 支持 */
-                if (r1->is_wildcard || r2->is_wildcard) {
-                    if (fnmatch(r1->pkg, r2->pkg, 0) == 0 ||
-                        fnmatch(r2->pkg, r1->pkg, 0) == 0) {
-                        pkg_overlap = true;
-                    }
-                }
-            }
-
-            if (!pkg_overlap)
-                continue;
-
-            /* =====================================================
-             * 3. thread 冲突检测
-             * ===================================================== */
-            bool thread_overlap = false;
-
-            if (strcmp(r1->thread, r2->thread) == 0) {
-                thread_overlap = true;
-            } else if (r1->thread[0] == '\0' || r2->thread[0] == '\0') {
-                thread_overlap = true;
-            } else if (fnmatch(r1->thread, r2->thread, 0) == 0 ||
-                       fnmatch(r2->thread, r1->thread, 0) == 0) {
-                thread_overlap = true;
-            }
-
-            if (!thread_overlap)
-                continue;
-
-            /* =====================================================
-             * 4. 真正冲突输出
-             * ===================================================== */
-            LOG_W("潜在冲突: %s{%s}(%d) 与 %s{%s}(%d)\n",
-                  r1->pkg, r1->thread, r1->priority,
-                  r2->pkg, r2->thread, r2->priority);
+            LOG_I("规则: %s{%s} vs %s{%s}\n",
+                  r1->pkg, r1->thread,
+                  r2->pkg, r2->thread);
         }
     }
 }
@@ -865,6 +807,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
 }
 
 static int compare_rules(const void* a, const void* b) {
+    return 0;
     AffinityRule* ra = *(AffinityRule**)a;
     AffinityRule* rb = *(AffinityRule**)b;
 
@@ -1042,13 +985,6 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                 continue;
             }
 
-            if (proc->num_thread_rules > 1) {
-                qsort(proc->thread_rules,
-                      proc->num_thread_rules,
-                      sizeof(AffinityRule*),
-                      compare_rules);
-            }
-
             int task_fd = openat(proc_dir_fd, "task",
                                   O_RDONLY | O_DIRECTORY);
             close(proc_dir_fd);
@@ -1091,23 +1027,79 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                 build_str(ti->name, sizeof(ti->name), tname, NULL);
 
                 CPU_ZERO(&ti->cpus);
+                
+                const AffinityRule* best_exact = NULL;
+                const AffinityRule* best_wild  = NULL;
+                const AffinityRule* best_pkg   = NULL;
 
-                const AffinityRule* best = NULL;
-
+                /* =========================
+                 * 1️⃣ 精确线程
+                 * ========================= */
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
 
                     AffinityRule* r = proc->thread_rules[i];
 
-                    if (r->thread[0] != '\0' &&
-                        strcmp(r->thread, "*") != 0 &&
-                        fnmatch(r->thread, tname, 0) != 0) {
+                    // pkg match（支持通配）
+                    if (strcmp(r->pkg, proc->pkg) != 0 &&
+                        fnmatch(r->pkg, proc->pkg, 0) != 0)
                         continue;
-                    }
 
-                    if (!best || r->priority > best->priority) {
-                        best = r;
+                    // exact thread
+                    if (strcmp(r->thread, tname) == 0) {
+                        best_exact = r;
+                        break;
                     }
                 }
+
+                /* =========================
+                 * 2️⃣ 线程通配符
+                 * ========================= */
+                if (!best_exact) {
+                    for (size_t i = 0; i < proc->num_thread_rules; i++) {
+            
+                        AffinityRule* r = proc->thread_rules[i];
+
+                        if (strcmp(r->pkg, proc->pkg) != 0 &&
+                            fnmatch(r->pkg, proc->pkg, 0) != 0)
+                            continue;
+
+                        if (r->thread[0] != '\0' &&
+                            strcmp(r->thread, "*") != 0 &&
+                            fnmatch(r->thread, tname, 0) == 0) {
+
+                            best_wild = r;
+                        }
+                    }
+                }
+
+                /* =========================
+                 * 3️⃣ 包级规则
+                 * ========================= */
+                if (!best_exact && !best_wild) {
+                    for (size_t i = 0; i < proc->num_thread_rules; i++) {
+
+                        AffinityRule* r = proc->thread_rules[i];
+
+                        if (strcmp(r->pkg, proc->pkg) != 0 &&
+                            fnmatch(r->pkg, proc->pkg, 0) != 0)
+                            continue;
+
+                        if (r->thread[0] == '\0' ||
+                            strcmp(r->thread, "*") == 0) {
+
+                            best_pkg = r;
+                        }
+                    }
+                }
+
+                /* =========================
+                 * 4️⃣ 最终结果
+                 * ========================= */
+                const AffinityRule* best =
+                    best_exact ? best_exact :
+                    best_wild  ? best_wild  :
+                    best_pkg   ? best_pkg   : NULL;
+                    
 
                 if (best) {
                     CPU_OR(&ti->cpus, &ti->cpus, &best->cpus);
