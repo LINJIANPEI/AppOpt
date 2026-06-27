@@ -452,6 +452,22 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules)
     }
 }
 
+static int compare_rules(const void* a, const void* b)
+{
+    AffinityRule* ra = *(AffinityRule**)a;
+    AffinityRule* rb = *(AffinityRule**)b;
+
+    // 优先级高的排前面
+    if (rb->priority != ra->priority)
+        return rb->priority - ra->priority;
+
+    // 同优先级：越具体越优先（字符串越长越具体）
+    size_t sa = strlen(ra->pkg) + strlen(ra->thread);
+    size_t sb = strlen(rb->pkg) + strlen(rb->thread);
+
+    return (int)(sb - sa);
+}
+
 static AppConfig* load_config(const char* config_file,
                               const CpuTopology* topo,
                               time_t* last_mtime)
@@ -628,21 +644,7 @@ static AppConfig* load_config(const char* config_file,
     return cfg;
 }
 
-static int compare_rules(const void* a, const void* b)
-{
-    AffinityRule* ra = *(AffinityRule**)a;
-    AffinityRule* rb = *(AffinityRule**)b;
 
-    // 优先级高的排前面
-    if (rb->priority != ra->priority)
-        return rb->priority - ra->priority;
-
-    // 同优先级：越具体越优先（字符串越长越具体）
-    size_t sa = strlen(ra->pkg) + strlen(ra->thread);
-    size_t sb = strlen(rb->pkg) + strlen(rb->thread);
-
-    return (int)(sb - sa);
-}
 
 static void proc_collect(const AppConfig* cfg,
                          ProcCache* cache,
