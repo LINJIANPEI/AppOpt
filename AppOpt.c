@@ -183,6 +183,7 @@ static bool write_file(int dir_fd,
 
     return (n == (ssize_t)len);
 }
+
 static int build_str(char *dest, size_t dest_size, ...) {
     va_list args;
     const char *segment;
@@ -306,18 +307,24 @@ static char* cpu_set_to_str(const cpu_set_t *set) {
     return buf;
 }
 
-static bool create_cpuset_dir(const char *path, const char *cpus, const char *mems) {
+static bool create_cpuset_dir(const char *path, const char *cpus, const char *mems)
+{
     if (mkdir(path, 0755) != 0 && errno != EEXIST) return false;
     if (chmod(path, 0755) != 0) return false;
     if (chown(path, 0, 0) != 0) return false;
 
     char cpus_path[256];
     build_str(cpus_path, sizeof(cpus_path), path, "/cpus", NULL);
-    if (!write_file(AT_FDCWD, cpus_path, cpus, O_WRONLY | O_CREAT | O_TRUNC)) return false;
+
+    if (!write_file(AT_FDCWD, cpus_path, cpus,
+                    O_WRONLY | O_CREAT | O_TRUNC, 0644))
+        return false;
 
     char mems_path[256];
     build_str(mems_path, sizeof(mems_path), path, "/mems", NULL);
-    return write_file(AT_FDCWD, mems_path, mems, O_WRONLY | O_CREAT | O_TRUNC);
+
+    return write_file(AT_FDCWD, mems_path, mems,
+                      O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 
 static CpuTopology init_cpu_topo(void) {
@@ -476,10 +483,7 @@ static int compare_rules(const void* a, const void* b)
     return (int)(sb - sa);
 }
 
-static AppConfig* load_config(const char* config_file,
-                              const CpuTopology* topo,
-                              time_t* last_mtime)
-{
+static AppConfig* load_config(const char* config_file,const CpuTopology* topo,time_t* last_mtime){
     struct stat st;
     if (stat(config_file, &st) != 0) {
         return NULL;
@@ -654,10 +658,7 @@ static AppConfig* load_config(const char* config_file,
 
 
 
-static void proc_collect(const AppConfig* cfg,
-                         ProcCache* cache,
-                         size_t* count)
-{
+static void proc_collect(const AppConfig* cfg,ProcCache* cache,size_t* count){
     char* buf = malloc(DENT_BUF_SIZE);
     if (!buf) return;
 
@@ -944,7 +945,7 @@ static void apply_affinity(ProcCache* cache, const CpuTopology* topo) {
                     cpu_set_t curr;
                     if (sched_getaffinity(ti->tid, sizeof(curr), &curr) == -1) continue;
                     if (CPU_EQUAL(&topo->present_cpus, &curr)) continue;
-                    write_file(topo->base_cpuset_fd, "tasks", tid_str, O_WRONLY | O_APPEND);
+                    write_file(topo->base_cpuset_fd, "tasks", tid_str,O_WRONLY | O_APPEND, 0644);
                 } else {
                     cpu_set_t curr;
                     if (sched_getaffinity(ti->tid, sizeof(curr), &curr) == -1) continue;
@@ -952,7 +953,7 @@ static void apply_affinity(ProcCache* cache, const CpuTopology* topo) {
                     if (ti->cpuset_dir[0]) {
                         int fd = openat(topo->base_cpuset_fd, ti->cpuset_dir, O_RDONLY | O_DIRECTORY);
                         if (fd != -1) {
-                            write_file(fd, "tasks", tid_str, O_WRONLY | O_APPEND);
+                            write_file(fd, "tasks", tid_str,O_WRONLY | O_APPEND, 0644);
                             close(fd);
                         }
                     }
@@ -1148,7 +1149,7 @@ int main(int argc, char **argv) {
     struct stat st;
     if (stat(config_file, &st) != 0) {
         const char* initial_content = "# 规则编写与使用说明请参考 http://AppOpt.suto.top\n\n";
-        if (write_file(AT_FDCWD, config_file, initial_content, O_WRONLY | O_CREAT | O_TRUNC)) {
+        if (write_file(AT_FDCWD, config_file, initial_content,O_WRONLY | O_CREAT | O_TRUNC, 0644)) {
             LOG_W("配置文件不存在，重建一个空的配置文件: %s\n", config_file);
         }
     }
