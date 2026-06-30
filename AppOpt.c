@@ -340,13 +340,8 @@ static CpuTopology init_cpu_topo(void) {
 }
 
 static int calculate_rule_priority(const char* pkg, const char* thread) {
-    // 检测规则类型并返回对应的优先级值
-    bool pkg_exact = false;
-    bool pkg_wildcard = false;
-    bool pkg_default = false;
-    bool thread_exact = false;
-    bool thread_wildcard = false;
-    bool thread_default = false;
+    bool pkg_exact = false, pkg_wildcard = false, pkg_default = false;
+    bool thread_exact = false, thread_wildcard = false, thread_default = false, thread_main = false;
 
     // 分析包名
     if (strcmp(pkg, "*") == 0) {
@@ -360,6 +355,8 @@ static int calculate_rule_priority(const char* pkg, const char* thread) {
     // 分析线程名
     if (thread[0] == '\0' || strcmp(thread, "*") == 0) {
         thread_default = true;
+    } else if (strcmp(thread, "**") == 0) {
+        thread_main = true;  // ** 代表主线程
     } else if (strchr(thread, '*') != NULL || strchr(thread, '?') != NULL || strchr(thread, '[') != NULL) {
         thread_wildcard = true;
     } else {
@@ -371,20 +368,24 @@ static int calculate_rule_priority(const char* pkg, const char* thread) {
         return 100000;  // 1. 精确包名+精确线程（最高）
     } else if (pkg_exact && thread_wildcard) {
         return 80000;   // 2. 精确包名+线程通配符
+    } else if (pkg_exact && thread_main) {
+        return 70000;   // 3. 精确包名+主线程（**）
     } else if (pkg_exact && thread_default) {
-        return 60000;   // 3. 精确包名（无线程）
+        return 60000;   // 4. 精确包名（无线程/所有线程）
     } else if (pkg_wildcard && thread_exact) {
-        return 40000;   // 4. 包名通配符+精确线程
+        return 40000;   // 5. 包名通配符+精确线程
+    } else if (pkg_wildcard && thread_main) {
+        return 30000;   // ⭐ 6. 包名通配符+主线程（**）
     } else if (pkg_wildcard && thread_wildcard) {
-        return 20000;   // 5. 包名通配符+线程通配符
+        return 20000;   // 7. 包名通配符+线程通配符
     } else { // pkg_default
-        return -1;      // 6. 默认规则（最低）- 统一为 -1
+        return -1;      // 8. 默认规则（最低）
     }
 }
 
 static const char* get_rule_type_name(const AffinityRule* rule) {
     bool pkg_exact = false, pkg_wildcard = false, pkg_default = false;
-    bool thread_exact = false, thread_wildcard = false, thread_default = false;
+    bool thread_exact = false, thread_wildcard = false, thread_default = false, thread_main = false;
 
     if (strcmp(rule->pkg, "*") == 0) {
         pkg_default = true;
@@ -397,6 +398,8 @@ static const char* get_rule_type_name(const AffinityRule* rule) {
 
     if (rule->thread[0] == '\0' || strcmp(rule->thread, "*") == 0) {
         thread_default = true;
+    } else if (strcmp(rule->thread, "**") == 0) {
+        thread_main = true;
     } else if (strchr(rule->thread, '*') != NULL || strchr(rule->thread, '?') != NULL || 
                strchr(rule->thread, '[') != NULL) {
         thread_wildcard = true;
@@ -406,8 +409,10 @@ static const char* get_rule_type_name(const AffinityRule* rule) {
 
     if (pkg_exact && thread_exact) return "精确包名+精确线程";
     if (pkg_exact && thread_wildcard) return "精确包名+线程通配符";
+    if (pkg_exact && thread_main) return "精确包名+主线程(**)";
     if (pkg_exact && thread_default) return "精确包名（无线程）";
     if (pkg_wildcard && thread_exact) return "包名通配符+精确线程";
+    if (pkg_wildcard && thread_main) return "包名通配符+主线程(**)";
     if (pkg_wildcard && thread_wildcard) return "包名通配符+线程通配符";
     return "默认规则";
 }
@@ -435,8 +440,10 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     LOG_I("规则优先级验证:\n");
     LOG_I("  - 精确包名+精确线程: 最高 (100000)\n");
     LOG_I("  - 精确包名+线程通配符: 次高 (80000)\n");
+    LOG_I("  - 精确包名+主线程(**): 较高 (70000)\n");
     LOG_I("  - 精确包名（无线程）: 中等 (60000)\n");
     LOG_I("  - 包名通配符+精确线程: 较低 (40000)\n");
+    LOG_I("  - 包名通配符+主线程(**): 更低 (30000)\n");
     LOG_I("  - 包名通配符+线程通配符: 很低 (20000)\n");
     LOG_I("  - 默认规则: 最低 (-1)\n");
 
@@ -876,36 +883,45 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
 
     if (last_mtime) *last_mtime = st.st_mtime;
 
+    // 在 load_config 函数末尾的统计部分
     size_t exact_pkg_exact_thread = 0;      // 精确包名+精确线程
     size_t exact_pkg_wildcard_thread = 0;   // 精确包名+线程通配符
+    size_t exact_pkg_main_thread = 0;       // ⭐ 精确包名+主线程(**)
     size_t exact_pkg_no_thread = 0;         // 精确包名（无线程）
     size_t wildcard_pkg_exact_thread = 0;   // 包名通配符+精确线程
+    size_t wildcard_pkg_main_thread = 0;    // ⭐ 包名通配符+主线程(**)
     size_t wildcard_pkg_wildcard_thread = 0;// 包名通配符+线程通配符
     size_t default_rules = 0;               // 默认规则
-
+    
     for (size_t i = 0; i < num_rules; i++) {
         int prio = rules[i].priority;
         if (prio == 100000) {
             exact_pkg_exact_thread++;
         } else if (prio == 80000) {
             exact_pkg_wildcard_thread++;
+        } else if (prio == 70000) {
+            exact_pkg_main_thread++;
         } else if (prio == 60000) {
             exact_pkg_no_thread++;
         } else if (prio == 40000) {
             wildcard_pkg_exact_thread++;
+        } else if (prio == 30000) {
+            wildcard_pkg_main_thread++;
         } else if (prio == 20000) {
             wildcard_pkg_wildcard_thread++;
         } else if (prio == -1 || prio == 0) {
             default_rules++;
         }
     }
-
+    
     LOG_I("配置文件解析完成\n");
     LOG_I("总规则: %zu 条\n", num_rules);
     LOG_I("  - 精确包名+精确线程: %zu 条 (优先级: 100000)\n", exact_pkg_exact_thread);
     LOG_I("  - 精确包名+线程通配符: %zu 条 (优先级: 80000)\n", exact_pkg_wildcard_thread);
+    LOG_I("  - 精确包名+主线程(**): %zu 条 (优先级: 70000)\n", exact_pkg_main_thread);
     LOG_I("  - 精确包名（无线程）: %zu 条 (优先级: 60000)\n", exact_pkg_no_thread);
     LOG_I("  - 包名通配符+精确线程: %zu 条 (优先级: 40000)\n", wildcard_pkg_exact_thread);
+    LOG_I("  - 包名通配符+主线程(**): %zu 条 (优先级: 30000)\n", wildcard_pkg_main_thread);
     LOG_I("  - 包名通配符+线程通配符: %zu 条 (优先级: 20000)\n", wildcard_pkg_wildcard_thread);
     LOG_I("  - 默认规则: %zu 条 (优先级: -1)\n", default_rules);
     LOG_I("应用包: %zu 个\n", num_pkgs);
@@ -1131,16 +1147,33 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                 // ⭐ 核心：选择最高优先级规则
                 // ============================
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
-
+                
                     AffinityRule* r = proc->thread_rules[i];
-
-                    // ⭐ FIX：* + wildcard 正确匹配
-                    if (r->thread[0] != '\0' &&
-                        strcmp(r->thread, "*") != 0 &&
-                        fnmatch(r->thread, tname, 0) != 0) {
+                
+                    // ⭐ 特殊处理：** 匹配主线程（线程名等于包名）
+                    if (strcmp(r->thread, "**") == 0) {
+                        // 检查当前线程名是否等于包名
+                        if (strcmp(tname, proc->pkg) == 0) {
+                            if (!best || r->priority > best->priority) {
+                                best = r;
+                            }
+                        }
                         continue;
                     }
-
+                
+                    // 无线程规则匹配所有线程
+                    if (r->thread[0] == '\0' || strcmp(r->thread, "*") == 0) {
+                        if (!best || r->priority > best->priority) {
+                            best = r;
+                        }
+                        continue;
+                    }
+                
+                    // 普通规则：匹配指定的线程名
+                    if (fnmatch(r->thread, tname, 0) != 0) {
+                        continue;
+                    }
+                
                     if (!best || r->priority > best->priority) {
                         best = r;
                     }
