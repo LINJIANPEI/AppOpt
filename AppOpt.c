@@ -440,6 +440,57 @@ static void cleanup_temp_resources(AffinityRule** rules, size_t num_rules, Affin
     }
 }
 
+// 辅助函数：将 cpu_set_t 转为字符串（带缓冲区）
+static void cpu_set_to_str_r(const cpu_set_t *set, char *buf, size_t buf_size) {
+    if (!buf || buf_size == 0) return;
+    
+    int start = -1, end = -1;
+    char *p = buf;
+    size_t remain = buf_size - 1;
+    bool first = true;
+    *buf = '\0';
+
+    for (int i = 0; i < CPU_SETSIZE && remain > 0; i++) {
+        if (CPU_ISSET(i, set)) {
+            if (start == -1) {
+                start = end = i;
+            } else if (i == end + 1) {
+                end = i;
+            } else {
+                int needed;
+                if (start == end) {
+                    needed = snprintf(p, remain + 1, "%s%d", first ? "" : ",", start);
+                } else {
+                    needed = snprintf(p, remain + 1, "%s%d-%d", first ? "" : ",", start, end);
+                }
+                if (needed < 0 || (size_t)needed > remain) {
+                    *buf = '\0';
+                    return;
+                }
+                p += needed;
+                remain -= needed;
+                start = end = i;
+                first = false;
+            }
+        }
+    }
+    
+    if (start != -1 && remain > 0) {
+        int needed;
+        if (start == end) {
+            needed = snprintf(p, remain + 1, "%s%d", first ? "" : ",", start);
+        } else {
+            needed = snprintf(p, remain + 1, "%s%d-%d", first ? "" : ",", start, end);
+        }
+        if (needed < 0 || (size_t)needed > remain) {
+            *buf = '\0';
+            return;
+        }
+        p += needed;
+    }
+    *p = '\0';
+}
+
 static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     LOG_I("═══════════════════════════════════════════════════════════\n");
     LOG_I("规则优先级体系:\n");
@@ -458,7 +509,7 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     LOG_I("  └──────────┴─────────────────────────────┴─────────┴────────┘\n");
     LOG_I("  （高优先级规则自动覆盖低优先级规则）\n");
     
-    // 统计规则数量
+    // 先统计各类规则数量
     size_t exact_pkg_exact_thread = 0;
     size_t exact_pkg_wildcard_thread = 0;
     size_t exact_pkg_main_thread = 0;
@@ -468,69 +519,19 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     size_t wildcard_pkg_wildcard_thread = 0;
     size_t default_pkg_main_thread = 0;
     size_t default_rules = 0;
-    
-    // 存储每个优先级的规则列表
-    char** rule_details[9];
-    int detail_count[9] = {0};
-    
-    // 初始化指针数组
-    for (int i = 0; i < 9; i++) {
-        rule_details[i] = NULL;
-    }
 
+    // 第一遍：统计数量
     for (size_t i = 0; i < num_rules; i++) {
         int prio = rules[i].priority;
-        char detail[512];
-        
-        // 格式化显示：包名{线程名}
-        if (rules[i].thread[0] == '\0') {
-            snprintf(detail, sizeof(detail), "%s{}", rules[i].pkg);
-        } else {
-            snprintf(detail, sizeof(detail), "%s{%s}", rules[i].pkg, rules[i].thread);
-        }
-        
-        char* detail_copy = strdup(detail);
-        if (!detail_copy) continue;
-        
-        if (prio == 100000) {
-            exact_pkg_exact_thread++;
-            rule_details[0] = realloc(rule_details[0], detail_count[0] * sizeof(char*));
-            rule_details[0][detail_count[0]++] = detail_copy;
-        } else if (prio == 80000) {
-            exact_pkg_wildcard_thread++;
-            rule_details[1] = realloc(rule_details[1], detail_count[1] * sizeof(char*));
-            rule_details[1][detail_count[1]++] = detail_copy;
-        } else if (prio == 70000) {
-            exact_pkg_main_thread++;
-            rule_details[2] = realloc(rule_details[2], detail_count[2] * sizeof(char*));
-            rule_details[2][detail_count[2]++] = detail_copy;
-        } else if (prio == 60000) {
-            exact_pkg_no_thread++;
-            rule_details[3] = realloc(rule_details[3], detail_count[3] * sizeof(char*));
-            rule_details[3][detail_count[3]++] = detail_copy;
-        } else if (prio == 40000) {
-            wildcard_pkg_exact_thread++;
-            rule_details[4] = realloc(rule_details[4], detail_count[4] * sizeof(char*));
-            rule_details[4][detail_count[4]++] = detail_copy;
-        } else if (prio == 30000) {
-            wildcard_pkg_main_thread++;
-            rule_details[5] = realloc(rule_details[5], detail_count[5] * sizeof(char*));
-            rule_details[5][detail_count[5]++] = detail_copy;
-        } else if (prio == 20000) {
-            wildcard_pkg_wildcard_thread++;
-            rule_details[6] = realloc(rule_details[6], detail_count[6] * sizeof(char*));
-            rule_details[6][detail_count[6]++] = detail_copy;
-        } else if (prio == 15000) {
-            default_pkg_main_thread++;
-            rule_details[7] = realloc(rule_details[7], detail_count[7] * sizeof(char*));
-            rule_details[7][detail_count[7]++] = detail_copy;
-        } else if (prio == -1 || prio == 0) {
-            default_rules++;
-            rule_details[8] = realloc(rule_details[8], detail_count[8] * sizeof(char*));
-            rule_details[8][detail_count[8]++] = detail_copy;
-        } else {
-            free(detail_copy);
-        }
+        if (prio == 100000) exact_pkg_exact_thread++;
+        else if (prio == 80000) exact_pkg_wildcard_thread++;
+        else if (prio == 70000) exact_pkg_main_thread++;
+        else if (prio == 60000) exact_pkg_no_thread++;
+        else if (prio == 40000) wildcard_pkg_exact_thread++;
+        else if (prio == 30000) wildcard_pkg_main_thread++;
+        else if (prio == 20000) wildcard_pkg_wildcard_thread++;
+        else if (prio == 15000) default_pkg_main_thread++;
+        else if (prio == -1 || prio == 0) default_rules++;
     }
 
     LOG_I("─────────────────────────────────────────────────────────────\n");
@@ -538,88 +539,144 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     LOG_I("  总规则数: %zu 条\n", num_rules);
     LOG_I("\n");
     
+    // 辅助函数：将 cpu_set_t 转为字符串
+    char cpu_str[256];
+    
+    // 第二遍：按类型分组输出
     if (exact_pkg_exact_thread > 0) {
         LOG_I("  📌 精确包名+精确线程 (优先级 100000): %zu 条\n", exact_pkg_exact_thread);
-        for (int i = 0; i < detail_count[0]; i++) {
-            LOG_I("      %s\n", rule_details[0][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 100000) {
+                // 将 CPU 集合转为字符串
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (exact_pkg_wildcard_thread > 0) {
         LOG_I("  📌 精确包名+线程通配符 (优先级 80000): %zu 条\n", exact_pkg_wildcard_thread);
-        for (int i = 0; i < detail_count[1]; i++) {
-            LOG_I("      %s\n", rule_details[1][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 80000) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (exact_pkg_main_thread > 0) {
         LOG_I("  📌 精确包名+主线程(**) (优先级 70000): %zu 条\n", exact_pkg_main_thread);
-        for (int i = 0; i < detail_count[2]; i++) {
-            LOG_I("      %s\n", rule_details[2][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 70000) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (exact_pkg_no_thread > 0) {
         LOG_I("  📌 精确包名（无线程） (优先级 60000): %zu 条\n", exact_pkg_no_thread);
-        for (int i = 0; i < detail_count[3]; i++) {
-            LOG_I("      %s\n", rule_details[3][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 60000) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (wildcard_pkg_exact_thread > 0) {
         LOG_I("  📌 包名通配符+精确线程 (优先级 40000): %zu 条\n", wildcard_pkg_exact_thread);
-        for (int i = 0; i < detail_count[4]; i++) {
-            LOG_I("      %s\n", rule_details[4][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 40000) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (wildcard_pkg_main_thread > 0) {
         LOG_I("  📌 包名通配符+主线程(**) (优先级 30000): %zu 条\n", wildcard_pkg_main_thread);
-        for (int i = 0; i < detail_count[5]; i++) {
-            LOG_I("      %s\n", rule_details[5][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 30000) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (wildcard_pkg_wildcard_thread > 0) {
         LOG_I("  📌 包名通配符+线程通配符 (优先级 20000): %zu 条\n", wildcard_pkg_wildcard_thread);
-        for (int i = 0; i < detail_count[6]; i++) {
-            LOG_I("      %s\n", rule_details[6][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 20000) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (default_pkg_main_thread > 0) {
         LOG_I("  📌 默认包名+主线程(**) (优先级 15000): %zu 条\n", default_pkg_main_thread);
-        for (int i = 0; i < detail_count[7]; i++) {
-            LOG_I("      %s\n", rule_details[7][i]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == 15000) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
+            }
         }
         LOG_I("\n");
     }
     
     if (default_rules > 0) {
         LOG_I("  📌 默认规则 (优先级 -1): %zu 条\n", default_rules);
-        for (int i = 0; i < detail_count[8]; i++) {
-            LOG_I("      %s\n", rule_details[8][i]);
-        }
-        LOG_I("\n");
-    }
-    
-    // 释放内存
-    for (int i = 0; i < 9; i++) {
-        for (int j = 0; j < detail_count[i]; j++) {
-            if (rule_details[i][j]) {
-                free(rule_details[i][j]);
+        for (size_t i = 0; i < num_rules; i++) {
+            if (rules[i].priority == -1 || rules[i].priority == 0) {
+                cpu_set_to_str_r(&rules[i].cpus, cpu_str, sizeof(cpu_str));
+                if (rules[i].thread[0] == '\0') {
+                    LOG_I("      %s{} → %s\n", rules[i].pkg, cpu_str);
+                } else {
+                    LOG_I("      %s{%s} → %s\n", rules[i].pkg, rules[i].thread, cpu_str);
+                }
             }
         }
-        if (rule_details[i]) {
-            free(rule_details[i]);
-        }
+        LOG_I("\n");
     }
     
     LOG_I("═══════════════════════════════════════════════════════════\n");
