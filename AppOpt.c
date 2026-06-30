@@ -469,49 +469,67 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     size_t default_pkg_main_thread = 0;
     size_t default_rules = 0;
     
-    // 详细统计：存储每个优先级的规则列表（用于调试）
-    char* rule_details[9][128];  // 最多9个优先级，每个最多128条
+    // 存储每个优先级的规则列表
+    char** rule_details[9];
     int detail_count[9] = {0};
     
-    // 清空详细列表
+    // 初始化指针数组
     for (int i = 0; i < 9; i++) {
-        for (int j = 0; j < 128; j++) {
-            rule_details[i][j] = NULL;
-        }
+        rule_details[i] = NULL;
     }
 
     for (size_t i = 0; i < num_rules; i++) {
         int prio = rules[i].priority;
-        char detail[256];
-        snprintf(detail, sizeof(detail), "%s{%s}", rules[i].pkg, rules[i].thread);
+        char detail[512];
+        
+        // 格式化显示：包名{线程名}
+        if (rules[i].thread[0] == '\0') {
+            snprintf(detail, sizeof(detail), "%s{}", rules[i].pkg);
+        } else {
+            snprintf(detail, sizeof(detail), "%s{%s}", rules[i].pkg, rules[i].thread);
+        }
+        
+        char* detail_copy = strdup(detail);
+        if (!detail_copy) continue;
         
         if (prio == 100000) {
             exact_pkg_exact_thread++;
-            if (detail_count[0] < 128) rule_details[0][detail_count[0]++] = strdup(detail);
+            rule_details[0] = realloc(rule_details[0], detail_count[0] * sizeof(char*));
+            rule_details[0][detail_count[0]++] = detail_copy;
         } else if (prio == 80000) {
             exact_pkg_wildcard_thread++;
-            if (detail_count[1] < 128) rule_details[1][detail_count[1]++] = strdup(detail);
+            rule_details[1] = realloc(rule_details[1], detail_count[1] * sizeof(char*));
+            rule_details[1][detail_count[1]++] = detail_copy;
         } else if (prio == 70000) {
             exact_pkg_main_thread++;
-            if (detail_count[2] < 128) rule_details[2][detail_count[2]++] = strdup(detail);
+            rule_details[2] = realloc(rule_details[2], detail_count[2] * sizeof(char*));
+            rule_details[2][detail_count[2]++] = detail_copy;
         } else if (prio == 60000) {
             exact_pkg_no_thread++;
-            if (detail_count[3] < 128) rule_details[3][detail_count[3]++] = strdup(detail);
+            rule_details[3] = realloc(rule_details[3], detail_count[3] * sizeof(char*));
+            rule_details[3][detail_count[3]++] = detail_copy;
         } else if (prio == 40000) {
             wildcard_pkg_exact_thread++;
-            if (detail_count[4] < 128) rule_details[4][detail_count[4]++] = strdup(detail);
+            rule_details[4] = realloc(rule_details[4], detail_count[4] * sizeof(char*));
+            rule_details[4][detail_count[4]++] = detail_copy;
         } else if (prio == 30000) {
             wildcard_pkg_main_thread++;
-            if (detail_count[5] < 128) rule_details[5][detail_count[5]++] = strdup(detail);
+            rule_details[5] = realloc(rule_details[5], detail_count[5] * sizeof(char*));
+            rule_details[5][detail_count[5]++] = detail_copy;
         } else if (prio == 20000) {
             wildcard_pkg_wildcard_thread++;
-            if (detail_count[6] < 128) rule_details[6][detail_count[6]++] = strdup(detail);
+            rule_details[6] = realloc(rule_details[6], detail_count[6] * sizeof(char*));
+            rule_details[6][detail_count[6]++] = detail_copy;
         } else if (prio == 15000) {
             default_pkg_main_thread++;
-            if (detail_count[7] < 128) rule_details[7][detail_count[7]++] = strdup(detail);
+            rule_details[7] = realloc(rule_details[7], detail_count[7] * sizeof(char*));
+            rule_details[7][detail_count[7]++] = detail_copy;
         } else if (prio == -1 || prio == 0) {
             default_rules++;
-            if (detail_count[8] < 128) rule_details[8][detail_count[8]++] = strdup(detail);
+            rule_details[8] = realloc(rule_details[8], detail_count[8] * sizeof(char*));
+            rule_details[8][detail_count[8]++] = detail_copy;
+        } else {
+            free(detail_copy);
         }
     }
 
@@ -522,101 +540,85 @@ static void validate_rule_priorities(AffinityRule* rules, size_t num_rules) {
     
     if (exact_pkg_exact_thread > 0) {
         LOG_I("  📌 精确包名+精确线程 (优先级 100000): %zu 条\n", exact_pkg_exact_thread);
-        for (int i = 0; i < detail_count[0] && i < 5; i++) {
+        for (int i = 0; i < detail_count[0]; i++) {
             LOG_I("      %s\n", rule_details[0][i]);
         }
-        if (detail_count[0] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[0] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (exact_pkg_wildcard_thread > 0) {
         LOG_I("  📌 精确包名+线程通配符 (优先级 80000): %zu 条\n", exact_pkg_wildcard_thread);
-        for (int i = 0; i < detail_count[1] && i < 5; i++) {
+        for (int i = 0; i < detail_count[1]; i++) {
             LOG_I("      %s\n", rule_details[1][i]);
         }
-        if (detail_count[1] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[1] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (exact_pkg_main_thread > 0) {
         LOG_I("  📌 精确包名+主线程(**) (优先级 70000): %zu 条\n", exact_pkg_main_thread);
-        for (int i = 0; i < detail_count[2] && i < 5; i++) {
+        for (int i = 0; i < detail_count[2]; i++) {
             LOG_I("      %s\n", rule_details[2][i]);
         }
-        if (detail_count[2] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[2] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (exact_pkg_no_thread > 0) {
         LOG_I("  📌 精确包名（无线程） (优先级 60000): %zu 条\n", exact_pkg_no_thread);
-        for (int i = 0; i < detail_count[3] && i < 5; i++) {
+        for (int i = 0; i < detail_count[3]; i++) {
             LOG_I("      %s\n", rule_details[3][i]);
         }
-        if (detail_count[3] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[3] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (wildcard_pkg_exact_thread > 0) {
         LOG_I("  📌 包名通配符+精确线程 (优先级 40000): %zu 条\n", wildcard_pkg_exact_thread);
-        for (int i = 0; i < detail_count[4] && i < 5; i++) {
+        for (int i = 0; i < detail_count[4]; i++) {
             LOG_I("      %s\n", rule_details[4][i]);
         }
-        if (detail_count[4] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[4] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (wildcard_pkg_main_thread > 0) {
         LOG_I("  📌 包名通配符+主线程(**) (优先级 30000): %zu 条\n", wildcard_pkg_main_thread);
-        for (int i = 0; i < detail_count[5] && i < 5; i++) {
+        for (int i = 0; i < detail_count[5]; i++) {
             LOG_I("      %s\n", rule_details[5][i]);
         }
-        if (detail_count[5] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[5] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (wildcard_pkg_wildcard_thread > 0) {
         LOG_I("  📌 包名通配符+线程通配符 (优先级 20000): %zu 条\n", wildcard_pkg_wildcard_thread);
-        for (int i = 0; i < detail_count[6] && i < 5; i++) {
+        for (int i = 0; i < detail_count[6]; i++) {
             LOG_I("      %s\n", rule_details[6][i]);
         }
-        if (detail_count[6] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[6] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (default_pkg_main_thread > 0) {
         LOG_I("  📌 默认包名+主线程(**) (优先级 15000): %zu 条\n", default_pkg_main_thread);
-        for (int i = 0; i < detail_count[7] && i < 5; i++) {
+        for (int i = 0; i < detail_count[7]; i++) {
             LOG_I("      %s\n", rule_details[7][i]);
         }
-        if (detail_count[7] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[7] - 5);
-        }
+        LOG_I("\n");
     }
     
     if (default_rules > 0) {
         LOG_I("  📌 默认规则 (优先级 -1): %zu 条\n", default_rules);
-        for (int i = 0; i < detail_count[8] && i < 5; i++) {
+        for (int i = 0; i < detail_count[8]; i++) {
             LOG_I("      %s\n", rule_details[8][i]);
         }
-        if (detail_count[8] > 5) {
-            LOG_I("      ... 还有 %d 条\n", detail_count[8] - 5);
-        }
+        LOG_I("\n");
     }
     
-    // 释放 strdup 分配的内存
+    // 释放内存
     for (int i = 0; i < 9; i++) {
-        for (int j = 0; j < 128; j++) {
+        for (int j = 0; j < detail_count[i]; j++) {
             if (rule_details[i][j]) {
                 free(rule_details[i][j]);
-                rule_details[i][j] = NULL;
             }
+        }
+        if (rule_details[i]) {
+            free(rule_details[i]);
         }
     }
     
@@ -952,7 +954,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
     size_t wildcard_pkg_wildcard_thread = 0;
     size_t default_pkg_main_thread = 0;
     size_t default_rules = 0;
-    
+
     for (size_t i = 0; i < num_rules; i++) {
         int prio = rules[i].priority;
         if (prio == 100000) {
@@ -975,7 +977,7 @@ static AppConfig* load_config(const char* config_file, const CpuTopology* topo, 
             default_rules++;
         }
     }
-    
+
     // 在 load_config 函数末尾，只保留简要总结
     LOG_I("✅ 配置文件加载完成: %zu 条规则, %zu 个应用包\n", num_rules, num_pkgs);
     // ===================================
@@ -1200,9 +1202,9 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                 // ⭐ 核心：选择最高优先级规则
                 // ============================
                 for (size_t i = 0; i < proc->num_thread_rules; i++) {
-                
+
                     AffinityRule* r = proc->thread_rules[i];
-                
+
                     // ⭐ 特殊处理：** 匹配主线程（线程名等于包名）
                     if (strcmp(r->thread, "**") == 0) {
                         // 检查当前线程名是否等于包名
@@ -1213,7 +1215,7 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                         }
                         continue;
                     }
-                
+
                     // 无线程规则匹配所有线程
                     if (r->thread[0] == '\0' || strcmp(r->thread, "*") == 0) {
                         if (!best || r->priority > best->priority) {
@@ -1221,12 +1223,12 @@ static void proc_collect(const AppConfig* cfg, ProcCache* cache, size_t* count)
                         }
                         continue;
                     }
-                
+
                     // 普通规则：匹配指定的线程名
                     if (fnmatch(r->thread, tname, 0) != 0) {
                         continue;
                     }
-                
+
                     if (!best || r->priority > best->priority) {
                         best = r;
                     }
