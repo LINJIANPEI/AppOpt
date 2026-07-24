@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::sync::Mutex;
 
-pub const BASE_CPUSET: &str = "/dev/cpuset/AppOpt";
+pub const BASE_CPUSET: &str = "/dev/cpuset/Linlin";
 pub const MAX_PKG_LEN: usize = 128;
 pub const MAX_THREAD_LEN: usize = 32;
 pub const CPU_SETSIZE: usize = 1024;
