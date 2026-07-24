@@ -35,6 +35,16 @@ jobs:
           targets: aarch64-linux-android
 
 
+      - name: 配置 Android linker
+        run: |
+          mkdir -p ~/.cargo
+
+          cat > ~/.cargo/config.toml <<EOF
+          [target.aarch64-linux-android]
+          linker = "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
+          EOF
+
+
       - name: Rust 缓存
         uses: Swatinem/rust-cache@v2
 
@@ -78,7 +88,8 @@ jobs:
       - name: 安装 Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rust-src
+          components:
+            rust-src
 
 
       - name: Rust 缓存
@@ -89,7 +100,7 @@ jobs:
         run: cargo install bpf-linker
 
 
-      - name: 配置 eBPF
+      - name: 配置 eBPF linker
         run: |
           mkdir -p ~/.cargo
 
@@ -172,7 +183,6 @@ jobs:
 
 
           chmod +x release/*
-
           chmod +x release/package/AppOpt-aarch64/*
 
 
@@ -189,18 +199,10 @@ jobs:
         run: |
           cat > release/VERSION.txt <<EOF
           项目: AppOpt
-
-          版本:
-          ${{ steps.version.outputs.tag_name }}
-
-          构建编号:
-          ${{ github.run_number }}
-
-          提交:
-          ${{ github.sha }}
-
-          时间:
-          $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          版本: ${{ steps.version.outputs.tag_name }}
+          构建编号: ${{ github.run_number }}
+          提交: ${{ github.sha }}
+          时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           EOF
 
 
@@ -218,12 +220,12 @@ jobs:
           body: |
             ## 🚀 AppOpt 自动构建版本
 
-            ### 包含文件
+            ### 文件
 
-            - AppOpt Android ARM64 用户程序
-            - AppOpt eBPF 程序
+            - AppOpt Android ARM64
+            - AppOpt eBPF
 
-            ### 压缩包内容
+            ### 压缩包
 
             ```
             AppOpt-aarch64/
