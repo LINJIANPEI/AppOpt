@@ -21,11 +21,6 @@ jobs:
           targets: aarch64-unknown-linux-musl
           components: rust-src
       
-      - name: 验证环境
-        run: |
-          rustc --version
-          cargo --version
-      
       - name: 安装系统依赖
         run: |
           sudo apt-get update
@@ -36,9 +31,6 @@ jobs:
             gcc-aarch64-linux-gnu \
             musl-tools
       
-      # ==========================================
-      # 关键：安装 bpf-linker
-      # ==========================================
       - name: 安装 bpf-linker
         run: cargo install bpf-linker
       
@@ -46,7 +38,7 @@ jobs:
         run: |
           echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar" >> $GITHUB_ENV
-          echo "BPF_LINKER=$(which bpf-linker)" >> $GITHUB_ENV
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> $GITHUB_ENV
       
       - name: 更新 Cargo.lock
         run: |
@@ -62,6 +54,15 @@ jobs:
           RUSTFLAGS="-Zunstable-options -C panic=immediate-abort -C force-unwind-tables=no" \
             cargo build --release --target bpfel-unknown-none \
             -Z build-std="core,alloc"
+      
+      # ==========================================
+      # 修复类型错误
+      # ==========================================
+      - name: 修复 inotify 类型错误
+        run: |
+          sed -i 's/inotify_rm_watch(inotify_fd, inotify_wd as u32)/inotify_rm_watch(inotify_fd, inotify_wd as i32)/g' \
+            AppOpt/src/config.rs
+          echo "已修复 inotify_rm_watch 类型错误"
       
       - name: 编译主程序
         run: |
