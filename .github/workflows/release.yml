@@ -1,0 +1,98 @@
+name: 构建并发布 AppOpt
+
+on:
+  push:
+    tags:
+      - "v*" # 推送 v 开头的标签时触发
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  # ARM64 架构构建
+  build-arm64:
+    runs-on: ubuntu-22.04
+    name: 构建 ARM64 版本
+
+    steps:
+      - name: 检出源代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            llvm \
+            libelf-dev \
+            gcc-aarch64-linux-gnu \
+            musl-tools
+
+      - name: 设置交叉编译环境变量
+        run: |
+          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar" >> $GITHUB_ENV
+
+      - name: 查看目录结构（调试用）
+        run: |
+          echo "=== 当前目录 ==="
+          pwd
+          echo ""
+          echo "=== 目录内容 ==="
+          ls -la
+          echo ""
+          echo "=== AppOpt 目录 ==="
+          ls -la AppOpt/ || echo "AppOpt 目录不存在"
+          echo ""
+          echo "=== AppOpt-ebpf 目录 ==="
+          ls -la AppOpt-ebpf/ || echo "AppOpt-ebpf 目录不存在"
+
+      - name: 编译 eBPF 程序
+        run: |
+          cd AppOpt-ebpf
+          cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: 编译主程序
+        run: |
+          cd AppOpt
+          cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: 准备二进制文件
+        run: |
+          # 创建发布目录
+          mkdir -p release
+
+          # 复制主程序
+          cp AppOpt/target/aarch64-unknown-linux-musl/release/AppOpt release/
+
+          # 复制 eBPF 程序
+          cp AppOpt-ebpf/target/aarch64-unknown-linux-musl/release/AppOpt-ebpf release/
+
+          # 添加执行权限
+          chmod +x release/*
+
+          echo "=== 二进制文件信息 ==="
+          file release/*
+          echo ""
+          echo "=== 文件大小 ==="
+          ls -lh release/*
+
+      - name: 上传到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/AppOpt
+            release/AppOpt-ebpf
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建产物（供下载测试）
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppOpt-arm64
+          path: release/
