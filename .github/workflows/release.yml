@@ -15,8 +15,9 @@ jobs:
       - name: 检出源代码
         uses: actions/checkout@v4
       
-      - name: 安装 Rust
-        uses: dtolnay/rust-toolchain@stable
+      # 使用 nightly Rust
+      - name: 安装 Rust（nightly）
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: aarch64-unknown-linux-musl
       
@@ -35,18 +36,13 @@ jobs:
           echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar" >> $GITHUB_ENV
       
-      # ==========================================
-      # 关键：eBPF 程序编译为 BPF 字节码
-      # ==========================================
-      - name: 编译 eBPF 程序（BPF 字节码）
+      - name: 编译 eBPF 程序（使用 build-std）
         run: |
           cd AppOpt-ebpf
-          # 使用 bpfel-unknown-none 目标编译 eBPF
-          cargo build --release --target bpfel-unknown-none
+          cargo build --release --target bpfel-unknown-none \
+            -Z build-std="core" \
+            -Z build-std-features="panic_immediate_abort"
       
-      # ==========================================
-      # 主程序编译为 ARM64 可执行文件
-      # ==========================================
       - name: 编译主程序（ARM64）
         run: |
           cd AppOpt
@@ -55,13 +51,8 @@ jobs:
       - name: 准备二进制文件
         run: |
           mkdir -p release
-          
-          # 主程序（ARM64）
           cp AppOpt/target/aarch64-unknown-linux-musl/release/AppOpt release/
-          
-          # eBPF 程序（BPF 字节码）
           cp AppOpt-ebpf/target/bpfel-unknown-none/release/AppOpt-ebpf release/
-          
           chmod +x release/*
           
           echo "=== 二进制文件信息 ==="
