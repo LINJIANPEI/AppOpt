@@ -10,7 +10,7 @@ permissions:
 jobs:
 
   build-app:
-    name: 构建 AppOpt 用户程序
+    name: 构建 AppOpt ARM64 Android
     runs-on: ubuntu-latest
 
     defaults:
@@ -18,24 +18,47 @@ jobs:
         working-directory: AppOpt
 
     steps:
+
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装 Rust
+
+      - name: 安装 Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+
+      - name: 安装 Rust ARM64 Android
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
 
       - name: Rust 缓存
         uses: Swatinem/rust-cache@v2
 
+
       - name: 编译 AppOpt
-        run: cargo build --release
+        run: |
+          cargo build \
+            --release \
+            --target aarch64-linux-android
+
+
+      - name: 验证 AppOpt
+        run: |
+          ls -lh target/aarch64-linux-android/release/AppOpt
+          file target/aarch64-linux-android/release/AppOpt
+
 
       - name: 上传 AppOpt
         uses: actions/upload-artifact@v4
         with:
           name: AppOpt
-          path: AppOpt/target/release/AppOpt
+          path: AppOpt/target/aarch64-linux-android/release/AppOpt
           if-no-files-found: error
+
 
 
   build-ebpf:
@@ -47,19 +70,24 @@ jobs:
         working-directory: AppOpt-ebpf
 
     steps:
+
       - name: 拉取源码
         uses: actions/checkout@v4
+
 
       - name: 安装 Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
 
+
       - name: Rust 缓存
         uses: Swatinem/rust-cache@v2
 
+
       - name: 安装 bpf-linker
         run: cargo install bpf-linker
+
 
       - name: 配置 eBPF
         run: |
@@ -70,12 +98,20 @@ jobs:
           linker = "bpf-linker"
           EOF
 
+
       - name: 编译 AppOpt-ebpf
         run: |
           cargo build \
             --release \
             --target bpfel-unknown-none \
             -Z build-std=core
+
+
+      - name: 验证 eBPF
+        run: |
+          ls -lh target/bpfel-unknown-none/release/AppOpt-ebpf
+          file target/bpfel-unknown-none/release/AppOpt-ebpf
+
 
       - name: 上传 eBPF
         uses: actions/upload-artifact@v4
@@ -85,6 +121,7 @@ jobs:
           if-no-files-found: error
 
 
+
   create-release:
     name: 创建发布版本
     runs-on: ubuntu-latest
@@ -92,6 +129,7 @@ jobs:
     needs:
       - build-app
       - build-ebpf
+
 
     steps:
 
@@ -108,71 +146,82 @@ jobs:
           echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
 
 
+      - name: 检查产物
+        run: |
+          ls -lhR artifacts/
+
+
       - name: 准备发布文件
         run: |
           mkdir -p release
 
-          # 单独文件
           cp artifacts/AppOpt/AppOpt \
-            release/AppOpt
+             release/AppOpt
 
           cp artifacts/AppOpt-ebpf/AppOpt-ebpf \
-            release/AppOpt-ebpf
+             release/AppOpt-ebpf
 
 
-          # 创建压缩包目录
           mkdir -p release/package/AppOpt-aarch64
 
-          cp artifacts/AppOpt/AppOpt \
-            release/package/AppOpt-aarch64/AppOpt
+          cp release/AppOpt \
+             release/package/AppOpt-aarch64/AppOpt
 
-          cp artifacts/AppOpt-ebpf/AppOpt-ebpf \
-            release/package/AppOpt-aarch64/AppOpt-ebpf
+          cp release/AppOpt-ebpf \
+             release/package/AppOpt-aarch64/AppOpt-ebpf
 
 
-          # 添加执行权限
-          chmod +x release/AppOpt
-          chmod +x release/AppOpt-ebpf
+          chmod +x release/*
+
           chmod +x release/package/AppOpt-aarch64/*
 
 
-          # 创建压缩包
           tar -czvf \
             release/AppOpt-aarch64.tar.gz \
             -C release/package \
             AppOpt-aarch64
 
 
-          # 查看结果
-          ls -lh release
+          ls -lh release/
 
 
       - name: 创建版本信息
         run: |
           cat > release/VERSION.txt <<EOF
           项目: AppOpt
-          版本: ${{ steps.version.outputs.tag_name }}
-          构建编号: ${{ github.run_number }}
-          提交: ${{ github.sha }}
-          时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          版本:
+          ${{ steps.version.outputs.tag_name }}
+
+          构建编号:
+          ${{ github.run_number }}
+
+          提交:
+          ${{ github.sha }}
+
+          时间:
+          $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           EOF
+
 
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
 
         with:
+
           tag_name: ${{ steps.version.outputs.tag_name }}
+
           name: "AppOpt ${{ steps.version.outputs.tag_name }}"
+
 
           body: |
             ## 🚀 AppOpt 自动构建版本
 
             ### 包含文件
 
-            - AppOpt 用户程序
+            - AppOpt Android ARM64 用户程序
             - AppOpt eBPF 程序
-            - AppOpt ARM64 压缩包
 
             ### 压缩包内容
 
@@ -193,6 +242,7 @@ jobs:
             release/AppOpt-ebpf
             release/AppOpt-aarch64.tar.gz
             release/VERSION.txt
+
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
