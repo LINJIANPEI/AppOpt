@@ -1,4 +1,4 @@
-name: 构建 AppOpt
+name: 构建 AppOpt rust
 
 on:
   workflow_dispatch:
