@@ -36,10 +36,17 @@ jobs:
             gcc-aarch64-linux-gnu \
             musl-tools
       
+      # ==========================================
+      # 关键：安装 bpf-linker
+      # ==========================================
+      - name: 安装 bpf-linker
+        run: cargo install bpf-linker
+      
       - name: 设置交叉编译环境变量
         run: |
           echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar" >> $GITHUB_ENV
+          echo "BPF_LINKER=$(which bpf-linker)" >> $GITHUB_ENV
       
       - name: 更新 Cargo.lock
         run: |
@@ -49,9 +56,6 @@ jobs:
           cd AppOpt
           [ -f Cargo.lock ] && cargo update || cargo generate-lockfile
       
-      # ==========================================
-      # 方案1：RUSTFLAGS 中包含 -Zunstable-options
-      # ==========================================
       - name: 编译 eBPF 程序
         run: |
           cd AppOpt-ebpf
