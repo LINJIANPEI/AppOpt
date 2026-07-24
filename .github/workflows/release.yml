@@ -64,6 +64,7 @@ jobs:
       - name: 配置 eBPF
         run: |
           mkdir -p ~/.cargo
+
           cat > ~/.cargo/config.toml <<EOF
           [target.bpfel-unknown-none]
           linker = "bpf-linker"
@@ -111,10 +112,39 @@ jobs:
         run: |
           mkdir -p release
 
-          cp artifacts/AppOpt/AppOpt release/AppOpt
-          cp artifacts/AppOpt-ebpf/AppOpt-ebpf release/AppOpt-ebpf
+          # 单独文件
+          cp artifacts/AppOpt/AppOpt \
+            release/AppOpt
 
-          chmod +x release/*
+          cp artifacts/AppOpt-ebpf/AppOpt-ebpf \
+            release/AppOpt-ebpf
+
+
+          # 创建压缩包目录
+          mkdir -p release/package/AppOpt-aarch64
+
+          cp artifacts/AppOpt/AppOpt \
+            release/package/AppOpt-aarch64/AppOpt
+
+          cp artifacts/AppOpt-ebpf/AppOpt-ebpf \
+            release/package/AppOpt-aarch64/AppOpt-ebpf
+
+
+          # 添加执行权限
+          chmod +x release/AppOpt
+          chmod +x release/AppOpt-ebpf
+          chmod +x release/package/AppOpt-aarch64/*
+
+
+          # 创建压缩包
+          tar -czvf \
+            release/AppOpt-aarch64.tar.gz \
+            -C release/package \
+            AppOpt-aarch64
+
+
+          # 查看结果
+          ls -lh release
 
 
       - name: 创建版本信息
@@ -142,15 +172,27 @@ jobs:
 
             - AppOpt 用户程序
             - AppOpt eBPF 程序
+            - AppOpt ARM64 压缩包
+
+            ### 压缩包内容
+
+            ```
+            AppOpt-aarch64/
+            ├── AppOpt
+            └── AppOpt-ebpf
+            ```
 
             ### 构建信息
 
             - 构建编号: #${{ github.run_number }}
             - 提交: `${{ github.sha }}`
 
+
           files: |
             release/AppOpt
             release/AppOpt-ebpf
+            release/AppOpt-aarch64.tar.gz
+            release/VERSION.txt
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
