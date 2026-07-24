@@ -18,7 +18,7 @@ jobs:
       - name: 检出源代码
         uses: actions/checkout@v4
       
-      - name: 安装 Rust
+      - name: 安装 Rust（nightly）
         uses: dtolnay/rust-toolchain@nightly
         with:
           targets: aarch64-unknown-linux-musl
@@ -50,9 +50,11 @@ jobs:
       - name: 编译 eBPF 程序
         run: |
           cd AppOpt-ebpf
+          # 使用新的 panic 策略
           cargo build --release --target bpfel-unknown-none \
             -Z build-std="core,alloc" \
-            -Z build-std-features="panic_immediate_abort"
+            -Z unstable-options \
+            -C panic=immediate-abort
       
       - name: 编译主程序
         run: |
@@ -65,7 +67,11 @@ jobs:
           cp AppOpt/target/aarch64-unknown-linux-musl/release/AppOpt release/
           cp AppOpt-ebpf/target/bpfel-unknown-none/release/AppOpt-ebpf release/
           chmod +x release/*
+          
+          echo "=== 二进制文件信息 ==="
           file release/*
+          echo ""
+          echo "=== 文件大小 ==="
           ls -lh release/*
       
       - name: 上传到 Release
