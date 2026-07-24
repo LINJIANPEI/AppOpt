@@ -1,100 +1,60 @@
-name: 构建并发布 AppOpt
+name: Build AppOpt
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+      - master
+  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build-arm64:
-    runs-on: ubuntu-22.04
-    name: 构建 ARM64 版本
-    
+  build:
+    runs-on: ubuntu-latest
+
     steps:
-      - name: 检出源代码
+      - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: 安装 Rust（nightly）
-        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-musl
-          components: rust-src
-      
-      - name: 安装系统依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            clang \
-            llvm \
-            libelf-dev \
-            gcc-aarch64-linux-gnu \
-            musl-tools
-      
-      - name: 安装 bpf-linker
+          targets: bpfel-unknown-none
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install bpf-linker
         run: cargo install bpf-linker
-      
-      - name: 设置交叉编译环境变量
+
+      - name: Configure Cargo
         run: |
-          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar" >> $GITHUB_ENV
-          echo "PATH=$HOME/.cargo/bin:$PATH" >> $GITHUB_ENV
-      
-      - name: 更新 Cargo.lock
-        run: |
-          cd AppOpt-ebpf
-          [ -f Cargo.lock ] && cargo update || cargo generate-lockfile
-          cd ..
-          cd AppOpt
-          [ -f Cargo.lock ] && cargo update || cargo generate-lockfile
-      
-      - name: 编译 eBPF 程序
-        run: |
-          cd AppOpt-ebpf
-          RUSTFLAGS="-Zunstable-options -C panic=immediate-abort -C force-unwind-tables=no" \
-            cargo build --release --target bpfel-unknown-none \
-            -Z build-std="core,alloc"
-      
-      # ==========================================
-      # 修复类型错误
-      # ==========================================
-      - name: 修复 inotify 类型错误
-        run: |
-          sed -i 's/inotify_rm_watch(inotify_fd, inotify_wd as u32)/inotify_rm_watch(inotify_fd, inotify_wd as i32)/g' \
-            AppOpt/src/config.rs
-          echo "已修复 inotify_rm_watch 类型错误"
-      
-      - name: 编译主程序
-        run: |
-          cd AppOpt
-          cargo build --release --target aarch64-unknown-linux-musl
-      
-      - name: 准备二进制文件
-        run: |
-          mkdir -p release
-          cp AppOpt/target/aarch64-unknown-linux-musl/release/AppOpt release/
-          cp AppOpt-ebpf/target/bpfel-unknown-none/release/AppOpt-ebpf release/
-          chmod +x release/*
-          
-          echo "=== 二进制文件信息 ==="
-          file release/*
-          echo ""
-          echo "=== 文件大小 ==="
-          ls -lh release/*
-      
-      - name: 上传到 Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/AppOpt
-            release/AppOpt-ebpf
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: 上传构建产物
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml <<EOF
+          [target.bpfel-unknown-none]
+          linker = "bpf-linker"
+          EOF
+
+      - name: Build AppOpt
+        run: cargo build --release -p AppOpt
+
+      - name: Build AppOpt-ebpf
+        run: cargo build --release -p AppOpt-ebpf --target bpfel-unknown-none
+
+      - name: Upload AppOpt
         uses: actions/upload-artifact@v4
         with:
-          name: AppOpt-arm64
-          path: release/
+          name: AppOpt
+          path: target/release/AppOpt
+
+      - name: Upload AppOpt-ebpf
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppOpt-ebpf
+          path: target/bpfel-unknown-none/release/AppOpt-ebpf
