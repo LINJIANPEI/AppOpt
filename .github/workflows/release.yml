@@ -1,63 +1,156 @@
-create-release:
-  name: 创建发布版本
-  runs-on: ubuntu-latest
-  needs:
-    - build-app
-    - build-ebpf
+name: 构建 AppOpt
 
-  steps:
-    - uses: actions/checkout@v4
+on:
+  workflow_dispatch:
 
-    - name: 下载编译产物
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts/
+permissions:
+  contents: write
 
-    - name: 生成版本标签
-      id: version
-      run: |
-        TIME=$(date -u '+%Y%m%d-%H%M%S')
 
-        if [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
-          TAG="pre-${TIME}"
-        else
-          TAG="build-${TIME}"
-        fi
+jobs:
 
-        echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+  build-app:
+    name: 构建 AppOpt 用户程序
+    runs-on: ubuntu-latest
 
-    - name: 准备发布文件
-      run: |
-        mkdir -p release
+    defaults:
+      run:
+        working-directory: AppOpt
 
-        cp artifacts/AppOpt/AppOpt release/AppOpt
-        cp artifacts/AppOpt-ebpf/AppOpt-ebpf release/AppOpt-ebpf
+    steps:
+      - name: 拉取源码
+        uses: actions/checkout@v4
 
-        chmod +x release/*
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
 
-    - name: 创建 GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.version.outputs.tag_name }}
-        name: "AppOpt ${{ steps.version.outputs.tag_name }}"
-        prerelease: ${{ github.event.inputs.prerelease }}
+      - name: Rust 缓存
+        uses: Swatinem/rust-cache@v2
 
-        body: |
-          ## 🚀 AppOpt 自动构建版本
+      - name: 编译 AppOpt
+        run: cargo build --release
 
-          ### 包含文件
+      - name: 上传 AppOpt
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppOpt
+          path: AppOpt/target/release/AppOpt
+          if-no-files-found: error
 
-          - AppOpt 用户程序
-          - AppOpt eBPF 程序
 
-          ### 构建信息
+  build-ebpf:
+    name: 构建 AppOpt eBPF 程序
+    runs-on: ubuntu-latest
 
-          - 构建编号: #${{ github.run_number }}
-          - 提交: `${{ github.sha }}`
+    defaults:
+      run:
+        working-directory: AppOpt-ebpf
 
-        files: |
-          release/AppOpt
-          release/AppOpt-ebpf
+    steps:
+      - name: 拉取源码
+        uses: actions/checkout@v4
 
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 安装 Rust Nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Rust 缓存
+        uses: Swatinem/rust-cache@v2
+
+      - name: 安装 bpf-linker
+        run: cargo install bpf-linker
+
+      - name: 配置 eBPF
+        run: |
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml <<EOF
+          [target.bpfel-unknown-none]
+          linker = "bpf-linker"
+          EOF
+
+      - name: 编译 AppOpt-ebpf
+        run: |
+          cargo build \
+            --release \
+            --target bpfel-unknown-none \
+            -Z build-std=core
+
+      - name: 上传 eBPF
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppOpt-ebpf
+          path: AppOpt-ebpf/target/bpfel-unknown-none/release/AppOpt-ebpf
+          if-no-files-found: error
+
+
+  create-release:
+    name: 创建发布版本
+    runs-on: ubuntu-latest
+
+    needs:
+      - build-app
+      - build-ebpf
+
+    steps:
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+
+      - name: 生成版本标签
+        id: version
+        run: |
+          TAG="build-$(date -u '+%Y%m%d-%H%M%S')"
+          echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+
+
+      - name: 准备发布文件
+        run: |
+          mkdir -p release
+
+          cp artifacts/AppOpt/AppOpt release/AppOpt
+          cp artifacts/AppOpt-ebpf/AppOpt-ebpf release/AppOpt-ebpf
+
+          chmod +x release/*
+
+
+      - name: 创建版本信息
+        run: |
+          cat > release/VERSION.txt <<EOF
+          项目: AppOpt
+          版本: ${{ steps.version.outputs.tag_name }}
+          构建编号: ${{ github.run_number }}
+          提交: ${{ github.sha }}
+          时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          EOF
+
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: "AppOpt ${{ steps.version.outputs.tag_name }}"
+
+          body: |
+            ## 🚀 AppOpt 自动构建版本
+
+            ### 包含文件
+
+            - AppOpt 用户程序
+            - AppOpt eBPF 程序
+
+            ### 构建信息
+
+            - 构建编号: #${{ github.run_number }}
+            - 提交: `${{ github.sha }}`
+
+          files: |
+            release/AppOpt
+            release/AppOpt-ebpf
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
