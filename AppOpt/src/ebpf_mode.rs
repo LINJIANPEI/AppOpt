@@ -534,7 +534,7 @@ pub fn event_dispatch(event: &EbpfProcEvent, cfg: &AppConfig, state: &mut EbpfSt
             } else {
                 tid_comm(tid).unwrap_or_default()  // 子线程从 /proc 读
             };
-            event_apply(..., &real_comm, cfg, true);
+            event_apply(&mut state.cache, &mut state.bpf, tid, pid, &real_comm, cfg, true);
         }
 
         EBPF_EVENT_RENAME => {
