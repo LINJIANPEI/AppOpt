@@ -529,8 +529,12 @@ pub fn event_dispatch(event: &EbpfProcEvent, cfg: &AppConfig, state: &mut EbpfSt
         }
 
         EBPF_EVENT_FORK => {
-            // FORK 子线程继承父 comm 不可信，主线程 tid==pid comm 为自身
-            event_apply(&mut state.cache, &mut state.bpf, tid, pid, &comm, cfg, tid == pid);
+            let real_comm = if tid == pid {
+                comm.to_string()  // 主线程用 eBPF 的 comm
+            } else {
+                tid_comm(tid).unwrap_or_default()  // 子线程从 /proc 读
+            };
+            event_apply(..., &real_comm, cfg, true);
         }
 
         EBPF_EVENT_RENAME => {
