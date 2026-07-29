@@ -529,32 +529,15 @@ pub fn event_dispatch(event: &EbpfProcEvent, cfg: &AppConfig, state: &mut EbpfSt
         }
 
         EBPF_EVENT_FORK => {
-            // FORK 时先不处理，等 RENAME 或 EXEC 事件
-            // 只缓存父进程信息
-            if tid == pid {
-                // 主线程立即处理
-                event_apply(&mut state.cache, &mut state.bpf, tid, pid, &comm, cfg, true);
+            let real_comm = if tid == pid {
+                comm.to_string()  // 主线程用 eBPF 的 comm
             } else {
-                // 子线程先缓存待处理
-                state.cache.pending_threads.insert(tid, pid);
-            }
+                tid_comm(tid).unwrap_or_default()  // 子线程从 /proc 读
+            };
+            event_apply(&mut state.cache, &mut state.bpf, tid, pid, &real_comm, cfg, true);
         }
 
         EBPF_EVENT_RENAME => {
-            // RENAME 时线程名已确定，再处理
-            if let Some(pid) = state.cache.pending_threads.remove(&tid) {
-                let real_comm = tid_comm(tid).unwrap_or_default();
-                event_apply(
-                    &mut state.cache,
-                    &mut state.bpf,
-                    tid,
-                    pid,
-                    &real_comm,
-                    cfg,
-                    true,
-                );
-            }
-            // 也处理正常的 RENAME
             event_apply(&mut state.cache, &mut state.bpf, tid, pid, &comm, cfg, true);
         }
 
