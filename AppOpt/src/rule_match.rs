@@ -29,7 +29,19 @@ pub fn thread_affinity(
             if rule.pkg != pkg || rule.thread.is_empty() {
                 continue;
             }
-            if fnmatch_c(&rule.thread_pattern, thread) {
+            // ✅ 判断是否包含通配符或字符集
+            let is_pattern = rule.thread.contains('*') 
+                || rule.thread.contains('?') 
+                || rule.thread.contains('[') 
+                || rule.thread.contains(']');
+            
+            let is_match = if is_pattern {
+                fnmatch_c(&rule.thread_pattern, thread)
+            } else {
+                rule.thread == thread
+            };
+            
+            if is_match {
                 cpus.or(&rule.cpus);
                 matched = true;
             }
@@ -40,6 +52,7 @@ pub fn thread_affinity(
         }
     }
 
+    // ✅ 只有没匹配到线程规则时才走兜底
     if !matched {
         let mut fallback_seen = false;
         for rule in &cfg.rules {
