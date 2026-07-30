@@ -69,6 +69,7 @@ pub fn thread_affinity(
         }
     }
 
+    // ✅ 优先级：线程规则 > 兜底规则 > present_cpus（仅当 has_thread_rules 为 true）
     if cpus.count() == 0 {
         if cfg.has_thread_rules.contains(pkg) {
             return Some(AffinityResult {
