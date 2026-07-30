@@ -47,6 +47,7 @@ pub struct EbpfState {
     pub cache: ProcCache,
     pub wakeup_fd: RawFd,
     pub comm_capacity: u32,
+    pub pending_threads: HashMap<i32, i32>,  // ← 添加这行：tid -> pid
 }
 
 impl Drop for EbpfState {
@@ -376,6 +377,7 @@ pub fn ebpf_init() -> Option<EbpfState> {
         cache: ProcCache::new(),
         wakeup_fd,
         comm_capacity: capacity,
+        pending_threads: HashMap::new(),  // ← 添加这行
     })
 }
 
@@ -517,6 +519,7 @@ pub fn event_dispatch(event: &EbpfProcEvent, cfg: &AppConfig, state: &mut EbpfSt
                 state.cache.pkgs.remove(&pid);
             }
             state.cache.task_del(tid);
+            state.pending_threads.remove(&tid);  // ← 添加
             applied_del(&mut state.bpf, tid);
         }
 
@@ -529,15 +532,23 @@ pub fn event_dispatch(event: &EbpfProcEvent, cfg: &AppConfig, state: &mut EbpfSt
         }
 
         EBPF_EVENT_FORK => {
-            let real_comm = if tid == pid {
-                comm.to_string()  // 主线程用 eBPF 的 comm
+            if tid == pid {
+                // 主线程：eBPF comm 可信，直接处理
+                event_apply(&mut state.cache, &mut state.bpf, tid, pid, &comm, cfg, true);
             } else {
-                tid_comm(tid).unwrap_or_default()  // 子线程从 /proc 读
-            };
-            event_apply(&mut state.cache, &mut state.bpf, tid, pid, &real_comm, cfg, true);
+                // ✅ 子线程：eBPF comm 不可信（父进程名），缓存等待 RENAME
+                // ✅ 纯 eBPF，不读 /proc，完全保留 eBPF 优势
+                state.pending_threads.insert(tid, pid);
+            }
         }
 
         EBPF_EVENT_RENAME => {
+            // RENAME 时 comm 已更新为真实线程名，可信
+            if state.pending_threads.remove(&tid).is_some() {
+                // 这是等待的 FORK 子线程，用真实 comm 处理
+                event_apply(&mut state.cache, &mut state.bpf, tid, pid, &comm, cfg, true);
+            }
+            // 也处理正常的 RENAME 事件（如主线程改名）
             event_apply(&mut state.cache, &mut state.bpf, tid, pid, &comm, cfg, true);
         }
 
