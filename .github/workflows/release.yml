@@ -95,7 +95,7 @@ jobs:
 
       - name: 编译 AppOpt-ebpf
         env:
-          BPF_LINKER_OPTS: "-O2" # 添加此行
+          RUSTFLAGS: "-C link-arg=-O2"
         run: |
           cargo build \
             --release \
