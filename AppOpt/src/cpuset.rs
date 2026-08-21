@@ -184,6 +184,7 @@ pub fn parse_cpu_ranges(spec: &str, present: Option<&CpuSet>) -> CpuSet {
 }
 
 /// 解析 CPU 规格，支持语义核心名(e-core/p-core/hp-core)与数字范围混合
+/// 解析 CPU 规格，支持语义核心名(e-core/p-core/hp-core)与数字范围混合
 pub fn parse_cpu_spec(spec: &str, topo: &CpuTopology) -> CpuSet {
     let mut set = CpuSet::new();
     if spec.is_empty() {
@@ -199,21 +200,19 @@ pub fn parse_cpu_spec(spec: &str, topo: &CpuTopology) -> CpuSet {
             "e-core" => &topo.e_core,
             "p-core" => {
                 if topo.p_core.count() > 0 {
-                    // 如果 P 核集合存在且非空，正常使用
-                    set.or(&topo.p_core);
+                    // P 核集合存在且非空，正常使用
+                    &topo.p_core
                 } else {
-                    // 自动降级：如果 P 核为空，改用 E 核
-                    eprintln!(
-                        "⚠️ 警告: 系统未检测到 p-core (p_core 为空)，规则 'p-core' 已自动降级为 e-core"
-                    );
-                    set.or(&topo.e_core);
+                    // P 核为空，回退到 E 核
+                    &topo.e_core
                 }
             }
             "hp-core" => &topo.hp_core,
             "all-core" => &topo.present_cpus,
             _ => {
+                // 不是语义名，当作数字范围解析
                 set.or(&parse_cpu_ranges(part, Some(&topo.present_cpus)));
-                continue;
+                continue; // 直接跳过后续合并，因为已经合并了
             }
         };
         set.or(seg);
