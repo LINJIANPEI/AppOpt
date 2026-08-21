@@ -4,6 +4,7 @@ use std::os::unix::fs::FileExt;
 
 use crate::config::AppConfig;
 use crate::cpuset::{CpuSet, CpuTopology, base_cpuset};
+use crate::rule_match::comm_to_pkg;
 use crate::{MAX_PKG_LEN, MAX_THREAD_LEN};
 
 /// 栈上构建 /proc/{pid}/{suffix} 路径读取文件
@@ -102,12 +103,23 @@ pub(crate) fn proc_walk(
         if !filter(pid) {
             continue;
         }
-        let Some(pkg) = read_cmdline(pid).or_else(|| tid_comm(pid)) else {
+        // 读取原始包名（来自 cmdline 或 comm）
+        let raw_pkg = match read_cmdline(pid).or_else(|| tid_comm(pid)) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // 【核心修改】先精确匹配，失败则回退
+        let pkg = if cfg.pkgs.contains(&raw_pkg) {
+            Some(raw_pkg)
+        } else {
+            comm_to_pkg(&raw_pkg, cfg) // 支持 xxx:push -> xxx
+        };
+
+        let Some(pkg) = pkg else {
             continue;
         };
-        if !cfg.pkgs.contains(&pkg) {
-            continue;
-        }
+
         f(pid, &pkg, cfg.has_thread_rules.contains(&pkg));
         count += 1;
     }
