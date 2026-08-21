@@ -1,11 +1,8 @@
-use crate::common::fnmatch_c;
-use crate::config::AppConfig;
-use crate::cpuset::{ensure_cpuset_dir, CpuSet};
+use std::ffi::CString;
 
-pub fn pkg_match(pkg: &str, cfg: &AppConfig) -> (bool, bool) {
-    let interested = cfg.pkgs.contains(pkg);
-    (interested, interested && cfg.has_thread_rules.contains(pkg))
-}
+use crate::MAX_THREAD_LEN;
+use crate::config::AppConfig;
+use crate::cpuset::{CpuSet, ensure_cpuset_dir};
 
 /// 线程亲和性计算结果
 pub struct AffinityResult {
@@ -15,11 +12,7 @@ pub struct AffinityResult {
 }
 
 /// 线程规则 CPU 累加，无线程匹配走包级 fallback，仍无则返回 None
-pub fn thread_affinity(
-    pkg: &str,
-    thread: &str,
-    cfg: &AppConfig,
-) -> Option<AffinityResult> {
+pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<AffinityResult> {
     let mut cpus = CpuSet::new();
     let mut cpuset_dir = String::new();
     let mut matched = false;
@@ -29,19 +22,7 @@ pub fn thread_affinity(
             if rule.pkg != pkg || rule.thread.is_empty() {
                 continue;
             }
-            // ✅ 判断是否包含通配符或字符集
-            let is_pattern = rule.thread.contains('*') 
-                || rule.thread.contains('?') 
-                || rule.thread.contains('[') 
-                || rule.thread.contains(']');
-            
-            let is_match = if is_pattern {
-                fnmatch_c(&rule.thread_pattern, thread)
-            } else {
-                rule.thread == thread
-            };
-            
-            if is_match {
+            if fnmatch_c(&rule.thread_pattern, thread) {
                 cpus.or(&rule.cpus);
                 matched = true;
             }
@@ -52,7 +33,6 @@ pub fn thread_affinity(
         }
     }
 
-    // ✅ 只有没匹配到线程规则时才走兜底
     if !matched {
         let mut fallback_seen = false;
         for rule in &cfg.rules {
@@ -69,11 +49,10 @@ pub fn thread_affinity(
         }
     }
 
-    // ✅ 优先级：线程规则 > 兜底规则 > present_cpus（仅当 has_thread_rules 为 true）
     if cpus.count() == 0 {
         if cfg.has_thread_rules.contains(pkg) {
             return Some(AffinityResult {
-                cpus: cfg.topo.present_cpus.clone(),
+                cpus: cfg.topo.present_cpus,
                 cpuset_dir: String::new(),
                 is_thread_rule: false,
             });
@@ -86,4 +65,40 @@ pub fn thread_affinity(
             is_thread_rule: matched,
         })
     }
+}
+
+/// POSIX fnmatch 封装，需预转换为 CString
+fn fnmatch_c(pattern: &CString, string: &str) -> bool {
+    if string.len() >= MAX_THREAD_LEN {
+        return false;
+    }
+    let mut buf = [0u8; MAX_THREAD_LEN];
+    buf[..string.len()].copy_from_slice(string.as_bytes());
+    unsafe {
+        libc::fnmatch(
+            pattern.as_ptr(),
+            buf.as_ptr() as *const _,
+            libc::FNM_NOESCAPE,
+        ) == 0
+    }
+}
+
+/// 通过内核 comm 匹配配置包名
+pub fn comm_to_pkg(comm: &str, cfg: &AppConfig) -> Option<String> {
+    if cfg.pkgs.contains(comm) {
+        return Some(comm.to_string());
+    }
+    if comm.len() >= 15 {
+        for pkg in &cfg.pkgs {
+            if pkg.starts_with(comm) {
+                return Some(pkg.clone());
+            }
+        }
+        for pkg in &cfg.pkgs {
+            if pkg.ends_with(comm) {
+                return Some(pkg.clone());
+            }
+        }
+    }
+    None
 }
