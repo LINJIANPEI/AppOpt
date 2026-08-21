@@ -79,9 +79,6 @@ jobs:
       - name: Rust 缓存
         uses: Swatinem/rust-cache@v2
 
-      - name: 安装 bpf-linker
-        run: cargo install bpf-linker
-
       - name: 安装 bpf-linker（预编译） # 👈 新增步骤，替换原来的两个安装步骤
         run: |
           cargo install cargo-binstall
