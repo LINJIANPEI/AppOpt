@@ -24,7 +24,7 @@ use crate::rule_edit::{RuleEdit, rule_delete, rule_delete_pkg, rule_rename, rule
 use crate::{EBPF_GAVE_UP, MAX_PKG_LEN, MAX_THREAD_LEN, lock_ignore_poison};
 
 pub const WEB_PORT: u16 = 8889;
-const INDEX_HTML: &str = include_str!("../web/index.html");
+const INDEX_HTML: &str = include_str!("../../web/index.html");
 
 pub static MODE_FORCE: AtomicU8 = AtomicU8::new(0);
 pub static WEB_ENABLED: AtomicBool = AtomicBool::new(false);
