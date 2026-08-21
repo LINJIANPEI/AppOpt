@@ -184,7 +184,6 @@ pub fn parse_cpu_ranges(spec: &str, present: Option<&CpuSet>) -> CpuSet {
 }
 
 /// 解析 CPU 规格，支持语义核心名(e-core/p-core/hp-core)与数字范围混合
-/// 解析 CPU 规格，支持语义核心名(e-core/p-core/hp-core)与数字范围混合
 pub fn parse_cpu_spec(spec: &str, topo: &CpuTopology) -> CpuSet {
     let mut set = CpuSet::new();
     if spec.is_empty() {
@@ -198,15 +197,7 @@ pub fn parse_cpu_spec(spec: &str, topo: &CpuTopology) -> CpuSet {
         // 语义名展开为对应核心层，其余按数字范围解析
         let seg = match part {
             "e-core" => &topo.e_core,
-            "p-core" => {
-                if topo.p_core.count() > 0 {
-                    // P 核集合存在且非空，正常使用
-                    &topo.p_core
-                } else {
-                    // P 核为空，回退到 E 核
-                    &topo.e_core
-                }
-            }
+            "p-core" => &topo.p_core,
             "hp-core" => &topo.hp_core,
             "all-core" => &topo.present_cpus,
             _ => {
@@ -346,8 +337,13 @@ pub fn init_cpu_topo() -> CpuTopology {
     }
     topo.present_cpus = parse_cpu_ranges(&topo.present_str, None);
     let (e, p, h) = detect_core_types();
+    let p_final = if p.count() == 0 && h.count() > 0 {
+        h // 双组系统：让 p_core 指向大核
+    } else {
+        p
+    };
     topo.e_core = e;
-    topo.p_core = p;
+    topo.p_core = p_final;
     topo.hp_core = h;
 
     let cpuset_path = CString::new("/dev/cpuset").expect("常量字符串无 NUL");
