@@ -12,13 +12,12 @@ pub struct AffinityResult {
 }
 
 /// 线程规则 CPU 累加，无线程匹配走包级 fallback，仍无则返回 None
-/// 线程规则 CPU 累加，无线程匹配走包级 fallback，仍无则返回 None
 pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<AffinityResult> {
     let mut cpus = CpuSet::new();
     let mut cpuset_dir = String::new();
     let mut matched = false;
 
-    // --- 第一阶段：线程级规则匹配 ---
+    // --- 第一阶段：线程级规则匹配（最高优先级） ---
     if !thread.is_empty() {
         for rule in &cfg.rules {
             if rule.pkg != pkg || rule.thread.is_empty() {
@@ -54,16 +53,17 @@ pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<Affin
             found = true;
         }
 
-        // 2.2 若未找到，尝试去除分隔符后回退
+        // 2.2 若精确匹配未找到，尝试按 ':' 分割取基础包名回退
         if !found {
-            // 生成候选基础包名：先按 ':' 分割取首段，再按 '_' 分割取首段
             let mut candidates = Vec::new();
+            // 只按 ':' 分割取第一个部分
             if let Some(base) = pkg.split(':').next() {
                 if base != pkg && !base.is_empty() {
                     candidates.push(base);
                 }
             }
 
+            // 遍历候选基础包名，查找包级规则
             for base in candidates {
                 for rule in &cfg.rules {
                     if rule.pkg != base || !rule.thread.is_empty() {
@@ -96,20 +96,15 @@ pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<Affin
                 is_thread_rule: false,
             });
         }
-        // 同样检查基础包名（若当前包名是带后缀的）
+
+        // 同样检查按 ':' 分割后的基础包名是否拥有线程规则
         let mut base_has_thread = false;
         if let Some(base) = pkg.split(':').next() {
             if base != pkg && cfg.has_thread_rules.contains(base) {
                 base_has_thread = true;
             }
         }
-        if !base_has_thread {
-            if let Some(base) = pkg.split('_').next() {
-                if base != pkg && cfg.has_thread_rules.contains(base) {
-                    base_has_thread = true;
-                }
-            }
-        }
+
         if base_has_thread {
             return Some(AffinityResult {
                 cpus: cfg.topo.present_cpus,
@@ -117,6 +112,8 @@ pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<Affin
                 is_thread_rule: false,
             });
         }
+
+        // 完全无规则 → 返回 None
         None
     } else {
         Some(AffinityResult {
