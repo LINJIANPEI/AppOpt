@@ -6,9 +6,7 @@ on:
 permissions:
   contents: write
 
-
 jobs:
-
   build-app:
     name: 构建 AppOpt ARM64 Android
     runs-on: ubuntu-latest
@@ -18,22 +16,18 @@ jobs:
         working-directory: AppOpt
 
     steps:
-
       - name: 拉取源码
         uses: actions/checkout@v4
-
 
       - name: 安装 Android NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
 
-
       - name: 安装 Rust ARM64 Android
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-
 
       - name: 配置 Android linker
         run: |
@@ -44,10 +38,8 @@ jobs:
           linker = "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
           EOF
 
-
       - name: Rust 缓存
         uses: Swatinem/rust-cache@v2
-
 
       - name: 编译 AppOpt
         run: |
@@ -55,12 +47,10 @@ jobs:
             --release \
             --target aarch64-linux-android
 
-
       - name: 验证 AppOpt
         run: |
           ls -lh target/aarch64-linux-android/release/AppOpt
           file target/aarch64-linux-android/release/AppOpt
-
 
       - name: 上传 AppOpt
         uses: actions/upload-artifact@v4
@@ -68,8 +58,6 @@ jobs:
           name: AppOpt
           path: AppOpt/target/aarch64-linux-android/release/AppOpt
           if-no-files-found: error
-
-
 
   build-ebpf:
     name: 构建 AppOpt eBPF 程序
@@ -80,25 +68,28 @@ jobs:
         working-directory: AppOpt-ebpf
 
     steps:
-
       - name: 拉取源码
         uses: actions/checkout@v4
-
 
       - name: 安装 Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components:
-            rust-src
-
+          components: rust-src
 
       - name: Rust 缓存
         uses: Swatinem/rust-cache@v2
 
-
       - name: 安装 bpf-linker
         run: cargo install bpf-linker
 
+      - name: 安装 LLVM 和依赖 # 新增
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-19-dev libclang-19-dev libpolly-19-dev
+          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-19" >> $GITHUB_ENV
+
+      - name: 安装 bpf-linker # 修改，添加 features 参数
+        run: cargo install bpf-linker --no-default-features --features llvm-19
 
       - name: 配置 eBPF linker
         run: |
@@ -109,7 +100,6 @@ jobs:
           linker = "bpf-linker"
           EOF
 
-
       - name: 编译 AppOpt-ebpf
         run: |
           cargo build \
@@ -117,12 +107,10 @@ jobs:
             --target bpfel-unknown-none \
             -Z build-std=core
 
-
       - name: 验证 eBPF
         run: |
           ls -lh target/bpfel-unknown-none/release/AppOpt-ebpf
           file target/bpfel-unknown-none/release/AppOpt-ebpf
-
 
       - name: 上传 eBPF
         uses: actions/upload-artifact@v4
@@ -130,8 +118,6 @@ jobs:
           name: AppOpt-ebpf
           path: AppOpt-ebpf/target/bpfel-unknown-none/release/AppOpt-ebpf
           if-no-files-found: error
-
-
 
   create-release:
     name: 创建发布版本
@@ -141,14 +127,11 @@ jobs:
       - build-app
       - build-ebpf
 
-
     steps:
-
       - name: 下载编译产物
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
-
 
       - name: 生成版本标签
         id: version
@@ -156,11 +139,9 @@ jobs:
           TAG="build-$(date -u '+%Y%m%d-%H%M%S')"
           echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
 
-
       - name: 检查产物
         run: |
           ls -lhR artifacts/
-
 
       - name: 准备发布文件
         run: |
@@ -194,7 +175,6 @@ jobs:
 
           ls -lh release/
 
-
       - name: 创建版本信息
         run: |
           cat > release/VERSION.txt <<EOF
@@ -205,17 +185,13 @@ jobs:
           时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           EOF
 
-
-
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
 
         with:
-
           tag_name: ${{ steps.version.outputs.tag_name }}
 
           name: "AppOpt ${{ steps.version.outputs.tag_name }}"
-
 
           body: |
             ## 🚀 AppOpt 自动构建版本
@@ -238,13 +214,11 @@ jobs:
             - 构建编号: #${{ github.run_number }}
             - 提交: `${{ github.sha }}`
 
-
           files: |
             release/AppOpt
             release/AppOpt-ebpf
             release/AppOpt-aarch64.tar.gz
             release/VERSION.txt
-
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
