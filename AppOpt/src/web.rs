@@ -307,7 +307,7 @@ fn status_json() -> String {
         "total_procs": sys_procs(),
         "interval": CHECK_INTERVAL.load(Ordering::Relaxed).max(1),
         "e_core": topo.map(|t| t.e_core.to_range_string()).unwrap_or_default(),
-        "p_core": topo.map(|t| t.p_core.to_range_string()).unwrap_or_default(),
+        "p_core": topo.map(|t| if t.p_core.count() > 0 { t.p_core.to_range_string() } else { t.e_core.to_range_string() }).unwrap_or_default(),
         "hp_core": topo.map(|t| t.hp_core.to_range_string()).unwrap_or_default(),
         "all_core": topo.map(|t| t.present_str.clone()).unwrap_or_default(),
         "cores": topo.map(|t| t.present_cpus.count()).unwrap_or(0),
