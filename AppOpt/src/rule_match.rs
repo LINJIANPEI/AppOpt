@@ -12,12 +12,13 @@ pub struct AffinityResult {
 }
 
 /// 线程规则 CPU 累加，无线程匹配走包级 fallback，仍无则返回 None
+/// 线程规则 CPU 累加，无线程匹配走包级 fallback，仍无则返回 None
 pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<AffinityResult> {
     let mut cpus = CpuSet::new();
     let mut cpuset_dir = String::new();
     let mut matched = false;
 
-    // === 线程规则匹配（不变） ===
+    // --- 第一阶段：线程级规则匹配 ---
     if !thread.is_empty() {
         for rule in &cfg.rules {
             if rule.pkg != pkg || rule.thread.is_empty() {
@@ -33,12 +34,12 @@ pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<Affin
         }
     }
 
-    // === 包级兜底（修改为两级查找） ===
+    // --- 第二阶段：包级兜底（两级回退） ---
     if !matched {
         let mut fallback_seen = false;
         let mut found = false;
 
-        // 第一遍：精确匹配包名
+        // 2.1 精确匹配当前包名
         for rule in &cfg.rules {
             if rule.pkg != pkg || !rule.thread.is_empty() {
                 continue;
@@ -53,31 +54,46 @@ pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<Affin
             found = true;
         }
 
-        // 第二遍：如果没找到，去掉 : 后缀再找（如 xxx:push → xxx）
+        // 2.2 若未找到，尝试去除分隔符后回退
         if !found {
+            // 生成候选基础包名：先按 ':' 分割取首段，再按 '_' 分割取首段
+            let mut candidates = Vec::new();
             if let Some(base) = pkg.split(':').next() {
-                if base != pkg {
-                    // 避免死循环
-                    for rule in &cfg.rules {
-                        if rule.pkg != base || !rule.thread.is_empty() {
-                            continue;
-                        }
-                        cpus.or(&rule.cpus);
-                        if !fallback_seen {
-                            cpuset_dir = rule.cpuset_dir.clone();
-                            fallback_seen = true;
-                        } else {
-                            cpuset_dir.clear();
-                        }
-                        found = true;
+                if base != pkg && !base.is_empty() {
+                    candidates.push(base);
+                }
+            }
+            if let Some(base) = pkg.split('_').next() {
+                if base != pkg && !base.is_empty() && !candidates.contains(&base) {
+                    candidates.push(base);
+                }
+            }
+
+            for base in candidates {
+                for rule in &cfg.rules {
+                    if rule.pkg != base || !rule.thread.is_empty() {
+                        continue;
                     }
+                    cpus.or(&rule.cpus);
+                    if !fallback_seen {
+                        cpuset_dir = rule.cpuset_dir.clone();
+                        fallback_seen = true;
+                    } else {
+                        cpuset_dir.clear();
+                    }
+                    found = true;
+                    break;
+                }
+                if found {
+                    break;
                 }
             }
         }
     }
 
-    // === 后续处理（不变） ===
+    // --- 第三阶段：最终决定 ---
     if cpus.count() == 0 {
+        // 检查当前包是否有线程规则（即使该线程未命中）
         if cfg.has_thread_rules.contains(pkg) {
             return Some(AffinityResult {
                 cpus: cfg.topo.present_cpus,
@@ -85,15 +101,26 @@ pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<Affin
                 is_thread_rule: false,
             });
         }
-        // 也检查基础包名的 has_thread_rules
+        // 同样检查基础包名（若当前包名是带后缀的）
+        let mut base_has_thread = false;
         if let Some(base) = pkg.split(':').next() {
             if base != pkg && cfg.has_thread_rules.contains(base) {
-                return Some(AffinityResult {
-                    cpus: cfg.topo.present_cpus,
-                    cpuset_dir: String::new(),
-                    is_thread_rule: false,
-                });
+                base_has_thread = true;
             }
+        }
+        if !base_has_thread {
+            if let Some(base) = pkg.split('_').next() {
+                if base != pkg && cfg.has_thread_rules.contains(base) {
+                    base_has_thread = true;
+                }
+            }
+        }
+        if base_has_thread {
+            return Some(AffinityResult {
+                cpus: cfg.topo.present_cpus,
+                cpuset_dir: String::new(),
+                is_thread_rule: false,
+            });
         }
         None
     } else {
