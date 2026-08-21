@@ -63,11 +63,6 @@ pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<Affin
                     candidates.push(base);
                 }
             }
-            if let Some(base) = pkg.split('_').next() {
-                if base != pkg && !base.is_empty() && !candidates.contains(&base) {
-                    candidates.push(base);
-                }
-            }
 
             for base in candidates {
                 for rule in &cfg.rules {
