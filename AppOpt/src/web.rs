@@ -261,7 +261,13 @@ fn sys_procs() -> u16 {
 /// CPU 集合转语义名
 fn spec_name(cpus: &CpuSet, topo: &CpuTopology) -> String {
     if cpus.count() > 0 {
+        // 先检查是否是 e_core
         if *cpus == topo.e_core {
+            // 【新增降级显示逻辑】
+            // 如果 p_core 为空，且 cpus 等于 e_core，则显示为 "p-core"（表示降级）
+            if topo.p_core.count() == 0 {
+                return "p-core".into();
+            }
             return "e-core".into();
         }
         if *cpus == topo.p_core {

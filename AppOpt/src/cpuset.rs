@@ -197,7 +197,18 @@ pub fn parse_cpu_spec(spec: &str, topo: &CpuTopology) -> CpuSet {
         // 语义名展开为对应核心层，其余按数字范围解析
         let seg = match part {
             "e-core" => &topo.e_core,
-            "p-core" => &topo.p_core,
+            "p-core" => {
+                if topo.p_core.count() > 0 {
+                    // 如果 P 核集合存在且非空，正常使用
+                    set.or(&topo.p_core);
+                } else {
+                    // 自动降级：如果 P 核为空，改用 E 核
+                    eprintln!(
+                        "⚠️ 警告: 系统未检测到 p-core (p_core 为空)，规则 'p-core' 已自动降级为 e-core"
+                    );
+                    set.or(&topo.e_core);
+                }
+            }
             "hp-core" => &topo.hp_core,
             "all-core" => &topo.present_cpus,
             _ => {
