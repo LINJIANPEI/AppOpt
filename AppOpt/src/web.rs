@@ -323,7 +323,7 @@ fn rules_json() -> String {
         let parts: Vec<&str> = r.pkg.split(':').collect();
         let main_pkg = parts[0];
         let is_sub = parts.len() > 1;
-        let sub_name = if is_sub {
+        let sub_suffix = if is_sub {
             parts[1..].join(":")
         } else {
             String::new()
@@ -340,7 +340,7 @@ fn rules_json() -> String {
         if is_sub {
             let subs = entry["subs"].as_object_mut().unwrap();
             let sub_entry = subs
-                .entry(sub_name.clone())
+                .entry(sub_suffix.clone())
                 .or_insert_with(|| json!({ "items": [] }));
             sub_entry["items"].as_array_mut().unwrap().push(json!({
                 "thread": r.thread.clone(),
