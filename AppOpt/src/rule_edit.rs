@@ -465,8 +465,7 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
     while i < lines.len() {
         let trimmed = lines[i].trim();
         // 包级规则（可能是 :子包=CPU 或 :子包=CPU {）
-        if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub))
-        {
+        if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub)) {
             pkg_rule_idx = Some(i);
             // 如果该行以 '{' 结尾，说明是合并格式，后续行包含线程
             if trimmed.ends_with('{') {
@@ -540,9 +539,10 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
         None => return RuleEdit::NotFound,
     };
 
+    // 提取 CPU 值（修复借用冲突：将结果转为 String）
     let pkg_line = &lines[pkg_idx];
     let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
-        pkg_line[eq_pos + 1..].trim().trim_end_matches('{').trim()
+        pkg_line[eq_pos + 1..].trim().trim_end_matches('{').trim().to_string()
     } else {
         return RuleEdit::Malformed;
     };
@@ -574,7 +574,7 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
         lines.remove(*idx);
     }
 
-    // 插入合并行
+    // 插入合并行（使用 cpus_val 字符串）
     let merged_line = format!(" :{}={} {{", sub, cpus_val);
     // 找到主包块的闭合括号位置
     let mut insert_pos = lines.len();
@@ -711,9 +711,7 @@ fn write_sub_pkg_block(
                     let mut sub_end = None;
                     for i in start..close {
                         let trimmed = lines[i].trim();
-                        if trimmed.starts_with(&format!(":{} =", sub))
-                            || trimmed.starts_with(&format!(":{}=", sub))
-                        {
+                        if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub)) {
                             // 如果包级规则行以 '{' 结尾，则范围直到对应的 '}'
                             if trimmed.ends_with('{') {
                                 let mut depth = 1;
@@ -726,9 +724,7 @@ fn write_sub_pkg_block(
                                             sub_end = Some(j);
                                             break;
                                         }
-                                    } else if next_trimmed.starts_with(':')
-                                        && next_trimmed.ends_with('{')
-                                    {
+                                    } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
                                         depth += 1;
                                     }
                                 }
@@ -737,9 +733,7 @@ fn write_sub_pkg_block(
                                 return RuleEdit::NotFound;
                             }
                             break;
-                        } else if trimmed == format!(":{} {{", sub)
-                            || trimmed == format!(":{}={{", sub)
-                        {
+                        } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
                             // 独立子包块
                             let mut depth = 1;
                             let mut end = i;
@@ -752,9 +746,7 @@ fn write_sub_pkg_block(
                                         sub_end = Some(j);
                                         break;
                                     }
-                                } else if next_trimmed.starts_with(':')
-                                    && next_trimmed.ends_with('{')
-                                {
+                                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
                                     depth += 1;
                                 }
                             }
@@ -765,9 +757,7 @@ fn write_sub_pkg_block(
                         // 在块内查找线程行
                         for i in (start_idx + 1)..end_idx {
                             let trimmed = lines[i].trim();
-                            if trimmed.starts_with(&format!("{}=", thread))
-                                && !trimmed.starts_with(':')
-                            {
+                            if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':') {
                                 lines.remove(i);
                                 removed = true;
                                 break;
@@ -787,6 +777,7 @@ fn write_sub_pkg_block(
             return RuleEdit::NotFound;
         }
     }
+
     // === 更新或插入 ===
     if sub_in_block {
         // 子包已存在
@@ -826,9 +817,38 @@ fn write_sub_pkg_block(
             }
         } else {
             // 线程规则：在子包块内查找并更新或插入
-            // 首先找到子包块的范围
-            let sub_block_start = sub_target.block_open;
-            let sub_block_end = sub_target.block_close;
+            // 首先找到子包块的范围（包括合并格式）
+            let mut sub_block_start = sub_target.block_open;
+            let mut sub_block_end = sub_target.block_close;
+            // 如果子包没有块，但可能有合并格式的包级规则，我们需要查找范围
+            if sub_block_start.is_none() || sub_block_end.is_none() {
+                // 查找合并格式 :子包=CPU {
+                if let Some(close) = t.block_close {
+                    let start = t.block_open.unwrap_or(0);
+                    for i in start..close {
+                        let trimmed = lines[i].trim();
+                        if trimmed.starts_with(&format!(":{} =", sub)) && trimmed.ends_with('{') {
+                            let mut depth = 1;
+                            let mut end = i;
+                            for j in (i + 1)..close {
+                                let next_trimmed = lines[j].trim();
+                                if close_like(next_trimmed) {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        sub_block_start = Some(i);
+                                        sub_block_end = Some(j);
+                                        break;
+                                    }
+                                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                                    depth += 1;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
             if let (Some(start), Some(end)) = (sub_block_start, sub_block_end) {
                 // 在块内查找现有线程
                 let mut found = false;
@@ -837,8 +857,7 @@ fn write_sub_pkg_block(
                     if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':') {
                         // 更新
                         if let Some(comment_pos) = comment_at(&lines[i]) {
-                            lines[i] =
-                                format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
+                            lines[i] = format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
                         } else {
                             lines[i] = format!("        {}={}", thread, cpus);
                         }
@@ -851,12 +870,12 @@ fn write_sub_pkg_block(
                     lines.insert(end, format!("        {}={}", thread, cpus));
                 }
             } else {
-                // 子包没有块（只有包级规则），创建块
+                // 子包没有块，创建块（但前提是子包有包级规则）
+                // 我们直接创建 :子包 { 线程 } 块，并将它插入到包级规则后
                 let sub_block = format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus);
-                // 在包级规则后插入
+                // 查找包级规则行位置
                 if let Some(pkg_line_idx) = sub_target.pkg_line {
-                    // 找到包级规则行，在它后面插入块
-                    // 但我们需要找到包级规则行的索引
+                    // 获取索引
                     let pkg_idx = if let Some(PkgLine::Standalone(i)) = sub_target.pkg_line {
                         i
                     } else if let Some(PkgLine::OpenInline(i)) = sub_target.pkg_line {
@@ -868,7 +887,19 @@ fn write_sub_pkg_block(
                         } else {
                             lines.push(sub_block);
                         }
-                        // 继续执行
+                        // 注意：这里应返回一个值，但我们在 if 外部继续执行
+                        // 因此我们返回 Ok 并跳过后续
+                        // 但我们不能在此 return，所以用标志
+                        // 实际上，如果这里执行了插入，我们应该直接返回，但为了统一，我们重新设计
+                        // 简单处理：如果找不到，在块结束处插入，然后返回
+                        if let Some(close) = t.block_close {
+                            lines.insert(close, sub_block);
+                        } else {
+                            lines.push(sub_block);
+                        }
+                        // 调用 consolidate 整理
+                        let _ = consolidate_sub_pkg(lines, pkg, sub);
+                        return RuleEdit::Ok;
                     };
                     // 在包级规则行后面插入块
                     lines.insert(pkg_idx + 1, sub_block);
@@ -884,12 +915,8 @@ fn write_sub_pkg_block(
         }
 
         // 调用合并函数，整理所有子包规则
-        let result = consolidate_sub_pkg(lines, pkg, sub);
-        if let RuleEdit::Ok = result {
-            RuleEdit::Ok
-        } else {
-            RuleEdit::Ok // 即使合并失败，也返回成功，因为更新已完成
-        }
+        let _ = consolidate_sub_pkg(lines, pkg, sub);
+        RuleEdit::Ok
     } else {
         // 子包不存在，首次添加
         if let Some(close) = t.block_close {
