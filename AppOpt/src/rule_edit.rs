@@ -161,9 +161,11 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             if !in_sub_block && trimmed.starts_with(':') && trimmed.ends_with('{') {
                 let sub = trimmed[1..trimmed.len() - 1].trim();
                 if !sub.is_empty() {
-                    let full_pkg = format!("{}:{}", cur_pkg, sub);
-                    pkg_stack.push(cur_pkg.clone());
-                    cur_pkg = full_pkg;
+                    let _sub_pkg = format!("{}:{}", pkg, sub);
+                    // 并确保子包被记录
+                    t.sub_pkgs
+                        .entry(sub.to_string())
+                        .or_insert_with(Target::new);
                     in_sub_block = true;
                     continue;
                 }
@@ -275,7 +277,7 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                 pending = None;
             }
             OuterLine::SubPkgRule { sub, .. } => {
-                // 无论在哪里，都记录子包存在
+                // 记录子包存在
                 t.sub_pkgs
                     .entry(sub.to_string())
                     .or_insert_with(Target::new);
@@ -561,8 +563,6 @@ fn write_sub_pkg_block(
     if sub_in_block {
         let sub_lines = lines.clone();
         let sub_target = target_scan(&sub_lines, &full_pkg);
-        let has_pkg_rule = sub_target.pkg_line.is_some();
-        let has_thread_rules = !sub_target.threads.is_empty() || sub_target.block_open.is_some();
 
         // 先处理本次更新
         if thread.is_empty() {
