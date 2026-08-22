@@ -315,19 +315,46 @@ fn rules_json() -> String {
     let Some(cfg) = current_cfg() else {
         return json!({ "rules": [] }).to_string();
     };
-    let mut groups: Vec<serde_json::Value> = Vec::new();
-    let mut index: HashMap<&str, usize> = HashMap::new();
+
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+
     for r in &cfg.rules {
-        let gi = *index.entry(r.pkg.as_str()).or_insert_with(|| {
-            groups.push(json!({ "pkg": r.pkg, "items": [] }));
-            groups.len() - 1
+        let main_pkg = r.pkg.split(':').next().unwrap_or(&r.pkg);
+        let is_sub = r.pkg.contains(':');
+        let sub_suffix = if is_sub {
+            r.pkg.split(':').skip(1).collect::<Vec<&str>>().join(":")
+        } else {
+            String::new()
+        };
+
+        let entry = groups.entry(main_pkg.to_string()).or_insert_with(|| {
+            json!({
+                "pkg": main_pkg,
+                "items": [],
+                "subs": {}
+            })
         });
-        groups[gi]["items"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({ "thread": r.thread, "spec": r.spec }));
+
+        if is_sub {
+            let subs = entry["subs"].as_object_mut().unwrap();
+            let sub_entry = subs
+                .entry(sub_suffix.clone())
+                .or_insert_with(|| json!({ "items": [] }));
+            sub_entry["items"].as_array_mut().unwrap().push(json!({
+                "thread": r.thread,
+                "spec": r.spec,
+            }));
+        } else {
+            entry["items"].as_array_mut().unwrap().push(json!({
+                "thread": r.thread,
+                "spec": r.spec,
+            }));
+        }
     }
-    json!({ "rules": groups }).to_string()
+
+    let rules_array: Vec<serde_json::Value> = groups.into_values().collect();
+    json!({ "rules": rules_array }).to_string()
 }
 
 /// 名称校验

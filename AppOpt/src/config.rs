@@ -127,14 +127,50 @@ pub enum OuterLine<'a> {
         open: bool,
     },
     Junk,
+    // 新增：子包单行规则
+    SubPkgRule {
+        sub: &'a str,
+        cpus: &'a str,
+        open: bool,
+    },
+    // 新增：子包块开始
+    SubPkgBlock {
+        sub: &'a str,
+    },
 }
 
 pub fn parse_outer(p: &str) -> OuterLine<'_> {
     let p = strip_comment(p);
+    let trimmed = p.trim();
+
+    // ---- 优先识别子包语法（以 ':' 开头） ----
+    if let Some(rest) = trimmed.strip_prefix(':') {
+        if let Some(eq_pos) = rest.rfind('=') {
+            let sub = rest[..eq_pos].trim();
+            let cpus = rest[eq_pos + 1..].trim();
+            if !sub.is_empty() && !cpus.is_empty() {
+                return OuterLine::SubPkgRule {
+                    sub,
+                    cpus,
+                    open: false,
+                };
+            }
+        }
+        if let Some(rest2) = rest.strip_suffix('{') {
+            let sub = rest2.trim();
+            if !sub.is_empty() {
+                return OuterLine::SubPkgBlock { sub };
+            }
+        }
+        return OuterLine::Pending { pkg: trimmed };
+    }
+
+    // ---- 原有逻辑 ----
     let (open, body) = match p.strip_suffix('{') {
         Some(b) => (true, b.trim_end()),
         None => (false, p),
     };
+
     if let Some((pkg, thread, cpus)) = split_single_line(body) {
         return OuterLine::Single {
             pkg,
@@ -143,9 +179,11 @@ pub fn parse_outer(p: &str) -> OuterLine<'_> {
             open,
         };
     }
+
     if !open && close_like(body) {
         return OuterLine::Junk;
     }
+
     match body.rfind('=') {
         Some(eq) => {
             let (pkg, cpus) = (body[..eq].trim(), body[eq + 1..].trim());
@@ -243,6 +281,8 @@ pub fn load_config(
     let mut cur_pkg = String::new();
     let mut pending_pkg = String::new();
     let mut in_block = false;
+    let mut pkg_stack: Vec<String> = Vec::new(); // 子包嵌套栈
+    let mut in_sub_block = false; // 标记当前是否在子包块内
 
     for line in content.lines() {
         let p = line.trim();
@@ -252,8 +292,16 @@ pub fn load_config(
 
         if in_block {
             if close_like(p) {
-                in_block = false;
-                cur_pkg.clear();
+                if in_sub_block {
+                    if let Some(parent) = pkg_stack.pop() {
+                        cur_pkg = parent;
+                    }
+                    in_sub_block = false;
+                    in_block = false;
+                } else {
+                    in_block = false;
+                    cur_pkg.clear();
+                }
                 continue;
             }
             match split_rule_line(p) {
@@ -278,6 +326,24 @@ pub fn load_config(
         }
 
         match parse_outer(p) {
+            // 新增：子包单行规则
+            OuterLine::SubPkgRule { sub, cpus, open: _ } => {
+                let full_pkg = format!("{}:{}", cur_pkg, sub);
+                if !add_rule(&mut rules, topo, &full_pkg, "", cpus) {
+                    fail_cnt += 1;
+                }
+            }
+
+            // 新增：子包块开始
+            OuterLine::SubPkgBlock { sub } => {
+                let full_pkg = format!("{}:{}", cur_pkg, sub);
+                pkg_stack.push(cur_pkg.clone());
+                cur_pkg = full_pkg;
+                in_sub_block = true;
+                in_block = true;
+            }
+
+            // 原有：单行规则（包名+线程名）
             OuterLine::Single {
                 pkg,
                 thread,
@@ -296,6 +362,8 @@ pub fn load_config(
                     in_block = true;
                 }
             }
+
+            // 原有：包级规则
             OuterLine::Rule { pkg, cpus, open } => {
                 if !pending_pkg.is_empty() {
                     fail_cnt += 1;
@@ -309,6 +377,8 @@ pub fn load_config(
                 }
                 pending_pkg.clear();
             }
+
+            // 原有：裸开块
             OuterLine::BareOpen { pkg } => {
                 let owner = if !pkg.is_empty() {
                     if !pending_pkg.is_empty() {
@@ -326,12 +396,16 @@ pub fn load_config(
                 pending_pkg.clear();
                 in_block = true;
             }
+
+            // 原有：待定包名
             OuterLine::Pending { pkg } => {
                 if !pending_pkg.is_empty() {
                     fail_cnt += 1;
                 }
                 pending_pkg = pkg.to_string();
             }
+
+            // 原有：垃圾行
             OuterLine::Junk => {
                 fail_cnt += 1;
                 pending_pkg.clear();

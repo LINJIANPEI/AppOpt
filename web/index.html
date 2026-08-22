@@ -884,6 +884,26 @@
             display: grid;
             gap: 4px
         }
+
+        .sub-group {
+            border-left: 2px solid rgba(0, 122, 255, .2);
+            margin: 4px 0 4px 14px;
+            padding-left: 10px;
+        }
+
+        .sub-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 0 4px 6px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--sub);
+        }
+
+        .sub-label {
+            font-family: var(--mono);
+        }
     </style>
 </head>
 
@@ -1153,24 +1173,55 @@
             } catch (e) { toast(e.message) }
         }
         function grpInner(g, gi) {
-            return `
+            let html = `
 <div class="grp-head">
 <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
 <span class="grp-name">${esc(g.pkg)}</span>
-<span class="grp-count">${g.items.length}</span>
+<span class="grp-count">${g.items.length + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
 <button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
 <button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
 </div>
-<div class="grp-body"><div class="grp-inner">
-${g.items.map((it, ii) => `
+<div class="grp-body"><div class="grp-inner">`;
+
+            // 主包规则
+            for (const it of g.items) {
+                html += `
 <div class="rule-row">
 <span class="rule-name">${it.thread ? esc(it.thread) : '<span class="rule-sub">包级默认</span>'}</span>
 ${chipHtml(it.spec)}
-<button class="icon-btn" data-edit="${gi}:${ii}" title="${it.thread ? '编辑线程规则' : '编辑包级规则'}">${ICO_EDIT}</button>
-<button class="icon-btn danger" data-del="${gi}:${ii}" title="删除">${ICO_TRASH}</button>
-</div>`).join('')}
+<button class="icon-btn" data-edit="${gi}:${it.thread || ''}::" title="编辑">${ICO_EDIT}</button>
+<button class="icon-btn danger" data-del="${gi}:${it.thread || ''}::" title="删除">${ICO_TRASH}</button>
+</div>`;
+            }
+
+            // 子包分组
+            if (g.subs) {
+                for (const [sub, data] of Object.entries(g.subs)) {
+                    html += `
+<div class="sub-group">
+<div class="sub-head">
+<span class="sub-label">:${esc(sub)}</span>
+<span class="grp-count">${data.items.length}</span>
+</div>
+<div class="sub-inner">`;
+                    for (const it of data.items) {
+                        const fullPkg = g.pkg + ':' + sub;
+                        html += `
+<div class="rule-row">
+<span class="rule-name">${it.thread ? esc(it.thread) : '<span class="rule-sub">包级默认</span>'}</span>
+${chipHtml(it.spec)}
+<button class="icon-btn" data-edit="${gi}:${it.thread || ''}:${sub}" title="编辑">${ICO_EDIT}</button>
+<button class="icon-btn danger" data-del="${gi}:${it.thread || ''}:${sub}" title="删除">${ICO_TRASH}</button>
+</div>`;
+                    }
+                    html += `</div></div>`;
+                }
+            }
+
+            html += `
 <button class="rule-add" data-addthread="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加线程规则</button>
 </div></div>`;
+            return html;
         }
         function renderRules() {
             const f = $('r-filter').value.trim().toLowerCase();
@@ -1208,12 +1259,36 @@ ${chipHtml(it.spec)}
             if (head) { head.parentElement.classList.toggle('open'); return }
             const eb = e.target.closest('[data-edit]');
             if (eb) {
-                const [gi, ii] = eb.dataset.edit.split(':').map(Number);
-                openRuleModal(rulesData[gi].items[ii].thread ? 'edit-thread' : 'edit-pkg', gi, ii);
+                const parts = eb.dataset.edit.split(':');
+                const gi = +parts[0];
+                const thread = parts[1] || '';
+                const sub = parts[2] || '';
+                if (sub) {
+                    // 编辑子包规则：完整包名 = rulesData[gi].pkg + ':' + sub
+                    openRuleModal('edit-sub', gi, thread, sub);
+                } else {
+                    openRuleModal(thread ? 'edit-thread' : 'edit-pkg', gi, thread);
+                }
                 return;
             }
+
             const db = e.target.closest('[data-del]');
-            if (db) { const [gi, ii] = db.dataset.del.split(':').map(Number); delRule(gi, ii) }
+            if (db) {
+                const parts = db.dataset.del.split(':');
+                const gi = +parts[0];
+                const thread = parts[1] || '';
+                const sub = parts[2] || '';
+                if (sub) {
+                    const fullPkg = rulesData[gi].pkg + ':' + sub;
+                    confirmDel(`删除子包 :${sub} 的规则`, { pkg: fullPkg, thread: thread });
+                } else {
+                    const g = rulesData[gi], it = g.items.find(item => item.thread === thread);
+                    if (it) {
+                        confirmDel((it.thread ? '线程 ' + it.thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: it.thread || '' });
+                    }
+                }
+                return;
+            }
         });
 
         const CORE_KEYS = ['e-core', 'p-core', 'hp-core'];
@@ -1298,20 +1373,23 @@ ${r.pkgRow
         $('mr-addrow').onclick = () => { mrRows.push(mkRow({})); renderRows(); const m = $('mr-addrow').closest('.modal'); m.scrollTop = m.scrollHeight };
         let mrMode = 'add-pkg', mrOldThread = '', mrOldPkg = '', mrOldThreads = new Set(), mrHadPkgRule = false;
         const isTree = () => mrMode === 'add-pkg' || mrMode === 'edit-app';
-        async function openRuleModal(mode, gi, ii) {
+        async function openRuleModal(mode, gi, thread, sub) {
             await fetchTopo();
-            mrMode = mode; mrOldThread = '';
+            mrMode = mode;
+            mrOldThread = '';
             const pkg = $('mr-pkg');
             const tree = isTree();
             pkg.readOnly = !tree;
-            pkg.value = mode === 'add-pkg' ? '' : rulesData[gi].pkg;
             $('mr-addrow').hidden = !tree;
+
             if (mode === 'add-pkg') {
                 $('mr-title').textContent = '添加应用';
+                pkg.value = '';
                 mrRows = [mkRow({ pkgRow: true })];
             } else if (mode === 'edit-app') {
                 $('mr-title').textContent = '编辑应用';
                 const g = rulesData[gi];
+                pkg.value = g.pkg;
                 mrOldPkg = g.pkg;
                 mrOldThreads = new Set(g.items.filter(it => it.thread).map(it => it.thread));
                 const pkgItem = g.items.find(it => !it.thread);
@@ -1320,15 +1398,47 @@ ${r.pkgRow
                 for (const it of g.items) if (it.thread) mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
             } else if (mode === 'edit-pkg') {
                 $('mr-title').textContent = '包级默认规则';
-                mrRows = [mkRow({ pkgRow: true, ...parseSpec(rulesData[gi].items[ii].spec) })];
+                pkg.value = rulesData[gi].pkg;
+                mrRows = [mkRow({ pkgRow: true, ...parseSpec(rulesData[gi].items.find(it => !it.thread)?.spec || '') })];
             } else if (mode === 'add-thread') {
                 $('mr-title').textContent = '添加线程规则';
+                pkg.value = rulesData[gi].pkg;
                 mrRows = [mkRow({})];
-            } else {
+            } else if (mode === 'edit-thread') {
                 $('mr-title').textContent = '编辑线程规则';
-                mrOldThread = rulesData[gi].items[ii].thread;
-                mrRows = [mkRow({ thread: mrOldThread, ...parseSpec(rulesData[gi].items[ii].spec) })];
+                const g = rulesData[gi];
+                pkg.value = g.pkg;
+                const item = g.items.find(it => it.thread === thread);
+                mrOldThread = thread;
+                mrRows = [mkRow({ thread, ...(item ? parseSpec(item.spec) : {}) })];
+            } else if (mode === 'edit-sub') {
+                // ----- 新增：编辑子包规则 -----
+                const g = rulesData[gi];
+                const fullPkg = g.pkg + ':' + sub;
+                // 从 subs 中查找子包数据
+                const subData = g.subs && g.subs[sub];
+                let item = null;
+                if (subData) {
+                    if (thread) {
+                        item = subData.items.find(it => it.thread === thread);
+                    } else {
+                        item = subData.items.find(it => !it.thread); // 包级默认
+                    }
+                }
+                $('mr-title').textContent = `编辑子包 :${sub}`;
+                pkg.value = fullPkg;
+                pkg.readOnly = true;   // 子包名不可更改（保持关联）
+                $('mr-addrow').hidden = true; // 不允许在子包编辑中添加新规则（可另行实现）
+                mrRows = [];
+                if (item) {
+                    // 如果有具体规则，编辑它
+                    mrRows.push(mkRow({ thread: item.thread || '', ...parseSpec(item.spec) }));
+                } else {
+                    // 如果子包没有任何规则（不应发生），创建空行
+                    mrRows.push(mkRow({ thread: thread || '' }));
+                }
             }
+
             renderRows();
             $('modal-rule').hidden = false;
         }
