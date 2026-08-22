@@ -780,23 +780,46 @@ fn write_sub_pkg_block(
                     lines.push(format!(" :{}={}", sub, cpus));
                 }
             }
-            // 注意：如果包级规则行原本是独立的，并且有子包块，可能需要合并，但这里我们不做合并，保留原样
-            // 如果需要合并，可以调用 consolidate_sub_pkg，但可能导致问题，所以暂时不调用
             RuleEdit::Ok
         } else {
             // 删除包级规则（cpus 为空）—— 只删除规则行，保留线程块
             let mut found = false;
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
-                for i in (start..close).rev() {
+                // 先查找包级规则行
+                let mut pkg_rule_idx = None;
+                let mut is_block = false;
+                for i in start..close {
                     let trimmed = lines[i].trim();
                     if trimmed.starts_with(&format!(":{} =", sub))
                         || trimmed.starts_with(&format!(":{}=", sub))
                     {
-                        lines.remove(i);
-                        found = true;
+                        pkg_rule_idx = Some(i);
+                        is_block = trimmed.ends_with('{');
                         break;
                     }
+                }
+                if let Some(idx) = pkg_rule_idx {
+                    if is_block {
+                        // 合并格式，需要转换为独立块（去掉 =CPU 部分，保留线程）
+                        let line = &lines[idx];
+                        let comment = match comment_at(line) {
+                            Some(pos) => &line[pos..],
+                            None => "",
+                        };
+                        let new_line = if comment.is_empty() {
+                            format!(" :{} {{", sub)
+                        } else {
+                            format!(" :{} {{{}", sub, comment)
+                        };
+                        lines[idx] = new_line;
+                        // 如果块内没有线程，则删除整个块（但这里我们保留，因为可能有线程）
+                        // 不做额外删除，块变成独立块
+                    } else {
+                        // 独立行，直接删除
+                        lines.remove(idx);
+                    }
+                    found = true;
                 }
             }
             if !found {
@@ -931,10 +954,8 @@ fn write_sub_pkg_block(
                         // 在块结束前插入新线程
                         lines.insert(block_end, format!("        {}={}", thread, cpus));
                     }
-                    // 无需合并，因为已经是合并格式
                 } else {
                     // 包级规则行不带 '{'，需要转换为合并格式
-                    // 1. 修改该行，末尾添加 ' {'
                     let line = &lines[idx];
                     let comment = match comment_at(line) {
                         Some(pos) => &line[pos..],
@@ -952,15 +973,12 @@ fn write_sub_pkg_block(
                         format!(" :{}={} {{{}", sub, cpus_val, comment)
                     };
                     lines[idx] = new_line;
-                    // 2. 在下一行插入线程行和闭合括号
-                    // 注意：插入位置是 idx+1 和 idx+2，是在主包块内部
+                    // 插入线程行和闭合括号
                     lines.insert(idx + 1, format!("        {}={}", thread, cpus));
                     lines.insert(idx + 2, "    }".to_string());
-                    // 现在已经是合并格式，无需进一步合并
                 }
             } else {
                 // 子包没有包级规则，创建包级规则和线程块
-                // 注意：插入到主包块内部（闭合括号之前）
                 if let Some(close) = t.block_close {
                     // 插入包级规则行（不带块）
                     lines.insert(close, format!(" :{}={}", sub, cpus));
@@ -970,14 +988,12 @@ fn write_sub_pkg_block(
                         format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus),
                     );
                 } else {
-                    // 理论上不会发生，但以防万一，追加到末尾（但这样可能会在外面）
                     lines.push(format!(" :{}={}", sub, cpus));
                     lines.push(format!(
                         "    :{} {{\n        {}={}\n    }}",
                         sub, thread, cpus
                     ));
                 }
-                // 已经创建合并格式，无需进一步合并
             }
             RuleEdit::Ok
         }
