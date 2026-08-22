@@ -338,7 +338,7 @@ pub fn init_cpu_topo() -> CpuTopology {
     topo.present_cpus = parse_cpu_ranges(&topo.present_str, None);
     let (e, p, h) = detect_core_types();
     let p_final = if p.count() == 0 && h.count() > 0 {
-        h // 双组系统：让 p_core 指向大核
+        e // 双组系统：让 p_core 指向大核
     } else {
         p
     };
