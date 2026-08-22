@@ -702,13 +702,10 @@ fn write_sub_pkg_block(
         t = target_scan(lines, pkg);
     }
 
-    // 重新获取子包是否存在于主包块中
-    let sub_in_block = t.sub_pkgs.contains_key(sub);
-
     // === 删除整个子包（delete_all = true） ===
     if delete_all {
         let mut removed = false;
-        // 1. 删除包级规则行（:sub=CPU 或 :sub = CPU）
+        // 1. 删除包级规则行
         if let Some(close) = t.block_close {
             let start = t.block_open.unwrap_or(0);
             for i in (start..close).rev() {
@@ -722,7 +719,7 @@ fn write_sub_pkg_block(
                 }
             }
         }
-        // 2. 删除所有独立子包块（:sub { ... }）
+        // 2. 删除所有独立子包块
         let blocks = find_all_sub_blocks(lines, sub);
         for (start, end) in blocks.iter().rev() {
             for i in (*start..=*end).rev() {
@@ -770,7 +767,6 @@ fn write_sub_pkg_block(
                     lines.push(format!(" :{}={}", sub, cpus));
                 }
             }
-            // 调用合并整理
             let _ = consolidate_sub_pkg(lines, pkg, sub);
             RuleEdit::Ok
         } else {
@@ -799,7 +795,6 @@ fn write_sub_pkg_block(
         if cpus.is_empty() {
             // 删除指定线程
             let mut removed = false;
-            // 尝试在合并格式或独立块中查找并删除
             let mut sub_block_start = None;
             let mut sub_block_end = None;
             if let Some(close) = t.block_close {
@@ -807,7 +802,6 @@ fn write_sub_pkg_block(
                 for i in start..close {
                     let trimmed = lines[i].trim();
                     if trimmed.starts_with(&format!(":{} =", sub)) && trimmed.ends_with('{') {
-                        // 合并格式
                         let mut depth = 1;
                         for j in (i + 1)..close {
                             let next_trimmed = lines[j].trim();
@@ -825,7 +819,6 @@ fn write_sub_pkg_block(
                         break;
                     } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub)
                     {
-                        // 独立块
                         let mut depth = 1;
                         for j in (i + 1)..close {
                             let next_trimmed = lines[j].trim();
@@ -857,13 +850,12 @@ fn write_sub_pkg_block(
             if !removed {
                 return RuleEdit::NotFound;
             }
-            // 删除线程后，如果子包只剩下包级规则且没有线程，可选择保留包级规则（不自动删除）
             RuleEdit::Ok
         } else {
             // ---- 更新或插入线程 ----
             // 先检查子包是否已有包级规则行（可能不带 '{'）
             let mut pkg_rule_line_idx = None;
-            let mut pkg_rule_is_block = false; // 是否以 '{' 结尾（即合并格式）
+            let mut pkg_rule_is_block = false;
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
                 for i in start..close {
@@ -897,13 +889,11 @@ fn write_sub_pkg_block(
                             depth += 1;
                         }
                     }
-                    // 在块内查找线程
                     let mut found = false;
                     for i in (block_start + 1)..block_end {
                         let trimmed = lines[i].trim();
                         if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':')
                         {
-                            // 更新现有线程
                             if let Some(comment_pos) = comment_at(&lines[i]) {
                                 lines[i] = format!(
                                     "        {}={}{}",
@@ -919,14 +909,11 @@ fn write_sub_pkg_block(
                         }
                     }
                     if !found {
-                        // 在块结束前插入新线程
                         lines.insert(block_end, format!("        {}={}", thread, cpus));
                     }
-                    // 合并整理（但已经是合并格式，无需额外操作，但调用也不会有害）
                     let _ = consolidate_sub_pkg(lines, pkg, sub);
                 } else {
-                    // 包级规则行不带 '{'，需要转换为合并格式
-                    // 1. 修改该行，末尾添加 ' {'
+                    // 包级规则行不带 '{'，转换为合并格式
                     let line = &lines[idx];
                     let comment = match comment_at(line) {
                         Some(pos) => &line[pos..],
@@ -944,30 +931,23 @@ fn write_sub_pkg_block(
                         format!(" :{}={} {{{}", sub, cpus_val, comment)
                     };
                     lines[idx] = new_line;
-                    // 2. 在下一行插入线程行和闭合括号
+                    // 插入线程行和闭合括号
                     lines.insert(idx + 1, format!("        {}={}", thread, cpus));
                     lines.insert(idx + 2, "    }".to_string());
-                    // 调用合并整理（可选）
                     let _ = consolidate_sub_pkg(lines, pkg, sub);
                 }
             } else {
-                // 子包没有包级规则，创建包级规则和线程块
+                // 子包没有包级规则，创建合并格式的包级规则+线程块
                 if let Some(close) = t.block_close {
-                    // 在主包块结束前插入
-                    lines.insert(close, format!(" :{}={}", sub, cpus));
-                    lines.insert(
-                        close + 1,
-                        format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus),
-                    );
+                    // 构造合并块字符串，插入到主包块的闭合括号之前
+                    let block_str =
+                        format!(" :{}={} {{\n        {}={}\n    }}", sub, cpus, thread, cpus);
+                    lines.insert(close, block_str);
                 } else {
-                    lines.push(format!(" :{}={}", sub, cpus));
-                    lines.push(format!(
-                        "    :{} {{\n        {}={}\n    }}",
-                        sub, thread, cpus
-                    ));
+                    // 理论上不应发生
+                    return RuleEdit::IoErr;
                 }
-                // 调用合并整理
-                let _ = consolidate_sub_pkg(lines, pkg, sub);
+                // 注意：不需要再次调用 consolidate_sub_pkg，因为已经是合并格式
             }
             RuleEdit::Ok
         }
