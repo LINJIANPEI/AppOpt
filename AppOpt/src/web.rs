@@ -320,6 +320,7 @@ fn rules_json() -> String {
     let mut groups: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
     for r in &cfg.rules {
+        // 提取主包名和子包名
         let parts: Vec<&str> = r.pkg.split(':').collect();
         let main_pkg = parts[0];
         let is_sub = parts.len() > 1;
@@ -338,6 +339,7 @@ fn rules_json() -> String {
         });
 
         if is_sub {
+            // 子包规则：放入 subs
             let subs = entry["subs"].as_object_mut().unwrap();
             let sub_entry = subs
                 .entry(sub_suffix.clone())
@@ -348,6 +350,7 @@ fn rules_json() -> String {
                 "full_pkg": r.pkg.clone(),
             }));
         } else {
+            // 主包规则：放入 items
             entry["items"].as_array_mut().unwrap().push(json!({
                 "thread": r.thread.clone(),
                 "spec": r.spec.clone(),
