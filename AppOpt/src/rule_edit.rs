@@ -883,19 +883,9 @@ fn write_sub_pkg_block(
                     } else {
                         // 找不到，使用块结束位置
                         if let Some(close) = t.block_close {
-                            lines.insert(close, sub_block);
+                            lines.insert(close, sub_block.clone());
                         } else {
-                            lines.push(sub_block);
-                        }
-                        // 注意：这里应返回一个值，但我们在 if 外部继续执行
-                        // 因此我们返回 Ok 并跳过后续
-                        // 但我们不能在此 return，所以用标志
-                        // 实际上，如果这里执行了插入，我们应该直接返回，但为了统一，我们重新设计
-                        // 简单处理：如果找不到，在块结束处插入，然后返回
-                        if let Some(close) = t.block_close {
-                            lines.insert(close, sub_block);
-                        } else {
-                            lines.push(sub_block);
+                            lines.push(sub_block.clone());
                         }
                         // 调用 consolidate 整理
                         let _ = consolidate_sub_pkg(lines, pkg, sub);
@@ -937,84 +927,6 @@ fn write_sub_pkg_block(
             return RuleEdit::IoErr;
         }
         RuleEdit::Ok
-    }
-}
-
-/// 合并子包的包级规则和所有线程规则到一行 :子包=CPU { 线程1; 线程2; ... }
-fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target) {
-    let full_pkg = format!("{}:{}", pkg, sub);
-    let sub_lines = lines.clone();
-    let sub_target = target_scan(&sub_lines, &full_pkg);
-    let has_pkg_rule = sub_target.pkg_line.is_some();
-    // 收集所有线程规则（移除 !loc.single 过滤）
-    let mut all_threads: Vec<String> = Vec::new();
-    for locs in sub_target.threads.values() {
-        for loc in locs {
-            let line = lines[loc.idx].trim();
-            if !line.is_empty() && !line.starts_with(':') && !close_like(line) {
-                all_threads.push(line.to_string());
-            }
-        }
-    }
-
-    if !has_pkg_rule || all_threads.is_empty() {
-        return;
-    }
-
-    // 查找包级规则行
-    let mut pkg_line_idx = None;
-    if let Some(close) = t.block_close {
-        let start = t.block_open.unwrap_or(0);
-        for i in start..close {
-            let trimmed = lines[i].trim();
-            if trimmed.starts_with(&format!(":{} =", sub))
-                || trimmed.starts_with(&format!(":{}=", sub))
-            {
-                pkg_line_idx = Some(i);
-                break;
-            }
-        }
-    }
-    let Some(idx) = pkg_line_idx else { return };
-
-    let pkg_line = &lines[idx];
-    let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
-        pkg_line[eq_pos + 1..].trim()
-    } else {
-        return;
-    };
-
-    let merged_line = format!(" :{}={} {{", sub, cpus_val);
-    lines[idx] = merged_line;
-
-    let mut remove_indices: Vec<usize> = Vec::new();
-    let sub_blocks = find_all_sub_blocks(&sub_lines, sub);
-    for (start, end) in sub_blocks {
-        for i in start..=end {
-            if i != idx {
-                remove_indices.push(i);
-            }
-        }
-    }
-    remove_indices.sort_unstable();
-    remove_indices.dedup();
-    for i in remove_indices.iter().rev() {
-        lines.remove(*i);
-    }
-
-    let insert_pos = idx + 1;
-    all_threads.sort();
-    all_threads.dedup();
-    for (offset, thread_line) in all_threads.iter().enumerate() {
-        let trimmed = thread_line.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with('}') {
-            lines.insert(insert_pos + offset, format!("        {}", trimmed));
-        }
-    }
-
-    let last_line = lines.last().map(|s| s.trim()).unwrap_or("");
-    if !close_like(last_line) {
-        lines.insert(insert_pos + all_threads.len(), "    }".to_string());
     }
 }
 
