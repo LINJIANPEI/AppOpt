@@ -185,7 +185,6 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag_name }}
           name: "AppOpt ${{ steps.version.outputs.tag_name }}"
           body: |
-            ## 自动构建版本（增量更新）
             - AppOpt: ${{ needs.changes.outputs.app == 'true' && '🆕 新编译' || '📦 复用旧版' }}
             - eBPF: ${{ needs.changes.outputs.ebpf == 'true' && '🆕 新编译' || '📦 复用旧版' }}
           files:
