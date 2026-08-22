@@ -708,7 +708,9 @@ fn write_sub_pkg_block(
                 }
             }
         }
-
+        // ===== 新增：调用合并逻辑 =====
+        let t2 = target_scan(lines, pkg);
+        merge_sub_pkg_rules(lines, pkg, sub, &t2);
         RuleEdit::Ok
     } else {
         // 子包不存在，首次添加
@@ -733,22 +735,26 @@ fn write_sub_pkg_block(
     }
 }
 
-/// 辅助函数：合并子包的包级规则和线程规则到一行
+/// 合并子包的包级规则和所有线程规则到一行 :子包=CPU { 线程1; 线程2; ... }
 fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target) {
     let full_pkg = format!("{}:{}", pkg, sub);
     let sub_lines = lines.clone();
     let sub_target = target_scan(&sub_lines, &full_pkg);
     let has_pkg_rule = sub_target.pkg_line.is_some();
-    let has_thread_rules = sub_target
+    // 收集所有线程规则（包括多个块中的）
+    let all_threads: Vec<String> = sub_target
         .threads
-        .iter()
-        .any(|(name, _)| !name.starts_with(':'));
+        .values()
+        .flatten()
+        .filter(|loc| !loc.single) // 过滤单行规则（非块内）
+        .map(|loc| lines[loc.idx].trim().to_string())
+        .collect();
 
-    if !has_pkg_rule || !has_thread_rules {
+    if !has_pkg_rule || all_threads.is_empty() {
         return;
     }
 
-    // 查找包级规则行（:子包 = CPU）
+    // 查找包级规则行
     let mut pkg_line_idx = None;
     if let Some(close) = t.block_close {
         let start = t.block_open.unwrap_or(0);
@@ -764,79 +770,90 @@ fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target
     }
     let Some(idx) = pkg_line_idx else { return };
 
-    // 收集所有子包块内的线程规则（可能有多个 :子包 { ... }）
-    let mut all_thread_lines: Vec<String> = Vec::new();
-    let mut remove_indices: Vec<usize> = Vec::new();
-
-    // 遍历所有行，找到子包块
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
-            // 找到块开始，找到对应的结束
-            let start = i;
-            let mut depth = 1;
-            let mut end = i;
-            for j in (i + 1)..lines.len() {
-                let t2 = lines[j].trim();
-                if close_like(t2) {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = j;
-                        break;
-                    }
-                } else if t2.starts_with(':') && t2.ends_with('{') {
-                    depth += 1;
-                }
-            }
-            // 提取块内的线程规则（去除缩进）
-            for j in (start + 1)..end {
-                let line = lines[j].trim().to_string();
-                if !line.is_empty() && !line.starts_with(':') && !close_like(&line) {
-                    all_thread_lines.push(line);
-                }
-            }
-            // 标记删除整个块（包括开始和结束）
-            for j in (start..=end).rev() {
-                remove_indices.push(j);
-            }
-            i = end + 1;
-        } else {
-            i += 1;
-        }
-    }
-
-    // 如果没有线程规则，不合并
-    if all_thread_lines.is_empty() {
-        return;
-    }
-
-    // 删除所有子包块
-    remove_indices.sort();
-    remove_indices.dedup();
-    for idx2 in remove_indices.iter().rev() {
-        lines.remove(*idx2);
-    }
-
-    // 更新包级规则行
+    // 提取 CPU 值
     let pkg_line = &lines[idx];
     let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
         pkg_line[eq_pos + 1..].trim()
     } else {
         return;
     };
+
     // 构建合并行： :子包=CPU {
     let merged_line = format!(" :{}={} {{", sub, cpus_val);
     lines[idx] = merged_line;
 
-    // 在包级规则行后面插入所有线程规则
-    let insert_pos = idx + 1;
-    for (offset, thread_line) in all_thread_lines.iter().enumerate() {
-        lines.insert(insert_pos + offset, format!("        {}", thread_line));
+    // 删除所有子包块（包括开始和结束行）
+    // 收集所有子包块的行索引（包括 block_open 和 block_close）
+    let mut remove_indices: Vec<usize> = Vec::new();
+    // 先找到所有子包块的开始和结束
+    let sub_blocks: Vec<(usize, usize)> = find_all_sub_blocks(&sub_lines, sub);
+    for (start, end) in sub_blocks {
+        for i in start..=end {
+            if i != idx {
+                remove_indices.push(i);
+            }
+        }
     }
-    // 插入闭合括号
-    lines.insert(insert_pos + all_thread_lines.len(), "    }".to_string());
+
+    // 从大到小删除
+    remove_indices.sort_unstable();
+    remove_indices.dedup();
+    for i in remove_indices.iter().rev() {
+        lines.remove(*i);
+    }
+
+    // 插入所有线程规则（缩进四个空格）
+    let insert_pos = idx + 1;
+    for (offset, thread_line) in all_threads.iter().enumerate() {
+        // 去除可能的多余缩进
+        let trimmed = thread_line.trim();
+        if !trimmed.is_empty() && !trimmed.starts_with('}') {
+            lines.insert(insert_pos + offset, format!("        {}", trimmed));
+        }
+    }
+
+    // 确保有闭合括号
+    let last_line = lines.last().map(|s| s.trim()).unwrap_or("");
+    if !close_like(last_line) {
+        lines.insert(insert_pos + all_threads.len(), "    }".to_string());
+    }
 }
+
+/// 辅助函数：查找所有以 :子包 { 开头的块的范围
+fn find_all_sub_blocks(lines: &[String], sub: &str) -> Vec<(usize, usize)> {
+    let mut blocks = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
+            let start = i;
+            let mut depth = 1;
+            let mut end = start;
+            for j in (i + 1)..lines.len() {
+                let next_trimmed = lines[j].trim();
+                if close_like(next_trimmed) {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = j;
+                        break;
+                    }
+                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                    depth += 1;
+                }
+            }
+            if end > start {
+                blocks.push((start, end));
+                i = end + 1;
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    blocks
+}
+
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
