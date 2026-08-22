@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
@@ -34,7 +34,6 @@ struct ThreadLoc {
     open: bool,
 }
 
-/// Target 结构体：表示一个包（或子包）的解析结果
 #[derive(Clone)]
 struct Target {
     pkg_line: Option<PkgLine>,
@@ -42,7 +41,6 @@ struct Target {
     block_close: Option<usize>,
     threads: HashMap<String, Vec<ThreadLoc>>,
     unterminated: bool,
-    // 子包映射：子包名 -> 子包 Target
     sub_pkgs: HashMap<String, Target>,
 }
 
@@ -67,18 +65,15 @@ impl Target {
     }
 }
 
-/// 扫描配置文件，构建 Target 结构
 fn target_scan(lines: &[String], pkg: &str) -> Target {
     let mut t = Target::new();
     let mut pending: Option<usize> = None;
     let mut in_block = false;
     let mut target_block = false;
 
-    // 子包解析状态
     let mut in_sub_block = false;
     let mut current_sub = String::new();
     let mut sub_lines: Vec<String> = Vec::new();
-    let mut sub_start_line: Option<usize> = None;
 
     let block_close = |t: &mut Target, target_block: &mut bool, i: usize| {
         if *target_block && t.block_close.is_none() {
@@ -102,7 +97,6 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
-        // ---- 子包块结束 ----
         if in_sub_block && close_like(p) {
             if !sub_lines.is_empty() {
                 let sub_target = target_scan(&sub_lines, &current_sub);
@@ -114,7 +108,6 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
-        // ---- 子包块开始 ":子包 {" ----
         if !in_block && !in_sub_block {
             if let Some(rest) = p.strip_prefix(':') {
                 if let Some(rest2) = rest.strip_suffix('{') {
@@ -123,23 +116,7 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                         in_sub_block = true;
                         current_sub = sub.to_string();
                         sub_lines.clear();
-                        sub_start_line = Some(i);
                         continue;
-                    }
-                }
-                // ":子包=CPU" 单行子包规则
-                if let Some(eq_pos) = rest.rfind('=') {
-                    let sub = rest[..eq_pos].trim();
-                    let cpus = rest[eq_pos + 1..].trim();
-                    if !sub.is_empty() && !cpus.is_empty() {
-                        // 作为子包的单行规则处理，但不在这里解析具体规则
-                        // 我们将其视为子包的一个包级规则
-                        let sub_pkg = format!("{}:{}", pkg, sub);
-                        // 暂存为子包的规则，稍后处理
-                        // 这里简单处理：直接作为独立行，但为了保持格式，我们暂时忽略
-                        // 实际上，单行 ":子包=CPU" 在 target_scan 中不会作为子包块处理
-                        // 它会在外层被解析为 OuterLine::SubPkgRule
-                        // 所以我们在这里不处理，留给外层
                     }
                 }
             }
@@ -150,7 +127,6 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
-        // ---- 原有块逻辑 ----
         if in_block {
             if close_like(p) {
                 in_block = false;
@@ -185,7 +161,6 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
-        // ---- 外层解析 ----
         match parse_outer(p) {
             OuterLine::Single {
                 pkg: pg,
@@ -261,43 +236,22 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             OuterLine::Junk => {
                 pending = None;
             }
-            // 子包规则在外层处理
-            OuterLine::SubPkgRule { sub, cpus, .. } => {
-                // 格式 ":子包=CPU"，作为子包的包级规则处理
-                let sub_pkg = format!("{}:{}", pkg, sub);
-                // 将子包规则存入 sub_pkgs
-                let sub_target = t
-                    .sub_pkgs
-                    .entry(sub.to_string())
-                    .or_insert_with(Target::new);
-                // 子包的包级规则用空 thread 表示
-                // 但这里我们无法直接存储，因为 Target 只存储线程规则
-                // 我们需要扩展 Target 来存储包级规则，或者将子包的包级规则作为线程规则存储
-                // 更简单：将子包的包级规则作为 thread="" 的规则存储在子包的 threads 中
-                // 但 threads 是 HashMap<String, Vec<ThreadLoc>>，key 是线程名
-                // 我们使用特殊 key "" 表示包级规则
-                // 但在 target_scan 中，我们无法直接添加规则，只能记录位置
-                // 由于这会影响写入，我们暂时忽略单行子包规则，交由上层处理
-                // 实际上，单行子包规则在写入时会作为独立行处理
-                // 因此我们不需要在这里存储
+            OuterLine::SubPkgRule { sub, cpus: _ } => {
+                // 单行子包规则，暂不处理（写入时作为独立行）
+                let _sub_pkg = format!("{}:{}", pkg, sub);
             }
-            OuterLine::SubPkgBlock { sub } => {
-                // ":子包 {" 应该在前面已经被识别为子包块开始
-                // 如果走到这里，说明没有被识别，作为 pending 处理
-                pending = Some(i);
+            OuterLine::SubPkgBlock { sub: _ } => {
+                // 子包块开始已在前面识别，这里不处理
             }
         }
     }
 
-    // 如果子包块未闭合，标记为 unterminated
     if in_sub_block {
         t.unterminated = true;
     }
-
     t
 }
 
-/// 单行规则规范化
 fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
     let t = target_scan(lines, pkg);
     let mut items: Vec<(ThreadLoc, String)> = Vec::new();
@@ -349,16 +303,13 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
     }
 }
 
-/// 递归处理子包规范化
 fn normalize_sub_pkgs(lines: &mut Vec<String>, pkg: &str) {
     let t = target_scan(lines, pkg);
-    // 先递归处理子包内部
     for (sub, _) in &t.sub_pkgs {
         let sub_pkg = format!("{}:{}", pkg, sub);
         normalize_singles(lines, &sub_pkg);
         normalize_sub_pkgs(lines, &sub_pkg);
     }
-    // 再处理当前包
     normalize_singles(lines, pkg);
 }
 
@@ -422,12 +373,10 @@ fn file_write(path: &str, lines: &[String]) -> RuleEdit {
     }
 }
 
-/// 获取包的所有规则（包括子包），用于删除
 fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
     let t = target_scan(lines, pkg);
     let mut idxs: Vec<usize> = Vec::new();
 
-    // 主包规则
     if let Some(
         PkgLine::Standalone(i)
         | PkgLine::OpenInline(i)
@@ -453,7 +402,6 @@ fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
     }
     idxs.extend(t.singles().map(|l| l.idx));
 
-    // 子包规则
     for (sub, _) in &t.sub_pkgs {
         let sub_pkg = format!("{}:{}", pkg, sub);
         idxs.extend(collect_all_lines(lines, &sub_pkg));
@@ -464,18 +412,7 @@ fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
     idxs
 }
 
-/// 获取子包的包级规则行索引
-fn find_sub_pkg_line(lines: &[String], pkg: &str, sub: &str) -> Option<usize> {
-    let t = target_scan(lines, pkg);
-    if let Some(sub_target) = t.sub_pkgs.get(sub) {
-        if let Some(PkgLine::Standalone(i)) = sub_target.pkg_line {
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// 写入子包块格式
+/// 以子包块格式写入或删除规则
 fn write_sub_pkg_block(
     lines: &mut Vec<String>,
     pkg: &str,
@@ -489,21 +426,19 @@ fn write_sub_pkg_block(
 
     // 如果子包不存在，创建子包块
     if !t.sub_pkgs.contains_key(sub) {
-        // 找到主包的块结束位置，或块开始位置
         if let Some(close) = t.block_close {
             // 在主包块内插入子包块
             let sub_block = if thread.is_empty() {
                 format!("    :{} = {}", sub, cpus)
             } else {
-                format!("    :{} {{\n        {}=\n    }}", sub, thread, cpus)
+                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
             };
             lines.insert(close, sub_block);
         } else if let Some(open) = t.block_open {
-            // 有块开始但没有结束，在块结束前插入
             let sub_block = if thread.is_empty() {
                 format!("    :{} = {}", sub, cpus)
             } else {
-                format!("    :{} {{\n        {}=\n    }}", sub, thread, cpus)
+                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
             };
             lines.insert(open + 1, sub_block);
         } else {
@@ -512,11 +447,10 @@ fn write_sub_pkg_block(
                 format!("{} {{\n    :{} = {}\n}}", pkg, sub, cpus)
             } else {
                 format!(
-                    "{} {{\n    :{} {{\n        {}=\n    }}\n}}",
+                    "{} {{\n    :{} {{\n        {}={}\n    }}\n}}",
                     pkg, sub, thread, cpus
                 )
             };
-            // 查找主包位置
             let mut insert_pos = lines.len();
             for (i, line) in lines.iter().enumerate() {
                 if line.trim().starts_with(pkg) {
@@ -563,55 +497,52 @@ fn write_sub_pkg_block(
             } else if let Some(open) = sub_target.block_open {
                 lines.insert(open + 1, format!("    :{} = {}", sub, cpus));
             } else {
-                // 找不到合适位置，追加到末尾
                 lines.push(format!(":{} = {}", sub, cpus));
             }
         }
     } else {
-        // 线程规则
-        // 在子包块内查找线程规则
+        // 线程规则：在子包块内查找或插入
         let mut found = false;
-        for (i, line) in lines.iter_mut().enumerate() {
-            let trimmed = line.trim();
+        // 使用索引循环避免借用冲突
+        for i in 0..lines.len() {
+            let trimmed = lines[i].trim();
             if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.contains(':') {
                 // 找到了，更新
-                if let Some(comment_pos) = comment_at(line) {
-                    *line = format!("        {}={}{}", thread, cpus, &line[comment_pos..]);
+                if let Some(comment_pos) = comment_at(&lines[i]) {
+                    lines[i] = format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
                 } else {
-                    *line = format!("        {}={}", thread, cpus);
+                    lines[i] = format!("        {}={}", thread, cpus);
                 }
                 found = true;
                 break;
             }
-            // 检查是否是子包块内的行
+            // 检查是否是子包块开始
             if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
-                // 进入子包块，继续搜索
                 let mut depth = 1;
-                for (j, next_line) in lines.iter().enumerate().skip(i + 1) {
-                    if close_like(next_line.trim()) {
+                for j in (i + 1)..lines.len() {
+                    let next_trimmed = lines[j].trim();
+                    if close_like(next_trimmed) {
                         depth -= 1;
                         if depth == 0 {
                             break;
                         }
-                    } else if next_line.trim().starts_with(":") && next_line.trim().ends_with('{') {
+                    } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
                         depth += 1;
                     }
                     if depth == 1 {
-                        let trimmed_next = next_line.trim();
-                        if trimmed_next.starts_with(&format!("{}=", thread))
-                            && !trimmed_next.contains(':')
+                        if next_trimmed.starts_with(&format!("{}=", thread))
+                            && !next_trimmed.contains(':')
                         {
                             // 找到了，更新
-                            let mut target_line = &mut lines[j];
-                            if let Some(comment_pos) = comment_at(&target_line) {
-                                *target_line = format!(
+                            if let Some(comment_pos) = comment_at(&lines[j]) {
+                                lines[j] = format!(
                                     "        {}={}{}",
                                     thread,
                                     cpus,
-                                    &target_line[comment_pos..]
+                                    &lines[j][comment_pos..]
                                 );
                             } else {
-                                *target_line = format!("        {}={}", thread, cpus);
+                                lines[j] = format!("        {}={}", thread, cpus);
                             }
                             found = true;
                             break;
@@ -631,7 +562,7 @@ fn write_sub_pkg_block(
                 lines.insert(open + 1, format!("        {}={}", thread, cpus));
             } else {
                 // 创建子包块
-                let sub_block = format!(":{} {{\n        {}=\n    }}", sub, thread, cpus);
+                let sub_block = format!(":{} {{\n        {}={}\n    }}", sub, thread, cpus);
                 if let Some(close) = t.block_close {
                     lines.insert(close, sub_block);
                 } else {
@@ -652,20 +583,16 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         .map(String::from)
         .collect();
 
-    // 检查是否是子包
     let parts: Vec<&str> = pkg.split(':').collect();
     if parts.len() == 2 {
         let main_pkg = parts[0];
         let sub = parts[1];
-        // 尝试使用子包块格式写入
         let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
         if let RuleEdit::Ok = result {
             return file_write(path, &lines);
         }
-        // 如果子包块写入失败，回退到常规方式
     }
 
-    // 常规方式（原有逻辑）
     normalize_sub_pkgs(&mut lines, pkg);
     let t = target_scan(&lines, pkg);
 
@@ -727,7 +654,6 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
-    // 检查是否是子包
     let parts: Vec<&str> = pkg.split(':').collect();
     if parts.len() == 2 {
         let main_pkg = parts[0];
@@ -736,7 +662,6 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         if let RuleEdit::Ok = result {
             return file_write(path, &lines);
         }
-        // 回退到常规方式
     }
 
     normalize_sub_pkgs(&mut lines, pkg);
@@ -773,19 +698,14 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
 
     normalize_sub_pkgs(&mut lines, pkg);
 
-    let mut removed = false;
     let idxs = collect_all_lines(&lines, pkg);
     if idxs.is_empty() {
         return RuleEdit::NotFound;
     }
     for i in idxs.into_iter().rev() {
         lines.remove(i);
-        removed = true;
     }
 
-    if !removed {
-        return RuleEdit::NotFound;
-    }
     file_write(path, &lines)
 }
 
@@ -805,7 +725,6 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
         return RuleEdit::Conflict;
     }
 
-    // 处理子包重命名
     let old_parts: Vec<&str> = old.split(':').collect();
     let new_parts: Vec<&str> = new.split(':').collect();
     if old_parts.len() == 2 && new_parts.len() == 2 {
@@ -813,9 +732,7 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
         let old_sub = old_parts[1];
         let new_main = new_parts[0];
         let new_sub = new_parts[1];
-        // 如果是同一主包下的子包重命名
         if old_main == new_main {
-            // 查找并替换子包名
             for line in &mut lines {
                 if let Some(rest) = line.trim().strip_prefix(&format!(":{}", old_sub)) {
                     if rest.trim().starts_with('{') || rest.trim().starts_with('=') {
@@ -829,7 +746,6 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
         }
     }
 
-    // 常规重命名
     loop {
         let t = target_scan(&lines, old);
         let mut idxs: Vec<usize> = t.singles().map(|l| l.idx).collect();
