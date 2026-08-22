@@ -336,8 +336,6 @@ fn token_ok(s: &str, max: usize) -> bool {
     !t.is_empty()
         && t.len() < max
         && !t.bytes().any(|b| b < 0x20 || b == 0x7f)
-        && !t.contains('#')
-        && !t.contains("//")
 }
 
 fn pkg_shape_ok(pkg: &str) -> bool {
