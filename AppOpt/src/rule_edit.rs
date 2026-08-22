@@ -597,19 +597,17 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         .map(String::from)
         .collect();
 
-    // 处理子包
+    // 处理子包：如果 pkg 包含 ':' 且恰好两部分，则使用子包写入逻辑
     let parts: Vec<&str> = pkg.split(':').collect();
     if parts.len() == 2 {
         let main_pkg = parts[0];
         let sub = parts[1];
         let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
-        if let RuleEdit::Ok = result {
-            return file_write(path, &lines);
-        } else {
-            // 如果子包处理失败，回退到常规方式（但常规可能产生独立行）
-            // 这里我们仍然回退，保证功能
-            // 注意：如果希望强制块格式，可以去掉回退，但为兼容，保留
-        }
+        // 直接返回结果，不进行回退
+        return match result {
+            RuleEdit::Ok => file_write(path, &lines),
+            _ => result,
+        };
     }
 
     // ---- 常规方式（原有逻辑） ----
@@ -674,16 +672,20 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
+    // 处理子包
     let parts: Vec<&str> = pkg.split(':').collect();
     if parts.len() == 2 {
         let main_pkg = parts[0];
         let sub = parts[1];
         let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", true);
-        if let RuleEdit::Ok = result {
-            return file_write(path, &lines);
-        }
+        // 直接返回结果，不进行回退
+        return match result {
+            RuleEdit::Ok => file_write(path, &lines),
+            _ => result,
+        };
     }
 
+    // ---- 常规方式（原有逻辑） ----
     normalize_sub_pkgs(&mut lines, pkg);
     let t = target_scan(&lines, pkg);
 

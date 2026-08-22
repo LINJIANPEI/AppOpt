@@ -1306,6 +1306,7 @@ ${chipHtml(it.spec)}
             return CORE_KEYS;  // 直接返回 ['e-core', 'p-core', 'hp-core']
         }
         function parseSpec(spec) {
+            if (!spec || !spec.trim()) return { custom: false, sem: [], all: false, customVal: '' };
             const vis = semanticVisible();
             const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
             const sem = parts.filter(p => CORE_KEYS.includes(p) && vis.includes(p));
@@ -1412,29 +1413,26 @@ ${r.pkgRow
                 mrOldThread = thread;
                 mrRows = [mkRow({ thread, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'edit-sub') {
-                // ----- 新增：编辑子包规则 -----
                 const g = rulesData[gi];
                 const fullPkg = g.pkg + ':' + sub;
-                // 从 subs 中查找子包数据
                 const subData = g.subs && g.subs[sub];
                 let item = null;
                 if (subData) {
                     if (thread) {
                         item = subData.items.find(it => it.thread === thread);
                     } else {
-                        item = subData.items.find(it => !it.thread); // 包级默认
+                        item = subData.items.find(it => !it.thread);
                     }
                 }
                 $('mr-title').textContent = `编辑子包 :${sub}`;
-                pkg.value = fullPkg;
-                pkg.readOnly = true;   // 子包名不可更改（保持关联）
-                $('mr-addrow').hidden = true; // 不允许在子包编辑中添加新规则（可另行实现）
+                $('mr-pkg').value = fullPkg;
+                $('mr-pkg').readOnly = true;
+                $('mr-addrow').hidden = true;
                 mrRows = [];
                 if (item) {
-                    // 如果有具体规则，编辑它
                     mrRows.push(mkRow({ thread: item.thread || '', ...parseSpec(item.spec) }));
                 } else {
-                    // 如果子包没有任何规则（不应发生），创建空行
+                    // 如果没有规则（理论上不会），创建空行
                     mrRows.push(mkRow({ thread: thread || '' }));
                 }
             }
