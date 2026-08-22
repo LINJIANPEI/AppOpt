@@ -1,4 +1,4 @@
-name: 构建 AppOpt
+name: 构建 AppOpt Rust
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  # 检测变更
+  # 1. 检测变更
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -28,10 +28,30 @@ jobs:
             ebpf:
               - 'AppOpt-ebpf/**'
 
-  # 按需编译 AppOpt（仅当变更或手动触发时）
+  # 2. 检测是否存在旧 Release（用于首次运行）
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: 查看最新 Release
+        id: check
+        run: |
+          if gh release list --limit 1 --order desc --json tagName | jq -e '. | length > 0' >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 3. 按需编译 AppOpt（条件：变更 或 手动 或 无旧 Release）
   build-app:
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.app == 'true'
+    needs: [changes, check-release]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.app == 'true' ||
+      needs.check-release.outputs.exists == 'false'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,10 +80,13 @@ jobs:
           name: AppOpt-new
           path: AppOpt/target/aarch64-linux-android/release/AppOpt
 
-  # 按需编译 eBPF
+  # 4. 按需编译 eBPF（条件同上）
   build-ebpf:
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ebpf == 'true'
+    needs: [changes, check-release]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.ebpf == 'true' ||
+      needs.check-release.outputs.exists == 'false'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -95,73 +118,69 @@ jobs:
           name: AppOpt-ebpf-new
           path: AppOpt-ebpf/target/bpfel-unknown-none/release/AppOpt-ebpf
 
-  # 创建发布：收集所有二进制（新编译的 + 从旧 Release 下载的）
+  # 5. 创建发布
   create-release:
     runs-on: ubuntu-latest
-    needs: [changes, build-app, build-ebpf] # build-app/ebpf 可能被跳过，但需要等待它们完成（或被跳过）
+    needs: [changes, build-app, build-ebpf] # 即使被跳过，也等待完成
     if: always() && (needs.build-app.result == 'success' || needs.build-ebpf.result == 'success' || github.event_name == 'workflow_dispatch')
     steps:
-      - name: 下载新编译的产物（如果存在）
-        uses: actions/download-artifact@v4
+      # 下载新编译的产物（可能不存在）
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts/new/
-        continue-on-error: true # 可能没有新产物
+        continue-on-error: true
 
-      - name: 获取最新 Release 的信息
-        id: latest_release
-        run: |
-          # 使用 GitHub CLI 获取最新 release（按创建时间排序）
-          LATEST=$(gh release list --limit 1 --order desc --json tagName,assets --jq '.[0]')
-          echo "tag=$(echo $LATEST | jq -r '.tagName')" >> $GITHUB_OUTPUT
-          # 提取 assets 下载 URL（按名称）
-          APP_URL=$(echo $LATEST | jq -r '.assets[] | select(.name=="AppOpt") | .url')
-          EBPF_URL=$(echo $LATEST | jq -r '.assets[] | select(.name=="AppOpt-ebpf") | .url')
-          echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
-          echo "ebpf_url=$EBPF_URL" >> $GITHUB_OUTPUT
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true # 如果没有 Release，则忽略
-
-      - name: 准备最终发布目录
+      - name: 准备目录
         run: |
           mkdir -p release/package/AppOpt-aarch64
 
-      - name: 处理 AppOpt 二进制
+      - name: 获取最新 Release 标签（用于下载旧文件）
+        id: latest
         run: |
-          # 优先使用新编译的
+          TAG=$(gh release list --limit 1 --order desc --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      # 处理 AppOpt
+      - name: 获取 AppOpt 二进制
+        run: |
           if [ -f artifacts/new/AppOpt-new/AppOpt ]; then
             cp artifacts/new/AppOpt-new/AppOpt release/package/AppOpt-aarch64/AppOpt
-          elif [ -n "${{ steps.latest_release.outputs.app_url }}" ]; then
-            # 从旧 release 下载
-            curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                 -H "Accept: application/octet-stream" \
-                 "${{ steps.latest_release.outputs.app_url }}" \
-                 -o release/package/AppOpt-aarch64/AppOpt
+            echo "使用新编译的 AppOpt"
+          elif [ -n "${{ steps.latest.outputs.tag }}" ]; then
+            echo "从 Release ${{ steps.latest.outputs.tag }} 下载 AppOpt"
+            gh release download ${{ steps.latest.outputs.tag }} -p "AppOpt" -D release/package/AppOpt-aarch64/
+            mv release/package/AppOpt-aarch64/AppOpt release/package/AppOpt-aarch64/AppOpt 2>/dev/null || true
           else
-            echo "错误：没有 AppOpt 二进制可用（既无新编译也无旧 Release）"
+            echo "❌ 错误：没有 AppOpt 二进制可用（既无新编译也无旧 Release）"
             exit 1
           fi
           chmod +x release/package/AppOpt-aarch64/AppOpt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 处理 eBPF 二进制
+      # 处理 eBPF
+      - name: 获取 eBPF 二进制
         run: |
           if [ -f artifacts/new/AppOpt-ebpf-new/AppOpt-ebpf ]; then
             cp artifacts/new/AppOpt-ebpf-new/AppOpt-ebpf release/package/AppOpt-aarch64/AppOpt-ebpf
-          elif [ -n "${{ steps.latest_release.outputs.app_url }}" ]; then
-            curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                 -H "Accept: application/octet-stream" \
-                 "${{ steps.latest_release.outputs.ebpf_url }}" \
-                 -o release/package/AppOpt-aarch64/AppOpt-ebpf
+            echo "使用新编译的 eBPF"
+          elif [ -n "${{ steps.latest.outputs.tag }}" ]; then
+            echo "从 Release ${{ steps.latest.outputs.tag }} 下载 eBPF"
+            gh release download ${{ steps.latest.outputs.tag }} -p "AppOpt-ebpf" -D release/package/AppOpt-aarch64/
           else
-            echo "错误：没有 eBPF 二进制可用"
+            echo "❌ 错误：没有 eBPF 二进制可用（既无新编译也无旧 Release）"
             exit 1
           fi
           chmod +x release/package/AppOpt-aarch64/AppOpt-ebpf
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 打包
         run: |
           tar -czvf release/AppOpt-aarch64.tar.gz -C release/package AppOpt-aarch64
-          # 同时也复制单个文件到 release/ 以便附件上传
           cp release/package/AppOpt-aarch64/* release/
 
       - name: 生成版本标签
@@ -177,8 +196,8 @@ jobs:
           name: "AppOpt ${{ steps.version.outputs.tag_name }}"
           body: |
             ## 自动构建版本（增量更新）
-            - AppOpt: ${{ needs.changes.outputs.app == 'true' && '新编译' || '复用旧版' }}
-            - eBPF: ${{ needs.changes.outputs.ebpf == 'true' && '新编译' || '复用旧版' }}
+            - AppOpt: ${{ needs.changes.outputs.app == 'true' && '🆕 新编译' || '📦 复用旧版' }}
+            - eBPF: ${{ needs.changes.outputs.ebpf == 'true' && '🆕 新编译' || '📦 复用旧版' }}
           files: |
             release/AppOpt
             release/AppOpt-ebpf
