@@ -304,6 +304,29 @@ pub fn load_config(
                 }
                 continue;
             }
+
+            // ===== 新增：块内优先识别子包规则（以 ':' 开头） =====
+            let trimmed = p.trim();
+            if trimmed.starts_with(':') {
+                if let Some(eq_pos) = trimmed.rfind('=') {
+                    let sub = trimmed[1..eq_pos].trim();
+                    let cpus = trimmed[eq_pos + 1..].trim();
+                    if !sub.is_empty() && !cpus.is_empty() {
+                        let full_pkg = format!("{}:{}", cur_pkg, sub);
+                        if !add_rule(&mut rules, topo, &full_pkg, "", cpus) {
+                            fail_cnt += 1;
+                        }
+                        // 如果行尾有 '}'，表示块闭合（但子包规则通常是单行）
+                        if trimmed.contains('}') {
+                            in_block = false;
+                            cur_pkg.clear();
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // 原有线程规则解析
             match split_rule_line(p) {
                 Some((thread, cpus, closed)) => {
                     if !add_rule(&mut rules, topo, &cur_pkg, thread, cpus) {
@@ -325,8 +348,9 @@ pub fn load_config(
             continue;
         }
 
+        // ---- 外层解析 ----
         match parse_outer(p) {
-            // 新增：子包单行规则
+            // 新增：子包单行规则（外层，非块内）
             OuterLine::SubPkgRule { sub, cpus, open: _ } => {
                 let full_pkg = format!("{}:{}", cur_pkg, sub);
                 if !add_rule(&mut rules, topo, &full_pkg, "", cpus) {
@@ -343,7 +367,6 @@ pub fn load_config(
                 in_block = true;
             }
 
-            // 原有：单行规则（包名+线程名）
             OuterLine::Single {
                 pkg,
                 thread,
@@ -363,7 +386,6 @@ pub fn load_config(
                 }
             }
 
-            // 原有：包级规则
             OuterLine::Rule { pkg, cpus, open } => {
                 if !pending_pkg.is_empty() {
                     fail_cnt += 1;
@@ -378,7 +400,6 @@ pub fn load_config(
                 pending_pkg.clear();
             }
 
-            // 原有：裸开块
             OuterLine::BareOpen { pkg } => {
                 let owner = if !pkg.is_empty() {
                     if !pending_pkg.is_empty() {
@@ -397,7 +418,6 @@ pub fn load_config(
                 in_block = true;
             }
 
-            // 原有：待定包名
             OuterLine::Pending { pkg } => {
                 if !pending_pkg.is_empty() {
                     fail_cnt += 1;
@@ -405,7 +425,6 @@ pub fn load_config(
                 pending_pkg = pkg.to_string();
             }
 
-            // 原有：垃圾行
             OuterLine::Junk => {
                 fail_cnt += 1;
                 pending_pkg.clear();
