@@ -738,7 +738,10 @@ fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target
     let sub_lines = lines.clone();
     let sub_target = target_scan(&sub_lines, &full_pkg);
     let has_pkg_rule = sub_target.pkg_line.is_some();
-    let has_thread_rules = !sub_target.threads.is_empty();
+    let has_thread_rules = sub_target
+        .threads
+        .iter()
+        .any(|(name, _)| !name.starts_with(':'));
 
     if !has_pkg_rule || !has_thread_rules {
         return;

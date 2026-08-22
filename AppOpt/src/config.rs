@@ -306,7 +306,7 @@ pub fn load_config(
             let trimmed = p.trim();
 
             // ---- 处理块内的子包包级规则 :子包 = CPU ----
-            if trimmed.starts_with(':') && trimmed.contains('=') {
+            if !in_sub_block && trimmed.starts_with(':') && trimmed.contains('=') {
                 if let Some(eq_pos) = trimmed.rfind('=') {
                     let sub = trimmed[1..eq_pos].trim();
                     let raw_cpus = trimmed[eq_pos + 1..].trim();
