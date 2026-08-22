@@ -27,6 +27,7 @@ jobs:
             ebpf:
               - 'AppOpt-ebpf/**'
 
+  # 可选保留，但不再作为构建条件
   check-release:
     runs-on: ubuntu-latest
     outputs:
@@ -44,11 +45,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-app:
-    needs: [changes, check-release]
+    needs: [changes, check-release] # 保留依赖，但条件中不使用 check-release 输出
     if: |
       github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.app == 'true' ||
-      needs.check-release.outputs.exists == 'false'
+      needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -81,8 +81,7 @@ jobs:
     needs: [changes, check-release]
     if: |
       github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.ebpf == 'true' ||
-      needs.check-release.outputs.exists == 'false'
+      needs.changes.outputs.ebpf == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:

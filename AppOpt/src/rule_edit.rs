@@ -576,7 +576,7 @@ fn write_sub_pkg_block(
                         {
                             if let Some(comment_pos) = comment_at(&lines[j]) {
                                 lines[j] = format!(
-                                    "        {}={}{",
+                                    "        {}={}{}",
                                     thread,
                                     cpus,
                                     &lines[j][comment_pos..]
