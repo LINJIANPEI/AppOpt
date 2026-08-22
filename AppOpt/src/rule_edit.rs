@@ -454,7 +454,6 @@ fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
 }
 
 fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdit {
-    let full_pkg = format!("{}:{}", pkg, sub);
     // 重新扫描主包块闭合索引
     let t = target_scan(lines, pkg);
     let block_close = match t.block_close {
@@ -762,7 +761,7 @@ fn write_sub_pkg_block(
             }
             // 调用合并整理（动态计算闭合索引）
             if let Some(close) = t.block_close {
-                let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+                let _ = consolidate_sub_pkg(lines, pkg, sub);
             }
             RuleEdit::Ok
         } else {
@@ -920,7 +919,7 @@ fn write_sub_pkg_block(
                 }
                 // 调用合并整理（动态计算闭合索引）
                 if let Some(close) = t.block_close {
-                    let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+                    let _ = consolidate_sub_pkg(lines, pkg, sub);
                 }
             } else {
                 // 子包没有块，创建新块（先确保有包级规则）
@@ -956,7 +955,7 @@ fn write_sub_pkg_block(
                 }
                 // 调用合并整理
                 if let Some(close) = t.block_close {
-                    let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+                    let _ = consolidate_sub_pkg(lines, pkg, sub);
                 }
             }
             RuleEdit::Ok
