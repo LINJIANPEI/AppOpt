@@ -156,14 +156,15 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                 }
             }
 
-            // ---- 识别块内的子包块开始 :子包 { ----
-            if trimmed.starts_with(':') && trimmed.ends_with('{') {
+            // ---- 处理块内的子包块开始 :子包 { ----
+            // 只有在主包块内（非子包块内）才允许开启新的子包块
+            if !in_sub_block && trimmed.starts_with(':') && trimmed.ends_with('{') {
                 let sub = trimmed[1..trimmed.len() - 1].trim();
                 if !sub.is_empty() {
-                    // 标记子包存在，子包内容会在后续行中处理
-                    t.sub_pkgs
-                        .entry(sub.to_string())
-                        .or_insert_with(Target::new);
+                    let full_pkg = format!("{}:{}", cur_pkg, sub);
+                    pkg_stack.push(cur_pkg.clone());
+                    cur_pkg = full_pkg;
+                    in_sub_block = true;
                     continue;
                 }
             }
