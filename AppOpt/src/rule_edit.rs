@@ -430,7 +430,6 @@ fn write_sub_pkg_block(
 
     // 如果子包不存在且主包没有块，则自动将主包转换为块
     if !t.sub_pkgs.contains_key(sub) && t.block_open.is_none() {
-        // 找到主包行
         let pkg_line_idx = if let Some(PkgLine::Standalone(i)) = t.pkg_line {
             i
         } else {
@@ -440,17 +439,16 @@ fn write_sub_pkg_block(
         let line = &lines[pkg_line_idx];
         let trimmed = line.trim();
 
-        // 检查是否已经是块（以 '{' 结尾）
         if !trimmed.ends_with('{') {
-            // 独立行，将其转换为块
             let comment = match comment_at(line) {
                 Some(pos) => &line[pos..],
                 None => "",
             };
+            // 使用 String 避免临时值借用
             let base = if trimmed.contains('=') {
-                trimmed.trim_end_matches('{').trim_end()
+                trimmed.trim_end_matches('{').trim_end().to_string()
             } else {
-                format!("{} =", trimmed).as_str()
+                format!("{} =", trimmed)
             };
             let new_line = if comment.is_empty() {
                 format!("{} {{", base)
@@ -460,7 +458,6 @@ fn write_sub_pkg_block(
             lines[pkg_line_idx] = new_line;
         }
 
-        // 重新扫描，获取新的块信息
         t = target_scan(lines, pkg);
         if let Some(close) = t.block_close {
             let sub_block = if thread.is_empty() {
@@ -471,13 +468,12 @@ fn write_sub_pkg_block(
             lines.insert(close, sub_block);
             return RuleEdit::Ok;
         } else if let Some(open) = t.block_open {
-            let insert_pos = open + 1;
             let sub_block = if thread.is_empty() {
                 format!("    :{} = {}", sub, cpus)
             } else {
                 format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
             };
-            lines.insert(insert_pos, sub_block);
+            lines.insert(open + 1, sub_block);
             let last = lines.last().map(|s| s.trim()).unwrap_or("");
             if !close_like(last) {
                 lines.push("}".to_string());
@@ -489,8 +485,9 @@ fn write_sub_pkg_block(
             let sub_line = if thread.is_empty() {
                 format!("{}{} = {}", indent, sub, cpus)
             } else {
+                // 修正：补全占位符，使用 `={}` 来消费 cpus
                 format!(
-                    "{}{} {{\n{}{}{}\n{}}}",
+                    "{}{} {{\n{}{}{}={}\n{}}}",
                     indent, sub, indent, indent, thread, cpus, indent
                 )
             };
@@ -636,7 +633,6 @@ fn write_sub_pkg_block(
 
     RuleEdit::Ok
 }
-
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
