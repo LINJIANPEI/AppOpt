@@ -309,14 +309,24 @@ pub fn load_config(
             if trimmed.starts_with(':') && trimmed.contains('=') {
                 if let Some(eq_pos) = trimmed.rfind('=') {
                     let sub = trimmed[1..eq_pos].trim();
-                    let cpus = trimmed[eq_pos + 1..].trim();
+                    let raw_cpus = trimmed[eq_pos + 1..].trim();
+                    // 去除可能的尾部 '{'（允许 :子包=CPU {）
+                    let cpus = raw_cpus.trim_end_matches('{').trim();
+                    let has_open = raw_cpus.contains('{') || raw_cpus.ends_with('{');
                     if !sub.is_empty() && !cpus.is_empty() {
                         let full_pkg = format!("{}:{}", cur_pkg, sub);
                         if !add_rule(&mut rules, topo, &full_pkg, "", cpus) {
                             fail_cnt += 1;
                         }
-                        // 如果行尾有 '}'，表示块闭合
-                        if trimmed.contains('}') {
+                        // 如果行中有 '{'，表示同时开启子包块
+                        if has_open {
+                            pkg_stack.push(cur_pkg.clone());
+                            cur_pkg = full_pkg;
+                            in_sub_block = true;
+                            // in_block 保持为 true
+                        }
+                        // 如果行尾有 '}'（且没有 '{'，或两者都有但闭合优先，但这里我们简单处理）
+                        if trimmed.contains('}') && !has_open {
                             in_block = false;
                             cur_pkg.clear();
                         }

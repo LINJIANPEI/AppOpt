@@ -1215,17 +1215,18 @@ ${chipHtml(it.spec)}
                 for (const [sub, data] of Object.entries(g.subs)) {
                     // 提取子包的包级规则（thread 为空）和线程规则
                     const pkgRule = data.items.find(it => !it.thread);
+                    const subDisplay = sub.startsWith(':') ? sub : ':' + sub;
                     const threadRules = data.items.filter(it => it.thread);
                     const total = (pkgRule ? 1 : 0) + threadRules.length;
                     html += `
 <div class="sub-group">
 <div class="sub-head">
-<span class="sub-label">:${esc(sub)}</span>
+<span class="sub-label">${esc(subDisplay)}</span>
 <span class="grp-count">${total}</span>
 <button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子包包级规则">${ICO_EDIT}</button>
 <button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子包">${ICO_TRASH}</button>
-</div>
-<div class="sub-inner">`;
+</div >
+                        <div class="sub-inner">`;
                     // 包级规则
                     if (pkgRule) {
                         html += `
@@ -1253,15 +1254,15 @@ ${chipHtml(it.spec)}
 </div>`;
                     }
                     html += `
-<button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包线程规则</button>
-</div></div>`;
+                            <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>添加子包线程规则</button>
+                        </div></div > `;
                 }
             }
 
             html += `
-<button class="rule-add" data-addthread="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加线程规则</button>
-<button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包</button>
-</div></div>`;
+                            < button class="rule-add" data - addthread="${gi}" > <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>添加线程规则</ >
+                                <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>添加子包</button>
+</div ></div > `;
             return html;
         }
 
