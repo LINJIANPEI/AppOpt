@@ -464,14 +464,45 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        // 包级规则
+        // 包级规则（可能是 :子包=CPU 或 :子包=CPU {）
         if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub))
         {
             pkg_rule_idx = Some(i);
+            // 如果该行以 '{' 结尾，说明是合并格式，后续行包含线程
+            if trimmed.ends_with('{') {
+                // 提取该行后的线程，直到遇到 '}'
+                let start = i;
+                let mut depth = 1;
+                let mut end = start;
+                for j in (i + 1)..lines.len() {
+                    let next_trimmed = lines[j].trim();
+                    if close_like(next_trimmed) {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = j;
+                            break;
+                        }
+                    } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                        depth += 1;
+                    }
+                }
+                if end > start {
+                    // 收集线程行
+                    for k in (start + 1)..end {
+                        let line = lines[k].trim();
+                        if !line.is_empty() && !close_like(line) && !line.starts_with(':') {
+                            thread_lines.push(line.to_string());
+                        }
+                    }
+                    block_indices.push((start, end));
+                    i = end + 1;
+                    continue;
+                }
+            }
             i += 1;
             continue;
         }
-        // 子包块开始
+        // 子包块开始 :子包 {
         if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
             let start = i;
             let mut depth = 1;
@@ -489,7 +520,6 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
                 }
             }
             if end > start {
-                // 收集块内的线程规则
                 for k in (start + 1)..end {
                     let line = lines[k].trim();
                     if !line.is_empty() && !line.starts_with(':') && !close_like(line) {
@@ -512,18 +542,19 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
 
     let pkg_line = &lines[pkg_idx];
     let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
-        pkg_line[eq_pos + 1..].trim()
+        pkg_line[eq_pos + 1..].trim().trim_end_matches('{').trim()
     } else {
         return RuleEdit::Malformed;
     };
 
-    // 合并线程规则（去重？保留所有）
-    // 收集所有线程规则行（去除可能的缩进）
+    // 去重线程规则（保留顺序）
     let mut threads: Vec<String> = Vec::new();
     for line in thread_lines {
         let trimmed = line.trim();
         if !trimmed.is_empty() && !trimmed.starts_with('}') {
-            threads.push(trimmed);
+            if !threads.contains(&trimmed.to_string()) {
+                threads.push(trimmed.to_string());
+            }
         }
     }
 
@@ -560,14 +591,13 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
         lines.insert(insert_pos + offset, format!("        {}", thread_line));
         offset += 1;
     }
-    // 确保闭合括号
+    // 如果存在线程，添加闭合括号
     if offset > 1 {
         lines.insert(insert_pos + offset, "    }".to_string());
     }
 
     RuleEdit::Ok
 }
-
 /// 以子包块格式写入或删除规则（自动合并包级和线程规则）
 fn write_sub_pkg_block(
     lines: &mut Vec<String>,
@@ -672,34 +702,91 @@ fn write_sub_pkg_block(
                     }
                 }
             } else {
-                // 删除线程规则：在子包块内查找并删除匹配行
-                if let Some(block_start) = sub_target.block_open {
-                    let block_end = sub_target.block_close.unwrap_or(block_start);
-                    // 在块内查找线程行（不包括开始和结束）
-                    for i in (block_start + 1)..block_end {
+                // ==== 新的删除线程规则逻辑 ====
+                // 直接在主包块内查找匹配行，并确保它属于该子包
+                if let Some(close) = t.block_close {
+                    let start = t.block_open.unwrap_or(0);
+                    // 先找到子包包级规则或块所在的范围
+                    let mut sub_start = None;
+                    let mut sub_end = None;
+                    for i in start..close {
                         let trimmed = lines[i].trim();
-                        if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':')
+                        if trimmed.starts_with(&format!(":{} =", sub))
+                            || trimmed.starts_with(&format!(":{}=", sub))
                         {
-                            lines.remove(i);
-                            removed = true;
+                            // 如果包级规则行以 '{' 结尾，则范围直到对应的 '}'
+                            if trimmed.ends_with('{') {
+                                let mut depth = 1;
+                                for j in (i + 1)..close {
+                                    let next_trimmed = lines[j].trim();
+                                    if close_like(next_trimmed) {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            sub_start = Some(i);
+                                            sub_end = Some(j);
+                                            break;
+                                        }
+                                    } else if next_trimmed.starts_with(':')
+                                        && next_trimmed.ends_with('{')
+                                    {
+                                        depth += 1;
+                                    }
+                                }
+                            } else {
+                                // 独立包级规则，没有块，无法删除线程（因为没有线程）
+                                return RuleEdit::NotFound;
+                            }
+                            break;
+                        } else if trimmed == format!(":{} {{", sub)
+                            || trimmed == format!(":{}={{", sub)
+                        {
+                            // 独立子包块
+                            let mut depth = 1;
+                            let mut end = i;
+                            for j in (i + 1)..close {
+                                let next_trimmed = lines[j].trim();
+                                if close_like(next_trimmed) {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        sub_start = Some(i);
+                                        sub_end = Some(j);
+                                        break;
+                                    }
+                                } else if next_trimmed.starts_with(':')
+                                    && next_trimmed.ends_with('{')
+                                {
+                                    depth += 1;
+                                }
+                            }
                             break;
                         }
                     }
+                    if let (Some(start_idx), Some(end_idx)) = (sub_start, sub_end) {
+                        // 在块内查找线程行
+                        for i in (start_idx + 1)..end_idx {
+                            let trimmed = lines[i].trim();
+                            if trimmed.starts_with(&format!("{}=", thread))
+                                && !trimmed.starts_with(':')
+                            {
+                                lines.remove(i);
+                                removed = true;
+                                break;
+                            }
+                        }
+                    }
                 }
-                // 如果没找到，可能线程在独立行（但独立行已被删除），报错
                 if !removed {
                     return RuleEdit::NotFound;
                 }
             }
 
-            // 删除后，调用 consolidate 整理（如果还有包级规则或线程）
-            // 这里我们只删除，不合并，因为合并会重新构建
+            // 删除后，调用 consolidate 整理（可选，但为了安全，我们保留）
+            // 这里不调用，因为合并逻辑由更新操作触发，删除时不合并
             return RuleEdit::Ok;
         } else {
             return RuleEdit::NotFound;
         }
     }
-
     // === 更新或插入 ===
     if sub_in_block {
         // 子包已存在
