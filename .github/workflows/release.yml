@@ -1,132 +1,168 @@
-name: 构建 AppOpt rust
+name: 构建 AppOpt
 
 on:
-  workflow_dispatch:
+  push:
+    paths:
+      - "AppOpt/**"
+      - "AppOpt-ebpf/**"
+  workflow_dispatch: # 手动触发时默认全部重新编译
 
 permissions:
   contents: write
 
 jobs:
-  build-app:
-    name: 构建 AppOpt ARM64 Android
+  # 检测变更
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+      ebpf: ${{ steps.filter.outputs.ebpf }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'AppOpt/**'
+            ebpf:
+              - 'AppOpt-ebpf/**'
 
+  # 按需编译 AppOpt（仅当变更或手动触发时）
+  build-app:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: AppOpt
-
     steps:
-      - name: 拉取源码
-        uses: actions/checkout@v4
-
-      - name: 安装 Android NDK
-        uses: nttld/setup-ndk@v1
+      - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
-
-      - name: 安装 Rust ARM64 Android
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-
-      - name: 配置 Android linker
+      - name: 配置 linker
         run: |
           mkdir -p ~/.cargo
-
           cat > ~/.cargo/config.toml <<EOF
           [target.aarch64-linux-android]
           linker = "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
           EOF
-
-      - name: Rust 缓存
-        uses: Swatinem/rust-cache@v2
-
-      - name: 编译 AppOpt
-        run: |
-          cargo build \
-            --release \
-            --target aarch64-linux-android
-
-      - name: 验证 AppOpt
-        run: |
-          ls -lh target/aarch64-linux-android/release/AppOpt
-          file target/aarch64-linux-android/release/AppOpt
-
-      - name: 上传 AppOpt
+      - uses: Swatinem/rust-cache@v2
+      - name: 编译
+        run: cargo build --release --target aarch64-linux-android
+      - name: 上传新编译的 AppOpt
         uses: actions/upload-artifact@v4
         with:
-          name: AppOpt
+          name: AppOpt-new
           path: AppOpt/target/aarch64-linux-android/release/AppOpt
-          if-no-files-found: error
 
+  # 按需编译 eBPF
   build-ebpf:
-    name: 构建 AppOpt eBPF 程序
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ebpf == 'true'
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: AppOpt-ebpf
-
     steps:
-      - name: 拉取源码
-        uses: actions/checkout@v4
-
-      - name: 安装 Rust Nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
-
-      - name: Rust 缓存
-        uses: Swatinem/rust-cache@v2
-
-      - name: 安装 bpf-linker（预编译） # 👈 新增步骤，替换原来的两个安装步骤
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 bpf-linker
         run: |
           cargo install cargo-binstall
           cargo binstall bpf-linker --no-symlinks
-
-      - name: 配置 eBPF linker
+      - name: 配置 linker
         run: |
           mkdir -p ~/.cargo
-
           cat > ~/.cargo/config.toml <<EOF
           [target.bpfel-unknown-none]
           linker = "bpf-linker"
           EOF
-
-      - name: 编译 AppOpt-ebpf
+      - name: 编译
         env:
           RUSTFLAGS: "-C link-arg=-O2"
-        run: |
-          cargo build \
-            --release \
-            --target bpfel-unknown-none \
-            -Z build-std=core
-
-      - name: 验证 eBPF
-        run: |
-          ls -lh target/bpfel-unknown-none/release/AppOpt-ebpf
-          file target/bpfel-unknown-none/release/AppOpt-ebpf
-
-      - name: 上传 eBPF
+        run: cargo build --release --target bpfel-unknown-none -Z build-std=core
+      - name: 上传新编译的 eBPF
         uses: actions/upload-artifact@v4
         with:
-          name: AppOpt-ebpf
+          name: AppOpt-ebpf-new
           path: AppOpt-ebpf/target/bpfel-unknown-none/release/AppOpt-ebpf
-          if-no-files-found: error
 
+  # 创建发布：收集所有二进制（新编译的 + 从旧 Release 下载的）
   create-release:
-    name: 创建发布版本
     runs-on: ubuntu-latest
-
-    needs:
-      - build-app
-      - build-ebpf
-
+    needs: [changes, build-app, build-ebpf] # build-app/ebpf 可能被跳过，但需要等待它们完成（或被跳过）
+    if: always() && (needs.build-app.result == 'success' || needs.build-ebpf.result == 'success' || github.event_name == 'workflow_dispatch')
     steps:
-      - name: 下载编译产物
+      - name: 下载新编译的产物（如果存在）
         uses: actions/download-artifact@v4
         with:
-          path: artifacts/
+          path: artifacts/new/
+        continue-on-error: true # 可能没有新产物
+
+      - name: 获取最新 Release 的信息
+        id: latest_release
+        run: |
+          # 使用 GitHub CLI 获取最新 release（按创建时间排序）
+          LATEST=$(gh release list --limit 1 --order desc --json tagName,assets --jq '.[0]')
+          echo "tag=$(echo $LATEST | jq -r '.tagName')" >> $GITHUB_OUTPUT
+          # 提取 assets 下载 URL（按名称）
+          APP_URL=$(echo $LATEST | jq -r '.assets[] | select(.name=="AppOpt") | .url')
+          EBPF_URL=$(echo $LATEST | jq -r '.assets[] | select(.name=="AppOpt-ebpf") | .url')
+          echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "ebpf_url=$EBPF_URL" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true # 如果没有 Release，则忽略
+
+      - name: 准备最终发布目录
+        run: |
+          mkdir -p release/package/AppOpt-aarch64
+
+      - name: 处理 AppOpt 二进制
+        run: |
+          # 优先使用新编译的
+          if [ -f artifacts/new/AppOpt-new/AppOpt ]; then
+            cp artifacts/new/AppOpt-new/AppOpt release/package/AppOpt-aarch64/AppOpt
+          elif [ -n "${{ steps.latest_release.outputs.app_url }}" ]; then
+            # 从旧 release 下载
+            curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                 -H "Accept: application/octet-stream" \
+                 "${{ steps.latest_release.outputs.app_url }}" \
+                 -o release/package/AppOpt-aarch64/AppOpt
+          else
+            echo "错误：没有 AppOpt 二进制可用（既无新编译也无旧 Release）"
+            exit 1
+          fi
+          chmod +x release/package/AppOpt-aarch64/AppOpt
+
+      - name: 处理 eBPF 二进制
+        run: |
+          if [ -f artifacts/new/AppOpt-ebpf-new/AppOpt-ebpf ]; then
+            cp artifacts/new/AppOpt-ebpf-new/AppOpt-ebpf release/package/AppOpt-aarch64/AppOpt-ebpf
+          elif [ -n "${{ steps.latest_release.outputs.app_url }}" ]; then
+            curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                 -H "Accept: application/octet-stream" \
+                 "${{ steps.latest_release.outputs.ebpf_url }}" \
+                 -o release/package/AppOpt-aarch64/AppOpt-ebpf
+          else
+            echo "错误：没有 eBPF 二进制可用"
+            exit 1
+          fi
+          chmod +x release/package/AppOpt-aarch64/AppOpt-ebpf
+
+      - name: 打包
+        run: |
+          tar -czvf release/AppOpt-aarch64.tar.gz -C release/package AppOpt-aarch64
+          # 同时也复制单个文件到 release/ 以便附件上传
+          cp release/package/AppOpt-aarch64/* release/
 
       - name: 生成版本标签
         id: version
@@ -134,86 +170,18 @@ jobs:
           TAG="build-$(date -u '+%Y%m%d-%H%M%S')"
           echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
 
-      - name: 检查产物
-        run: |
-          ls -lhR artifacts/
-
-      - name: 准备发布文件
-        run: |
-          mkdir -p release
-
-          cp artifacts/AppOpt/AppOpt \
-             release/AppOpt
-
-          cp artifacts/AppOpt-ebpf/AppOpt-ebpf \
-             release/AppOpt-ebpf
-
-
-          mkdir -p release/package/AppOpt-aarch64
-
-          cp release/AppOpt \
-             release/package/AppOpt-aarch64/AppOpt
-
-          cp release/AppOpt-ebpf \
-             release/package/AppOpt-aarch64/AppOpt-ebpf
-
-
-          chmod +x release/*
-          chmod +x release/package/AppOpt-aarch64/*
-
-
-          tar -czvf \
-            release/AppOpt-aarch64.tar.gz \
-            -C release/package \
-            AppOpt-aarch64
-
-
-          ls -lh release/
-
-      - name: 创建版本信息
-        run: |
-          cat > release/VERSION.txt <<EOF
-          项目: AppOpt
-          版本: ${{ steps.version.outputs.tag_name }}
-          构建编号: ${{ github.run_number }}
-          提交: ${{ github.sha }}
-          时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          EOF
-
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
-
         with:
           tag_name: ${{ steps.version.outputs.tag_name }}
-
           name: "AppOpt ${{ steps.version.outputs.tag_name }}"
-
           body: |
-            ## 🚀 AppOpt 自动构建版本
-
-            ### 文件
-
-            - AppOpt Android ARM64
-            - AppOpt eBPF
-
-            ### 压缩包
-
-            ```
-            AppOpt-aarch64/
-            ├── AppOpt
-            └── AppOpt-ebpf
-            ```
-
-            ### 构建信息
-
-            - 构建编号: #${{ github.run_number }}
-            - 提交: `${{ github.sha }}`
-
+            ## 自动构建版本（增量更新）
+            - AppOpt: ${{ needs.changes.outputs.app == 'true' && '新编译' || '复用旧版' }}
+            - eBPF: ${{ needs.changes.outputs.ebpf == 'true' && '新编译' || '复用旧版' }}
           files: |
             release/AppOpt
             release/AppOpt-ebpf
             release/AppOpt-aarch64.tar.gz
-            release/VERSION.txt
-
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
