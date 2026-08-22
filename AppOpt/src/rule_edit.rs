@@ -454,7 +454,13 @@ fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
 }
 
 /// 强制合并子包的所有规则为一个统一的块
-fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdit {
+/// `block_close`: 主包块的闭合括号索引（即 `}` 所在行号）
+fn consolidate_sub_pkg(
+    lines: &mut Vec<String>,
+    pkg: &str,
+    sub: &str,
+    block_close: usize,
+) -> RuleEdit {
     let full_pkg = format!("{}:{}", pkg, sub);
     // 收集所有属于该子包的条目
     let mut pkg_rule_idx = None;
@@ -465,11 +471,11 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
     while i < lines.len() {
         let trimmed = lines[i].trim();
         // 包级规则（可能是 :子包=CPU 或 :子包=CPU {）
-        if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub)) {
+        if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub))
+        {
             pkg_rule_idx = Some(i);
             // 如果该行以 '{' 结尾，说明是合并格式，后续行包含线程
             if trimmed.ends_with('{') {
-                // 提取该行后的线程，直到遇到 '}'
                 let start = i;
                 let mut depth = 1;
                 let mut end = start;
@@ -539,10 +545,14 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
         None => return RuleEdit::NotFound,
     };
 
-    // 提取 CPU 值（修复借用冲突：将结果转为 String）
+    // 提取 CPU 值
     let pkg_line = &lines[pkg_idx];
     let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
-        pkg_line[eq_pos + 1..].trim().trim_end_matches('{').trim().to_string()
+        pkg_line[eq_pos + 1..]
+            .trim()
+            .trim_end_matches('{')
+            .trim()
+            .to_string()
     } else {
         return RuleEdit::Malformed;
     };
@@ -574,38 +584,66 @@ fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdi
         lines.remove(*idx);
     }
 
-    // 插入合并行（使用 cpus_val 字符串）
+    // 插入合并行（使用 block_close）
     let merged_line = format!(" :{}={} {{", sub, cpus_val);
-    // 找到主包块的闭合括号位置
-    let mut insert_pos = lines.len();
-    for i in (0..lines.len()).rev() {
-        if close_like(lines[i].trim()) {
-            insert_pos = i;
-            break;
-        }
-    }
-    // 在闭合括号前插入
-    lines.insert(insert_pos, merged_line);
+    lines.insert(block_close, merged_line);
     let mut offset = 1;
     for thread_line in threads {
-        lines.insert(insert_pos + offset, format!("        {}", thread_line));
+        lines.insert(block_close + offset, format!("        {}", thread_line));
         offset += 1;
     }
-    // 如果存在线程，添加闭合括号
     if offset > 1 {
-        lines.insert(insert_pos + offset, "    }".to_string());
+        lines.insert(block_close + offset, "    }".to_string());
     }
 
     RuleEdit::Ok
 }
-/// 以子包块格式写入或删除规则（自动合并包级和线程规则）
+
+/// 查找所有以 `:子包 {` 开头的块的范围（独立块）
+fn find_all_sub_blocks(lines: &[String], sub: &str) -> Vec<(usize, usize)> {
+    let mut blocks = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
+            let start = i;
+            let mut depth = 1;
+            let mut end = start;
+            for j in (i + 1)..lines.len() {
+                let next_trimmed = lines[j].trim();
+                if close_like(next_trimmed) {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = j;
+                        break;
+                    }
+                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                    depth += 1;
+                }
+            }
+            if end > start {
+                blocks.push((start, end));
+                i = end + 1;
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    blocks
+}
+
+/// 以子包块格式写入或删除规则
+/// `delete_all`: true 表示删除整个子包（包级规则+所有线程），false 表示仅操作单条规则
+/// 当 `delete_all=false` 且 `cpus` 非空时，表示更新/插入；`cpus` 为空时表示删除
 fn write_sub_pkg_block(
     lines: &mut Vec<String>,
     pkg: &str,
     sub: &str,
     thread: &str,
     cpus: &str,
-    is_delete: bool,
+    delete_all: bool,
 ) -> RuleEdit {
     let full_pkg = format!("{}:{}", pkg, sub);
     let mut t = target_scan(lines, pkg);
@@ -669,123 +707,42 @@ fn write_sub_pkg_block(
     // ---- 处理子包 ----
     let sub_in_block = t.sub_pkgs.contains_key(sub);
 
-    // === 删除逻辑 ===
-    if is_delete {
-        if sub_in_block {
-            let sub_lines = lines.clone();
-            let sub_target = target_scan(&sub_lines, &full_pkg);
-            let mut removed = false;
-
-            if thread.is_empty() {
-                // 删除包级规则（:子包 = CPU 行）
-                if let Some(close) = t.block_close {
-                    let start = t.block_open.unwrap_or(0);
-                    for i in (start..close).rev() {
-                        let trimmed = lines[i].trim();
-                        if trimmed.starts_with(&format!(":{} =", sub))
-                            || trimmed.starts_with(&format!(":{}=", sub))
-                        {
-                            lines.remove(i);
-                            removed = true;
-                            break;
-                        }
-                    }
-                }
-                if !removed {
-                    // 如果没找到包级规则，则删除整个子包块（如果存在）
-                    if let Some(block_start) = sub_target.block_open {
-                        let block_end = sub_target.block_close.unwrap_or(block_start);
-                        for i in (block_start..=block_end).rev() {
-                            lines.remove(i);
-                        }
-                        removed = true;
-                    }
-                }
-            } else {
-                // ==== 新的删除线程规则逻辑 ====
-                // 直接在主包块内查找匹配行，并确保它属于该子包
-                if let Some(close) = t.block_close {
-                    let start = t.block_open.unwrap_or(0);
-                    // 先找到子包包级规则或块所在的范围
-                    let mut sub_start = None;
-                    let mut sub_end = None;
-                    for i in start..close {
-                        let trimmed = lines[i].trim();
-                        if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub)) {
-                            // 如果包级规则行以 '{' 结尾，则范围直到对应的 '}'
-                            if trimmed.ends_with('{') {
-                                let mut depth = 1;
-                                for j in (i + 1)..close {
-                                    let next_trimmed = lines[j].trim();
-                                    if close_like(next_trimmed) {
-                                        depth -= 1;
-                                        if depth == 0 {
-                                            sub_start = Some(i);
-                                            sub_end = Some(j);
-                                            break;
-                                        }
-                                    } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                                        depth += 1;
-                                    }
-                                }
-                            } else {
-                                // 独立包级规则，没有块，无法删除线程（因为没有线程）
-                                return RuleEdit::NotFound;
-                            }
-                            break;
-                        } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
-                            // 独立子包块
-                            let mut depth = 1;
-                            let mut end = i;
-                            for j in (i + 1)..close {
-                                let next_trimmed = lines[j].trim();
-                                if close_like(next_trimmed) {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        sub_start = Some(i);
-                                        sub_end = Some(j);
-                                        break;
-                                    }
-                                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                                    depth += 1;
-                                }
-                            }
-                            break;
-                        }
-                    }
-                    if let (Some(start_idx), Some(end_idx)) = (sub_start, sub_end) {
-                        // 在块内查找线程行
-                        for i in (start_idx + 1)..end_idx {
-                            let trimmed = lines[i].trim();
-                            if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':') {
-                                lines.remove(i);
-                                removed = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if !removed {
-                    return RuleEdit::NotFound;
+    // === 删除整个子包（delete_all = true） ===
+    if delete_all {
+        let mut removed = false;
+        // 1. 删除包级规则行（:sub = CPU 或 :sub=CPU）
+        if let Some(close) = t.block_close {
+            let start = t.block_open.unwrap_or(0);
+            for i in (start..close).rev() {
+                let trimmed = lines[i].trim();
+                if trimmed.starts_with(&format!(":{} =", sub))
+                    || trimmed.starts_with(&format!(":{}=", sub))
+                {
+                    lines.remove(i);
+                    removed = true;
+                    break;
                 }
             }
-
-            // 删除后，调用 consolidate 整理（可选，但为了安全，我们保留）
-            // 这里不调用，因为合并逻辑由更新操作触发，删除时不合并
-            return RuleEdit::Ok;
-        } else {
+        }
+        // 2. 删除所有子包块（:sub { ... }）
+        let blocks = find_all_sub_blocks(lines, sub);
+        for (start, end) in blocks.iter().rev() {
+            for i in (*start..=*end).rev() {
+                lines.remove(i);
+            }
+            removed = true;
+        }
+        if !removed {
             return RuleEdit::NotFound;
         }
+        return RuleEdit::Ok;
     }
 
-    // === 更新或插入 ===
-    if sub_in_block {
-        // 子包已存在
-        let sub_lines = lines.clone();
-        let sub_target = target_scan(&sub_lines, &full_pkg);
-
-        if thread.is_empty() {
-            // 更新包级规则
+    // === 非删除整个子包，仅操作包级或线程规则 ===
+    if thread.is_empty() {
+        // ---- 包级规则操作 ----
+        if !cpus.is_empty() {
+            // 更新或插入包级规则
             let mut found_line = false;
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
@@ -815,36 +772,136 @@ fn write_sub_pkg_block(
                     lines.push(format!(" :{}={}", sub, cpus));
                 }
             }
+            // 调用合并整理
+            if let Some(close) = t.block_close {
+                let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+            }
+            RuleEdit::Ok
         } else {
-            // 线程规则：在子包块内查找并更新或插入
-            // 首先找到子包块的范围（包括合并格式）
-            let mut sub_block_start = sub_target.block_open;
-            let mut sub_block_end = sub_target.block_close;
-            // 如果子包没有块，但可能有合并格式的包级规则，我们需要查找范围
-            if sub_block_start.is_none() || sub_block_end.is_none() {
-                // 查找合并格式 :子包=CPU {
-                if let Some(close) = t.block_close {
-                    let start = t.block_open.unwrap_or(0);
-                    for i in start..close {
-                        let trimmed = lines[i].trim();
-                        if trimmed.starts_with(&format!(":{} =", sub)) && trimmed.ends_with('{') {
-                            let mut depth = 1;
-                            let mut end = i;
-                            for j in (i + 1)..close {
-                                let next_trimmed = lines[j].trim();
-                                if close_like(next_trimmed) {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        sub_block_start = Some(i);
-                                        sub_block_end = Some(j);
-                                        break;
-                                    }
-                                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                                    depth += 1;
+            // 删除包级规则（cpus 为空）
+            let mut found = false;
+            if let Some(close) = t.block_close {
+                let start = t.block_open.unwrap_or(0);
+                for i in (start..close).rev() {
+                    let trimmed = lines[i].trim();
+                    if trimmed.starts_with(&format!(":{} =", sub))
+                        || trimmed.starts_with(&format!(":{}=", sub))
+                    {
+                        lines.remove(i);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found {
+                return RuleEdit::NotFound;
+            }
+            RuleEdit::Ok
+        }
+    } else {
+        // ---- 线程规则操作 ----
+        if cpus.is_empty() {
+            // 删除指定线程
+            let mut removed = false;
+            // 先找到子包块范围（合并格式或独立块）
+            let mut sub_block_start = None;
+            let mut sub_block_end = None;
+            if let Some(close) = t.block_close {
+                let start = t.block_open.unwrap_or(0);
+                for i in start..close {
+                    let trimmed = lines[i].trim();
+                    if trimmed.starts_with(&format!(":{} =", sub)) && trimmed.ends_with('{') {
+                        let mut depth = 1;
+                        for j in (i + 1)..close {
+                            let next_trimmed = lines[j].trim();
+                            if close_like(next_trimmed) {
+                                depth -= 1;
+                                if depth == 0 {
+                                    sub_block_start = Some(i);
+                                    sub_block_end = Some(j);
+                                    break;
                                 }
+                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                                depth += 1;
                             }
-                            break;
                         }
+                        break;
+                    } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub)
+                    {
+                        let mut depth = 1;
+                        for j in (i + 1)..close {
+                            let next_trimmed = lines[j].trim();
+                            if close_like(next_trimmed) {
+                                depth -= 1;
+                                if depth == 0 {
+                                    sub_block_start = Some(i);
+                                    sub_block_end = Some(j);
+                                    break;
+                                }
+                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                                depth += 1;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            if let (Some(start_idx), Some(end_idx)) = (sub_block_start, sub_block_end) {
+                for i in (start_idx + 1)..end_idx {
+                    let trimmed = lines[i].trim();
+                    if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':') {
+                        lines.remove(i);
+                        removed = true;
+                        break;
+                    }
+                }
+            }
+            if !removed {
+                return RuleEdit::NotFound;
+            }
+            RuleEdit::Ok
+        } else {
+            // 更新或插入线程
+            // 先找到子包块范围
+            let mut sub_block_start = None;
+            let mut sub_block_end = None;
+            if let Some(close) = t.block_close {
+                let start = t.block_open.unwrap_or(0);
+                for i in start..close {
+                    let trimmed = lines[i].trim();
+                    if trimmed.starts_with(&format!(":{} =", sub)) && trimmed.ends_with('{') {
+                        let mut depth = 1;
+                        for j in (i + 1)..close {
+                            let next_trimmed = lines[j].trim();
+                            if close_like(next_trimmed) {
+                                depth -= 1;
+                                if depth == 0 {
+                                    sub_block_start = Some(i);
+                                    sub_block_end = Some(j);
+                                    break;
+                                }
+                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                                depth += 1;
+                            }
+                        }
+                        break;
+                    } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub)
+                    {
+                        let mut depth = 1;
+                        for j in (i + 1)..close {
+                            let next_trimmed = lines[j].trim();
+                            if close_like(next_trimmed) {
+                                depth -= 1;
+                                if depth == 0 {
+                                    sub_block_start = Some(i);
+                                    sub_block_end = Some(j);
+                                    break;
+                                }
+                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                                depth += 1;
+                            }
+                        }
+                        break;
                     }
                 }
             }
@@ -855,9 +912,9 @@ fn write_sub_pkg_block(
                 for i in (start + 1)..end {
                     let trimmed = lines[i].trim();
                     if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':') {
-                        // 更新
                         if let Some(comment_pos) = comment_at(&lines[i]) {
-                            lines[i] = format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
+                            lines[i] =
+                                format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
                         } else {
                             lines[i] = format!("        {}={}", thread, cpus);
                         }
@@ -870,100 +927,49 @@ fn write_sub_pkg_block(
                     lines.insert(end, format!("        {}={}", thread, cpus));
                 }
             } else {
-                // 子包没有块，创建块（但前提是子包有包级规则）
-                // 我们直接创建 :子包 { 线程 } 块，并将它插入到包级规则后
+                // 子包没有块，创建新块
                 let sub_block = format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus);
-                // 查找包级规则行位置
-                if let Some(pkg_line_idx) = sub_target.pkg_line {
-                    // 获取索引
-                    let pkg_idx = if let Some(PkgLine::Standalone(i)) = sub_target.pkg_line {
-                        i
-                    } else if let Some(PkgLine::OpenInline(i)) = sub_target.pkg_line {
-                        i
-                    } else {
-                        // 找不到，使用块结束位置
-                        if let Some(close) = t.block_close {
-                            lines.insert(close, sub_block.clone());
-                        } else {
-                            lines.push(sub_block.clone());
+                // 检查是否有包级规则，如果有则在其后插入；否则先创建包级规则
+                let sub_target = target_scan(lines, &full_pkg);
+                if sub_target.pkg_line.is_some() {
+                    let pkg_idx = match sub_target.pkg_line {
+                        Some(
+                            PkgLine::Standalone(i)
+                            | PkgLine::OpenInline(i)
+                            | PkgLine::BareOpen(i)
+                            | PkgLine::BarePending(i),
+                        ) => i,
+                        None => {
+                            // 不应发生
+                            if let Some(close) = t.block_close {
+                                lines.insert(close, sub_block);
+                            } else {
+                                lines.push(sub_block);
+                            }
+                            return RuleEdit::Ok;
                         }
-                        // 调用 consolidate 整理
-                        let _ = consolidate_sub_pkg(lines, pkg, sub);
-                        return RuleEdit::Ok;
                     };
-                    // 在包级规则行后面插入块
                     lines.insert(pkg_idx + 1, sub_block);
                 } else {
-                    // 没有包级规则，在块结束前插入
+                    // 没有包级规则，创建包级规则和块
                     if let Some(close) = t.block_close {
-                        lines.insert(close, sub_block);
+                        lines.insert(close, format!(" :{}={}", sub, cpus));
+                        lines.insert(close + 1, sub_block);
                     } else {
+                        lines.push(format!(" :{}={}", sub, cpus));
                         lines.push(sub_block);
                     }
                 }
             }
+            // 调用合并整理
+            if let Some(close) = t.block_close {
+                let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+            }
+            RuleEdit::Ok
         }
-
-        // 调用合并函数，整理所有子包规则
-        let _ = consolidate_sub_pkg(lines, pkg, sub);
-        RuleEdit::Ok
-    } else {
-        // 子包不存在，首次添加
-        if let Some(close) = t.block_close {
-            let sub_block = if thread.is_empty() {
-                format!(" :{}={}", sub, cpus)
-            } else {
-                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
-            };
-            lines.insert(close, sub_block);
-        } else if let Some(open) = t.block_open {
-            let sub_block = if thread.is_empty() {
-                format!(" :{}={}", sub, cpus)
-            } else {
-                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
-            };
-            lines.insert(open + 1, sub_block);
-        } else {
-            return RuleEdit::IoErr;
-        }
-        RuleEdit::Ok
     }
 }
 
-/// 辅助函数：查找所有以 :子包 { 开头的块的范围
-fn find_all_sub_blocks(lines: &[String], sub: &str) -> Vec<(usize, usize)> {
-    let mut blocks = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
-            let start = i;
-            let mut depth = 1;
-            let mut end = start;
-            for j in (i + 1)..lines.len() {
-                let next_trimmed = lines[j].trim();
-                if close_like(next_trimmed) {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = j;
-                        break;
-                    }
-                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                    depth += 1;
-                }
-            }
-            if end > start {
-                blocks.push((start, end));
-                i = end + 1;
-            } else {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    blocks
-}
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
