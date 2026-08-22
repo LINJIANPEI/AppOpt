@@ -453,28 +453,26 @@ fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
     idxs
 }
 
-/// 强制合并子包的所有规则为一个统一的块
-/// `block_close`: 主包块的闭合括号索引（即 `}` 所在行号）
-fn consolidate_sub_pkg(
-    lines: &mut Vec<String>,
-    pkg: &str,
-    sub: &str,
-    block_close: usize,
-) -> RuleEdit {
+fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdit {
     let full_pkg = format!("{}:{}", pkg, sub);
-    // 收集所有属于该子包的条目
+    // 重新扫描主包块闭合索引
+    let t = target_scan(lines, pkg);
+    let block_close = match t.block_close {
+        Some(c) => c,
+        None => return RuleEdit::NotFound, // 主包无块，无法合并
+    };
+
+    // ---- 以下逻辑与原 consolidate_sub_pkg 相同，但使用 block_close 变量 ----
     let mut pkg_rule_idx = None;
-    let mut block_indices = Vec::new(); // (start, end)
+    let mut block_indices = Vec::new();
     let mut thread_lines = Vec::new();
 
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        // 包级规则（可能是 :子包=CPU 或 :子包=CPU {）
         if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub))
         {
             pkg_rule_idx = Some(i);
-            // 如果该行以 '{' 结尾，说明是合并格式，后续行包含线程
             if trimmed.ends_with('{') {
                 let start = i;
                 let mut depth = 1;
@@ -492,7 +490,6 @@ fn consolidate_sub_pkg(
                     }
                 }
                 if end > start {
-                    // 收集线程行
                     for k in (start + 1)..end {
                         let line = lines[k].trim();
                         if !line.is_empty() && !close_like(line) && !line.starts_with(':') {
@@ -507,7 +504,6 @@ fn consolidate_sub_pkg(
             i += 1;
             continue;
         }
-        // 子包块开始 :子包 {
         if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
             let start = i;
             let mut depth = 1;
@@ -539,13 +535,11 @@ fn consolidate_sub_pkg(
         i += 1;
     }
 
-    // 必须有包级规则
     let pkg_idx = match pkg_rule_idx {
         Some(idx) => idx,
         None => return RuleEdit::NotFound,
     };
 
-    // 提取 CPU 值
     let pkg_line = &lines[pkg_idx];
     let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
         pkg_line[eq_pos + 1..]
@@ -557,7 +551,6 @@ fn consolidate_sub_pkg(
         return RuleEdit::Malformed;
     };
 
-    // 去重线程规则（保留顺序）
     let mut threads: Vec<String> = Vec::new();
     for line in thread_lines {
         let trimmed = line.trim();
@@ -568,7 +561,6 @@ fn consolidate_sub_pkg(
         }
     }
 
-    // 删除所有相关条目（包级规则和所有块）
     let mut remove_indices: Vec<usize> = Vec::new();
     remove_indices.push(pkg_idx);
     for (start, end) in &block_indices {
@@ -584,7 +576,6 @@ fn consolidate_sub_pkg(
         lines.remove(*idx);
     }
 
-    // 插入合并行（使用 block_close）
     let merged_line = format!(" :{}={} {{", sub, cpus_val);
     lines.insert(block_close, merged_line);
     let mut offset = 1;
@@ -599,7 +590,7 @@ fn consolidate_sub_pkg(
     RuleEdit::Ok
 }
 
-/// 查找所有以 `:子包 {` 开头的块的范围（独立块）
+/// 查找所有以 `:子包 {` 开头的独立块的范围
 fn find_all_sub_blocks(lines: &[String], sub: &str) -> Vec<(usize, usize)> {
     let mut blocks = Vec::new();
     let mut i = 0;
@@ -634,9 +625,6 @@ fn find_all_sub_blocks(lines: &[String], sub: &str) -> Vec<(usize, usize)> {
     blocks
 }
 
-/// 以子包块格式写入或删除规则
-/// `delete_all`: true 表示删除整个子包（包级规则+所有线程），false 表示仅操作单条规则
-/// 当 `delete_all=false` 且 `cpus` 非空时，表示更新/插入；`cpus` 为空时表示删除
 fn write_sub_pkg_block(
     lines: &mut Vec<String>,
     pkg: &str,
@@ -704,13 +692,13 @@ fn write_sub_pkg_block(
         t = target_scan(lines, pkg);
     }
 
-    // ---- 处理子包 ----
+    // 重新获取子包是否存在于主包块中
     let sub_in_block = t.sub_pkgs.contains_key(sub);
 
     // === 删除整个子包（delete_all = true） ===
     if delete_all {
         let mut removed = false;
-        // 1. 删除包级规则行（:sub = CPU 或 :sub=CPU）
+        // 1. 删除包级规则行（:sub=CPU 或 :sub = CPU）
         if let Some(close) = t.block_close {
             let start = t.block_open.unwrap_or(0);
             for i in (start..close).rev() {
@@ -724,7 +712,7 @@ fn write_sub_pkg_block(
                 }
             }
         }
-        // 2. 删除所有子包块（:sub { ... }）
+        // 2. 删除所有独立子包块（:sub { ... }）
         let blocks = find_all_sub_blocks(lines, sub);
         for (start, end) in blocks.iter().rev() {
             for i in (*start..=*end).rev() {
@@ -738,7 +726,7 @@ fn write_sub_pkg_block(
         return RuleEdit::Ok;
     }
 
-    // === 非删除整个子包，仅操作包级或线程规则 ===
+    // === 非删除整个子包 ===
     if thread.is_empty() {
         // ---- 包级规则操作 ----
         if !cpus.is_empty() {
@@ -772,13 +760,13 @@ fn write_sub_pkg_block(
                     lines.push(format!(" :{}={}", sub, cpus));
                 }
             }
-            // 调用合并整理
+            // 调用合并整理（动态计算闭合索引）
             if let Some(close) = t.block_close {
                 let _ = consolidate_sub_pkg(lines, pkg, sub, close);
             }
             RuleEdit::Ok
         } else {
-            // 删除包级规则（cpus 为空）
+            // 删除包级规则（cpus 为空）—— 只删除规则行，保留线程块
             let mut found = false;
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
@@ -796,6 +784,7 @@ fn write_sub_pkg_block(
             if !found {
                 return RuleEdit::NotFound;
             }
+            // 注意：不删除任何线程块，也不调用 consolidate（因为包级规则没了，线程块保持独立）
             RuleEdit::Ok
         }
     } else {
@@ -803,7 +792,7 @@ fn write_sub_pkg_block(
         if cpus.is_empty() {
             // 删除指定线程
             let mut removed = false;
-            // 先找到子包块范围（合并格式或独立块）
+            // 先尝试在合并格式或独立块中查找并删除
             let mut sub_block_start = None;
             let mut sub_block_end = None;
             if let Some(close) = t.block_close {
@@ -811,6 +800,7 @@ fn write_sub_pkg_block(
                 for i in start..close {
                     let trimmed = lines[i].trim();
                     if trimmed.starts_with(&format!(":{} =", sub)) && trimmed.ends_with('{') {
+                        // 合并格式
                         let mut depth = 1;
                         for j in (i + 1)..close {
                             let next_trimmed = lines[j].trim();
@@ -828,6 +818,7 @@ fn write_sub_pkg_block(
                         break;
                     } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub)
                     {
+                        // 独立块
                         let mut depth = 1;
                         for j in (i + 1)..close {
                             let next_trimmed = lines[j].trim();
@@ -859,10 +850,11 @@ fn write_sub_pkg_block(
             if !removed {
                 return RuleEdit::NotFound;
             }
+            // 删除线程后，若子包只剩包级规则且没有线程，可以选择保留或删除包级规则？
+            // 按照通常逻辑，保留包级规则，不自动删除。
             RuleEdit::Ok
         } else {
             // 更新或插入线程
-            // 先找到子包块范围
             let mut sub_block_start = None;
             let mut sub_block_end = None;
             if let Some(close) = t.block_close {
@@ -926,12 +918,15 @@ fn write_sub_pkg_block(
                     // 在块结束前插入新线程
                     lines.insert(end, format!("        {}={}", thread, cpus));
                 }
+                // 调用合并整理（动态计算闭合索引）
+                if let Some(close) = t.block_close {
+                    let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+                }
             } else {
-                // 子包没有块，创建新块
-                let sub_block = format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus);
-                // 检查是否有包级规则，如果有则在其后插入；否则先创建包级规则
+                // 子包没有块，创建新块（先确保有包级规则）
                 let sub_target = target_scan(lines, &full_pkg);
                 if sub_target.pkg_line.is_some() {
+                    // 已有包级规则，在其后插入块
                     let pkg_idx = match sub_target.pkg_line {
                         Some(
                             PkgLine::Standalone(i)
@@ -939,31 +934,30 @@ fn write_sub_pkg_block(
                             | PkgLine::BareOpen(i)
                             | PkgLine::BarePending(i),
                         ) => i,
-                        None => {
-                            // 不应发生
-                            if let Some(close) = t.block_close {
-                                lines.insert(close, sub_block);
-                            } else {
-                                lines.push(sub_block);
-                            }
-                            return RuleEdit::Ok;
-                        }
+                        None => return RuleEdit::IoErr,
                     };
+                    let sub_block = format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus);
                     lines.insert(pkg_idx + 1, sub_block);
                 } else {
                     // 没有包级规则，创建包级规则和块
                     if let Some(close) = t.block_close {
                         lines.insert(close, format!(" :{}={}", sub, cpus));
-                        lines.insert(close + 1, sub_block);
+                        lines.insert(
+                            close + 1,
+                            format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus),
+                        );
                     } else {
                         lines.push(format!(" :{}={}", sub, cpus));
-                        lines.push(sub_block);
+                        lines.push(format!(
+                            "    :{} {{\n        {}={}\n    }}",
+                            sub, thread, cpus
+                        ));
                     }
                 }
-            }
-            // 调用合并整理
-            if let Some(close) = t.block_close {
-                let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+                // 调用合并整理
+                if let Some(close) = t.block_close {
+                    let _ = consolidate_sub_pkg(lines, pkg, sub, close);
+                }
             }
             RuleEdit::Ok
         }
@@ -1058,7 +1052,7 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
     if parts.len() == 2 {
         let main_pkg = parts[0];
         let sub = parts[1];
-        let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", true);
+        let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", false);
         // 直接返回结果，不进行回退
         return match result {
             RuleEdit::Ok => file_write(path, &lines),
@@ -1103,7 +1097,6 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
     if parts.len() == 2 {
         let main_pkg = parts[0];
         let sub = parts[1];
-        // 删除子包的所有规则
         let result = write_sub_pkg_block(&mut lines, main_pkg, sub, "", "", true);
         if let RuleEdit::Ok = result {
             return file_write(path, &lines);
