@@ -236,17 +236,10 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             OuterLine::Junk => {
                 pending = None;
             }
-            OuterLine::SubPkgRule {
-                sub,
-                cpus: _,
-                open: _,
-            } => {
-                // 单行子包规则，暂不处理（写入时作为独立行）
+            OuterLine::SubPkgRule { sub, .. } => {
                 let _sub_pkg = format!("{}:{}", pkg, sub);
             }
-            OuterLine::SubPkgBlock { sub: _ } => {
-                // 子包块开始已在前面识别，这里不处理
-            }
+            OuterLine::SubPkgBlock { sub: _ } => {}
         }
     }
 
@@ -416,7 +409,7 @@ fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
     idxs
 }
 
-/// 以子包块格式写入或删除规则（自动将独立行主包转换为块）
+/// 以子包块格式写入或删除规则（完全鲁棒，自动处理各种情况）
 fn write_sub_pkg_block(
     lines: &mut Vec<String>,
     pkg: &str,
@@ -428,23 +421,27 @@ fn write_sub_pkg_block(
     let full_pkg = format!("{}:{}", pkg, sub);
     let mut t = target_scan(lines, pkg);
 
-    // 如果子包不存在且主包没有块，则自动将主包转换为块
-    if !t.sub_pkgs.contains_key(sub) && t.block_open.is_none() {
-        let pkg_line_idx = if let Some(PkgLine::Standalone(i)) = t.pkg_line {
-            i
+    // 如果主包根本不存在，则创建新块
+    if !t.any_line() {
+        let sub_line = if thread.is_empty() {
+            format!("    :{} = {}", sub, cpus)
         } else {
-            return RuleEdit::IoErr;
+            format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
         };
+        let block = format!("{} {{\n{}\n}}", pkg, sub_line);
+        lines.push(block);
+        return RuleEdit::Ok;
+    }
 
-        let line = &lines[pkg_line_idx];
+    // 如果主包是独立行，转换为块
+    if let Some(PkgLine::Standalone(idx)) = t.pkg_line {
+        let line = &lines[idx];
         let trimmed = line.trim();
-
         if !trimmed.ends_with('{') {
             let comment = match comment_at(line) {
                 Some(pos) => &line[pos..],
                 None => "",
             };
-            // 使用 String 避免临时值借用
             let base = if trimmed.contains('=') {
                 trimmed.trim_end_matches('{').trim_end().to_string()
             } else {
@@ -455,184 +452,143 @@ fn write_sub_pkg_block(
             } else {
                 format!("{} {{{}", base, comment)
             };
-            lines[pkg_line_idx] = new_line;
-        }
-
-        t = target_scan(lines, pkg);
-        if let Some(close) = t.block_close {
-            let sub_block = if thread.is_empty() {
-                format!("    :{} = {}", sub, cpus)
-            } else {
-                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
-            };
-            lines.insert(close, sub_block);
-            return RuleEdit::Ok;
-        } else if let Some(open) = t.block_open {
-            let sub_block = if thread.is_empty() {
-                format!("    :{} = {}", sub, cpus)
-            } else {
-                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
-            };
-            lines.insert(open + 1, sub_block);
-            let last = lines.last().map(|s| s.trim()).unwrap_or("");
-            if !close_like(last) {
-                lines.push("}".to_string());
-            }
-            return RuleEdit::Ok;
-        } else {
-            // 兜底创建
-            let indent = "    ";
-            let sub_line = if thread.is_empty() {
-                format!("{}{} = {}", indent, sub, cpus)
-            } else {
-                // 修正：补全占位符，使用 `={}` 来消费 cpus
-                format!(
-                    "{}{} {{\n{}{}{}={}\n{}}}",
-                    indent, sub, indent, indent, thread, cpus, indent
-                )
-            };
-            let line = &lines[pkg_line_idx];
-            let new_line = format!("{} {{", line.trim_end_matches('{').trim_end());
-            lines[pkg_line_idx] = new_line;
-            lines.insert(pkg_line_idx + 1, sub_line);
-            lines.insert(pkg_line_idx + 2, "}".to_string());
-            return RuleEdit::Ok;
+            lines[idx] = new_line;
+            t = target_scan(lines, pkg);
         }
     }
 
-    // ---- 子包已存在或主包已有块 ----
-    if !t.sub_pkgs.contains_key(sub) {
-        if let Some(close) = t.block_close {
-            let sub_block = if thread.is_empty() {
-                format!("    :{} = {}", sub, cpus)
-            } else {
-                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
-            };
-            lines.insert(close, sub_block);
-            return RuleEdit::Ok;
-        } else if let Some(open) = t.block_open {
-            let sub_block = if thread.is_empty() {
-                format!("    :{} = {}", sub, cpus)
-            } else {
-                format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
-            };
-            lines.insert(open + 1, sub_block);
-            return RuleEdit::Ok;
-        } else {
-            return RuleEdit::IoErr;
-        }
-    }
-
-    // 子包已存在，更新或删除
-    let sub_lines = lines.clone();
-    let sub_target = target_scan(&sub_lines, &full_pkg);
-
-    if is_delete {
-        if let Some(block_start) = sub_target.block_open {
-            let block_end = sub_target.block_close.unwrap_or(block_start);
-            for i in (block_start..=block_end).rev() {
+    // 如果子包已经存在，更新或删除
+    if t.sub_pkgs.contains_key(sub) {
+        let sub_lines = lines.clone();
+        let sub_target = target_scan(&sub_lines, &full_pkg);
+        if is_delete {
+            if let Some(block_start) = sub_target.block_open {
+                let block_end = sub_target.block_close.unwrap_or(block_start);
+                for i in (block_start..=block_end).rev() {
+                    lines.remove(i);
+                }
+            } else if let Some(PkgLine::Standalone(i)) = sub_target.pkg_line {
                 lines.remove(i);
             }
-        } else if let Some(PkgLine::Standalone(i)) = sub_target.pkg_line {
-            lines.remove(i);
-        }
-        return RuleEdit::Ok;
-    }
-
-    // 更新子包规则
-    if thread.is_empty() {
-        if let Some(PkgLine::Standalone(i)) = sub_target.pkg_line {
-            let line = &lines[i];
-            if let Some(comment_pos) = comment_at(line) {
-                lines[i] = format!("    :{} = {}{}", sub, cpus, &line[comment_pos..]);
-            } else {
-                lines[i] = format!("    :{} = {}", sub, cpus);
-            }
+            return RuleEdit::Ok;
         } else {
-            if let Some(close) = sub_target.block_close {
-                lines.insert(close, format!("    :{} = {}", sub, cpus));
-            } else if let Some(open) = sub_target.block_open {
-                lines.insert(open + 1, format!("    :{} = {}", sub, cpus));
-            } else {
-                if let Some(close) = t.block_close {
-                    lines.insert(close, format!("    :{} = {}", sub, cpus));
-                } else if let Some(open) = t.block_open {
-                    lines.insert(open + 1, format!("    :{} = {}", sub, cpus));
-                } else {
-                    lines.push(format!(":{} = {}", sub, cpus));
-                }
-            }
-        }
-    } else {
-        // 线程规则更新（使用索引循环避免借用冲突）
-        let mut found = false;
-        for i in 0..lines.len() {
-            let trimmed = lines[i].trim();
-            if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.contains(':') {
-                if let Some(comment_pos) = comment_at(&lines[i]) {
-                    lines[i] = format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
-                } else {
-                    lines[i] = format!("        {}={}", thread, cpus);
-                }
-                found = true;
-                break;
-            }
-            if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
-                let mut depth = 1;
-                for j in (i + 1)..lines.len() {
-                    let next_trimmed = lines[j].trim();
-                    if close_like(next_trimmed) {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                        depth += 1;
+            if thread.is_empty() {
+                if let Some(PkgLine::Standalone(i)) = sub_target.pkg_line {
+                    let line = &lines[i];
+                    if let Some(comment_pos) = comment_at(line) {
+                        lines[i] = format!("    :{} = {}{}", sub, cpus, &line[comment_pos..]);
+                    } else {
+                        lines[i] = format!("    :{} = {}", sub, cpus);
                     }
-                    if depth == 1 {
-                        if next_trimmed.starts_with(&format!("{}=", thread))
-                            && !next_trimmed.contains(':')
-                        {
-                            if let Some(comment_pos) = comment_at(&lines[j]) {
-                                lines[j] = format!(
-                                    "        {}={}{}",
-                                    thread,
-                                    cpus,
-                                    &lines[j][comment_pos..]
-                                );
-                            } else {
-                                lines[j] = format!("        {}={}", thread, cpus);
+                } else {
+                    if let Some(close) = sub_target.block_close {
+                        lines.insert(close, format!("    :{} = {}", sub, cpus));
+                    } else if let Some(open) = sub_target.block_open {
+                        lines.insert(open + 1, format!("    :{} = {}", sub, cpus));
+                    } else {
+                        if let Some(close) = t.block_close {
+                            lines.insert(close, format!("    :{} = {}", sub, cpus));
+                        } else if let Some(open) = t.block_open {
+                            lines.insert(open + 1, format!("    :{} = {}", sub, cpus));
+                        } else {
+                            lines.push(format!(":{} = {}", sub, cpus));
+                        }
+                    }
+                }
+            } else {
+                let mut found = false;
+                for i in 0..lines.len() {
+                    let trimmed = lines[i].trim();
+                    if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.contains(':') {
+                        if let Some(comment_pos) = comment_at(&lines[i]) {
+                            lines[i] =
+                                format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
+                        } else {
+                            lines[i] = format!("        {}={}", thread, cpus);
+                        }
+                        found = true;
+                        break;
+                    }
+                    if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
+                        let mut depth = 1;
+                        for j in (i + 1)..lines.len() {
+                            let next_trimmed = lines[j].trim();
+                            if close_like(next_trimmed) {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
+                                depth += 1;
                             }
-                            found = true;
+                            if depth == 1 {
+                                if next_trimmed.starts_with(&format!("{}=", thread))
+                                    && !next_trimmed.contains(':')
+                                {
+                                    if let Some(comment_pos) = comment_at(&lines[j]) {
+                                        lines[j] = format!(
+                                            "        {}={}{}",
+                                            thread,
+                                            cpus,
+                                            &lines[j][comment_pos..]
+                                        );
+                                    } else {
+                                        lines[j] = format!("        {}={}", thread, cpus);
+                                    }
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if found {
                             break;
                         }
                     }
                 }
-                if found {
-                    break;
+                if !found {
+                    if let Some(close) = sub_target.block_close {
+                        lines.insert(close, format!("        {}={}", thread, cpus));
+                    } else if let Some(open) = sub_target.block_open {
+                        lines.insert(open + 1, format!("        {}={}", thread, cpus));
+                    } else {
+                        let sub_block = format!(":{} {{\n        {}={}\n    }}", sub, thread, cpus);
+                        if let Some(close) = t.block_close {
+                            lines.insert(close, sub_block);
+                        } else if let Some(open) = t.block_open {
+                            lines.insert(open + 1, sub_block);
+                        } else {
+                            lines.push(sub_block);
+                        }
+                    }
                 }
             }
-        }
-        if !found {
-            if let Some(close) = sub_target.block_close {
-                lines.insert(close, format!("        {}={}", thread, cpus));
-            } else if let Some(open) = sub_target.block_open {
-                lines.insert(open + 1, format!("        {}={}", thread, cpus));
-            } else {
-                let sub_block = format!(":{} {{\n        {}={}\n    }}", sub, thread, cpus);
-                if let Some(close) = t.block_close {
-                    lines.insert(close, sub_block);
-                } else if let Some(open) = t.block_open {
-                    lines.insert(open + 1, sub_block);
-                } else {
-                    lines.push(sub_block);
-                }
-            }
+            return RuleEdit::Ok;
         }
     }
 
-    RuleEdit::Ok
+    // 子包不存在，在主包块内插入
+    if let Some(close) = t.block_close {
+        let sub_block = if thread.is_empty() {
+            format!("    :{} = {}", sub, cpus)
+        } else {
+            format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
+        };
+        lines.insert(close, sub_block);
+        RuleEdit::Ok
+    } else if let Some(open) = t.block_open {
+        let sub_block = if thread.is_empty() {
+            format!("    :{} = {}", sub, cpus)
+        } else {
+            format!("    :{} {{\n        {}={}\n    }}", sub, thread, cpus)
+        };
+        lines.insert(open + 1, sub_block);
+        RuleEdit::Ok
+    } else {
+        // 理论上不会到达，因为上面已处理独立行转换
+        RuleEdit::IoErr
+    }
 }
+
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
@@ -641,7 +597,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         .map(String::from)
         .collect();
 
-    // 处理子包（仅当 pkg 包含 ':' 且分割后恰好两部分）
+    // 处理子包
     let parts: Vec<&str> = pkg.split(':').collect();
     if parts.len() == 2 {
         let main_pkg = parts[0];
@@ -649,8 +605,11 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
         if let RuleEdit::Ok = result {
             return file_write(path, &lines);
+        } else {
+            // 如果子包处理失败，回退到常规方式（但常规可能产生独立行）
+            // 这里我们仍然回退，保证功能
+            // 注意：如果希望强制块格式，可以去掉回退，但为兼容，保留
         }
-        // 若返回 IoErr，回退到常规方式
     }
 
     // ---- 常规方式（原有逻辑） ----
