@@ -27,25 +27,8 @@ jobs:
             ebpf:
               - 'AppOpt-ebpf/**'
 
-  # 可选保留，但不再作为构建条件
-  check-release:
-    runs-on: ubuntu-latest
-    outputs:
-      exists: ${{ steps.check.outputs.exists }}
-    steps:
-      - name: 查看最新 Release
-        id: check
-        run: |
-          if gh release list --limit 1 --order desc --json tagName | jq -e '. | length > 0' >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   build-app:
-    needs: [changes, check-release] # 保留依赖，但条件中不使用 check-release 输出
+    needs: [changes]
     if: |
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.app == 'true'
@@ -78,7 +61,7 @@ jobs:
           path: AppOpt/target/aarch64-linux-android/release/AppOpt
 
   build-ebpf:
-    needs: [changes, check-release]
+    needs: [changes]
     if: |
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.ebpf == 'true'
@@ -126,23 +109,37 @@ jobs:
       - name: 准备目录
         run: mkdir -p release/package/AppOpt-aarch64
 
+      # 使用 GitHub API 获取最新 Release 标签（更可靠）
       - name: 获取最新 Release 标签
         id: latest
         run: |
-          TAG=$(gh release list --limit 1 --order desc --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          TAG=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+               "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+               | jq -r '.tag_name // ""')
+          if [ -z "$TAG" ]; then
+            echo "⚠️ 警告：未找到任何 Release（首次运行可能发生）"
+          else
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
 
+      # 处理 AppOpt
       - name: 获取 AppOpt 二进制
         run: |
           if [ -f artifacts/new/AppOpt-new/AppOpt ]; then
             cp artifacts/new/AppOpt-new/AppOpt release/package/AppOpt-aarch64/AppOpt
-            echo "使用新编译的 AppOpt"
+            echo "✅ 使用新编译的 AppOpt"
           elif [ -n "${{ steps.latest.outputs.tag }}" ]; then
-            echo "从 Release ${{ steps.latest.outputs.tag }} 下载 AppOpt"
-            gh release download ${{ steps.latest.outputs.tag }} -p "AppOpt" -D release/package/AppOpt-aarch64/
+            TAG="${{ steps.latest.outputs.tag }}"
+            echo "📥 从 Release $TAG 下载 AppOpt"
+            # 先检查附件是否存在
+            if gh release view "$TAG" --json assets | jq -e '.assets[] | select(.name=="AppOpt")' >/dev/null 2>&1; then
+              gh release download "$TAG" -p "AppOpt" -D release/package/AppOpt-aarch64/
+            else
+              echo "❌ 错误：Release $TAG 中不存在附件 AppOpt"
+              exit 1
+            fi
           else
             echo "❌ 错误：没有 AppOpt 二进制可用（既无新编译也无旧 Release）"
             exit 1
@@ -151,14 +148,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 处理 eBPF
       - name: 获取 eBPF 二进制
         run: |
           if [ -f artifacts/new/AppOpt-ebpf-new/AppOpt-ebpf ]; then
             cp artifacts/new/AppOpt-ebpf-new/AppOpt-ebpf release/package/AppOpt-aarch64/AppOpt-ebpf
-            echo "使用新编译的 eBPF"
+            echo "✅ 使用新编译的 eBPF"
           elif [ -n "${{ steps.latest.outputs.tag }}" ]; then
-            echo "从 Release ${{ steps.latest.outputs.tag }} 下载 eBPF"
-            gh release download ${{ steps.latest.outputs.tag }} -p "AppOpt-ebpf" -D release/package/AppOpt-aarch64/
+            TAG="${{ steps.latest.outputs.tag }}"
+            echo "📥 从 Release $TAG 下载 eBPF"
+            if gh release view "$TAG" --json assets | jq -e '.assets[] | select(.name=="AppOpt-ebpf")' >/dev/null 2>&1; then
+              gh release download "$TAG" -p "AppOpt-ebpf" -D release/package/AppOpt-aarch64/
+            else
+              echo "❌ 错误：Release $TAG 中不存在附件 AppOpt-ebpf"
+              exit 1
+            fi
           else
             echo "❌ 错误：没有 eBPF 二进制可用（既无新编译也无旧 Release）"
             exit 1
