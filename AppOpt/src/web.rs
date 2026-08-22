@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -360,9 +360,7 @@ fn rules_json() -> String {
 /// 名称校验
 fn token_ok(s: &str, max: usize) -> bool {
     let t = s.trim();
-    !t.is_empty()
-        && t.len() < max
-        && !t.bytes().any(|b| b < 0x20 || b == 0x7f)
+    !t.is_empty() && t.len() < max && !t.bytes().any(|b| b < 0x20 || b == 0x7f)
 }
 
 fn pkg_shape_ok(pkg: &str) -> bool {

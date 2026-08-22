@@ -236,7 +236,11 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             OuterLine::Junk => {
                 pending = None;
             }
-            OuterLine::SubPkgRule { sub, cpus: _ } => {
+            OuterLine::SubPkgRule {
+                sub,
+                cpus: _,
+                open: _,
+            } => {
                 // 单行子包规则，暂不处理（写入时作为独立行）
                 let _sub_pkg = format!("{}:{}", pkg, sub);
             }
