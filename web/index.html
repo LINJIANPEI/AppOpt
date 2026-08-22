@@ -1224,8 +1224,11 @@ ${chipHtml(it.spec)}
         }
         function semanticVisible() {
             if (!topoCores) return CORE_KEYS;
-            const t = topoCores, multi = t.e && t.hp && t.e !== t.hp;
-            return CORE_KEYS.filter(k => multi && (k !== 'p-core' || (t.p && t.p !== t.e && t.p !== t.hp)));
+            const t = topoCores;
+            const multi = t.e && t.hp && t.e !== t.hp;
+            // 只要有多组核心（E != HP），就显示 p-core，哪怕它等于 e-core 或 hp-core（降级场景）
+            if (!multi) return [];
+            return CORE_KEYS;  // 直接返回 ['e-core', 'p-core', 'hp-core']
         }
         function parseSpec(spec) {
             const vis = semanticVisible();
