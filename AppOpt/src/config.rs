@@ -143,17 +143,15 @@ pub fn parse_outer(p: &str) -> OuterLine<'_> {
     let p = strip_comment(p);
     let trimmed = p.trim();
 
-    // ---- 优先识别子包语法（以 ':' 开头） ----
+    // ---- 优先识别子包语法 ----
     if let Some(rest) = trimmed.strip_prefix(':') {
         if let Some(eq_pos) = rest.rfind('=') {
             let sub = rest[..eq_pos].trim();
             let cpus = rest[eq_pos + 1..].trim();
             if !sub.is_empty() && !cpus.is_empty() {
-                return OuterLine::SubPkgRule {
-                    sub,
-                    cpus,
-                    open: false,
-                };
+                // 判断后面是否有 '{'（如 :MSF=e-core {）
+                let open = rest.ends_with('{') || rest.ends_with(" {");
+                return OuterLine::SubPkgRule { sub, cpus, open };
             }
         }
         if let Some(rest2) = rest.strip_suffix('{') {
@@ -364,10 +362,17 @@ pub fn load_config(
 
         // ---- 外层解析 ----
         match parse_outer(p) {
-            OuterLine::SubPkgRule { sub, cpus, open: _ } => {
+            OuterLine::SubPkgRule { sub, cpus, open } => {
                 let full_pkg = format!("{}:{}", cur_pkg, sub);
                 if !add_rule(&mut rules, topo, &full_pkg, "", cpus) {
                     fail_cnt += 1;
+                }
+                if open {
+                    // 进入子包块模式（后续行作为子包的线程规则）
+                    pkg_stack.push(cur_pkg.clone());
+                    cur_pkg = full_pkg;
+                    in_sub_block = true;
+                    in_block = true;
                 }
             }
             OuterLine::SubPkgBlock { sub } => {

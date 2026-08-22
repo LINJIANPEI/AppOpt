@@ -74,8 +74,6 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
     let mut in_sub_block = false;
     let mut current_sub = String::new();
     let mut sub_lines: Vec<String> = Vec::new();
-    // 新增：记录块内子包行（:子包 = CPU）的位置
-    let mut sub_pkg_lines: Vec<(String, usize)> = Vec::new();
 
     let block_close = |t: &mut Target, target_block: &mut bool, i: usize| {
         if *target_block && t.block_close.is_none() {
@@ -139,8 +137,9 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                 continue;
             }
 
-            // 【关键】识别块内的子包包级规则 :子包 = CPU
             let trimmed = p.trim();
+
+            // ---- 识别块内的子包包级规则 :子包 = CPU ----
             if trimmed.starts_with(':') && trimmed.contains('=') {
                 if let Some(eq_pos) = trimmed.rfind('=') {
                     let sub = trimmed[1..eq_pos].trim();
@@ -150,7 +149,8 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                         t.sub_pkgs
                             .entry(sub.to_string())
                             .or_insert_with(Target::new);
-                        sub_pkg_lines.push((sub.to_string(), i));
+                        // 如果是 :子包=CPU {，则后面会进入子包块，但这里我们已经记录了子包
+                        // 继续处理可能会跳过该行，但这里我们只是记录，不解析内容
                         continue;
                     }
                 }
@@ -160,13 +160,10 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             if trimmed.starts_with(':') && trimmed.ends_with('{') {
                 let sub = trimmed[1..trimmed.len() - 1].trim();
                 if !sub.is_empty() {
-                    // 进入子包块解析（这里会递归处理）
-                    // 但由于我们是在扫描，我们将其标记为子包存在
+                    // 标记子包存在，子包内容会在后续行中处理
                     t.sub_pkgs
                         .entry(sub.to_string())
                         .or_insert_with(Target::new);
-                    // 实际上，子包块的内容会在后续行中被处理
-                    // 但我们需要防止它被当作线程规则
                     continue;
                 }
             }
@@ -522,13 +519,13 @@ fn write_sub_pkg_block(
         t = target_scan(lines, pkg);
     }
 
-    // ---- 第三步：处理子包规则（插入或更新块内） ----
+    // ---- 第三步：处理子包规则 ----
     let sub_in_block = t.sub_pkgs.contains_key(sub);
 
     if is_delete {
         if sub_in_block {
-            // 删除所有 :子包 = CPU 行
             let mut removed = false;
+            // 1. 删除所有 :子包 = CPU 行
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
                 for i in (start..close).rev() {
@@ -541,7 +538,7 @@ fn write_sub_pkg_block(
                     }
                 }
             }
-            // 删除所有 :子包 { ... } 块
+            // 2. 删除所有 :子包 { ... } 块
             let sub_lines = lines.clone();
             let sub_target = target_scan(&sub_lines, &full_pkg);
             if let Some(block_start) = sub_target.block_open {
@@ -560,12 +557,12 @@ fn write_sub_pkg_block(
         return RuleEdit::Ok;
     }
 
+    // ---- 更新或插入 ----
     if sub_in_block {
-        // 子包已存在，更新规则
+        // 子包已存在
         if thread.is_empty() {
-            // ---- 包级规则：更新或插入 :子包 = CPU ----
+            // 包级规则：更新或插入 :子包 = CPU
             let mut found_line = false;
-            // 先查找并更新已有的 :子包 = CPU 行
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
                 for i in start..close {
@@ -585,7 +582,6 @@ fn write_sub_pkg_block(
                 }
             }
             if !found_line {
-                // 没找到，在块内插入新行
                 if let Some(close) = t.block_close {
                     lines.insert(close, format!(" :{}={}", sub, cpus));
                 } else if let Some(open) = t.block_open {
@@ -596,18 +592,16 @@ fn write_sub_pkg_block(
             }
             RuleEdit::Ok
         } else {
-            // ---- 线程规则：在子包块内更新或插入 ----
+            // 线程规则：在子包块内更新或插入
             let sub_lines = lines.clone();
             let sub_target = target_scan(&sub_lines, &full_pkg);
             let mut found = false;
 
-            // 如果子包有块，在其中查找线程规则
             if let Some(block_start) = sub_target.block_open {
                 let block_end = sub_target.block_close.unwrap_or(block_start);
                 for i in block_start..block_end {
                     let trimmed = lines[i].trim();
                     if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':') {
-                        // 更新已有线程规则
                         if let Some(comment_pos) = comment_at(&lines[i]) {
                             lines[i] =
                                 format!("        {}={}{}", thread, cpus, &lines[i][comment_pos..]);
@@ -621,7 +615,7 @@ fn write_sub_pkg_block(
             }
 
             if !found {
-                // 线程规则不存在，在子包块内插入
+                // 不存在，插入
                 if let Some(block_end) = sub_target.block_close {
                     lines.insert(block_end, format!("        {}={}", thread, cpus));
                 } else if let Some(block_start) = sub_target.block_open {
@@ -641,7 +635,7 @@ fn write_sub_pkg_block(
             RuleEdit::Ok
         }
     } else {
-        // ---- 子包不存在，首次添加 ----
+        // 子包不存在，首次添加
         if let Some(close) = t.block_close {
             let sub_block = if thread.is_empty() {
                 format!(" :{}={}", sub, cpus)
