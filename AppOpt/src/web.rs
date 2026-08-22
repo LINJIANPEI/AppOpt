@@ -320,10 +320,11 @@ fn rules_json() -> String {
     let mut groups: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
     for r in &cfg.rules {
-        let main_pkg = r.pkg.split(':').next().unwrap_or(&r.pkg);
-        let is_sub = r.pkg.contains(':');
-        let sub_suffix = if is_sub {
-            r.pkg.split(':').skip(1).collect::<Vec<&str>>().join(":")
+        let parts: Vec<&str> = r.pkg.split(':').collect();
+        let main_pkg = parts[0];
+        let is_sub = parts.len() > 1;
+        let sub_name = if is_sub {
+            parts[1..].join(":")
         } else {
             String::new()
         };
@@ -331,24 +332,28 @@ fn rules_json() -> String {
         let entry = groups.entry(main_pkg.to_string()).or_insert_with(|| {
             json!({
                 "pkg": main_pkg,
-                "items": [],
-                "subs": {}
+                "items": [],           // 主包的包级规则 + 线程规则
+                "subs": {},            // 子包映射：子包名 -> { items: [] }
             })
         });
 
         if is_sub {
+            // 子包规则（包级或线程）
             let subs = entry["subs"].as_object_mut().unwrap();
             let sub_entry = subs
-                .entry(sub_suffix.clone())
+                .entry(sub_name.clone())
                 .or_insert_with(|| json!({ "items": [] }));
             sub_entry["items"].as_array_mut().unwrap().push(json!({
-                "thread": r.thread,
-                "spec": r.spec,
+                "thread": r.thread.clone(),
+                "spec": r.spec.clone(),
+                "full_pkg": r.pkg.clone(),
             }));
         } else {
+            // 主包规则
             entry["items"].as_array_mut().unwrap().push(json!({
-                "thread": r.thread,
-                "spec": r.spec,
+                "thread": r.thread.clone(),
+                "spec": r.spec.clone(),
+                "full_pkg": r.pkg.clone(),
             }));
         }
     }

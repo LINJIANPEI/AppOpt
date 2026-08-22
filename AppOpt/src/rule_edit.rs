@@ -718,8 +718,19 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
-    normalize_sub_pkgs(&mut lines, pkg);
+    // 检查是否是子包
+    let parts: Vec<&str> = pkg.split(':').collect();
+    if parts.len() == 2 {
+        let main_pkg = parts[0];
+        let sub = parts[1];
+        // 删除子包的所有规则
+        let result = write_sub_pkg_block(&mut lines, main_pkg, sub, "", "", true);
+        if let RuleEdit::Ok = result {
+            return file_write(path, &lines);
+        }
+    }
 
+    normalize_sub_pkgs(&mut lines, pkg);
     let idxs = collect_all_lines(&lines, pkg);
     if idxs.is_empty() {
         return RuleEdit::NotFound;
@@ -727,10 +738,8 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
     for i in idxs.into_iter().rev() {
         lines.remove(i);
     }
-
     file_write(path, &lines)
 }
-
 pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
