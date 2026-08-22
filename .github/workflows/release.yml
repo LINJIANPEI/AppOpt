@@ -48,7 +48,7 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.app == 'true' ||
-      needs.check-release.outputs.exists == 'false'    # 👈 加回这行
+      needs.check-release.outputs.exists == 'false'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -82,7 +82,7 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.ebpf == 'true' ||
-      needs.check-release.outputs.exists == 'false'    # 👈 加回这行
+      needs.check-release.outputs.exists == 'false'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -188,9 +188,9 @@ jobs:
             ## 自动构建版本（增量更新）
             - AppOpt: ${{ needs.changes.outputs.app == 'true' && '🆕 新编译' || '📦 复用旧版' }}
             - eBPF: ${{ needs.changes.outputs.ebpf == 'true' && '🆕 新编译' || '📦 复用旧版' }}
-          files: |
-            release/AppOpt
-            release/AppOpt-ebpf
-            release/AppOpt-aarch64.tar.gz
+          files:
+            - release/AppOpt
+            - release/AppOpt-ebpf
+            - release/AppOpt-aarch64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
