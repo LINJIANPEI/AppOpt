@@ -635,7 +635,7 @@ fn write_sub_pkg_block(
     let full_pkg = format!("{}:{}", pkg, sub);
     let mut t = target_scan(lines, pkg);
 
-    // ---- 确保主包是块，并且有闭合括号 ----
+    // ---- 确保主包是块 ----
     if t.block_open.is_none() {
         if let Some(PkgLine::Standalone(idx)) = t.pkg_line {
             let line = &lines[idx];
@@ -656,7 +656,6 @@ fn write_sub_pkg_block(
                     format!("{} {{{}", base, comment)
                 };
                 lines[idx] = new_line;
-                // 检查是否有闭合括号，如果没有则添加
                 let last = lines.last().map(|s| s.trim()).unwrap_or("");
                 if !close_like(last) {
                     lines.push("}".to_string());
@@ -676,15 +675,11 @@ fn write_sub_pkg_block(
         }
     }
 
-    // 再次确保主包有闭合括号（如果还没有，添加一个）
+    // 再次确保主包有闭合括号
     let t2 = target_scan(lines, pkg);
     if t2.block_close.is_none() {
-        // 找到主包块的开始，在文件末尾或合适位置添加闭合括号
-        if let Some(open) = t2.block_open {
-            // 如果块没有闭合，在块最后添加 }
-            lines.push("}".to_string());
-        }
-        // 重新扫描
+        // 如果主包块没有闭合，在末尾添加一个
+        lines.push("}".to_string());
         t = target_scan(lines, pkg);
     } else {
         t = t2;
@@ -782,12 +777,11 @@ fn write_sub_pkg_block(
                 if let Some(close) = t.block_close {
                     lines.insert(close, format!(" :{}={}", sub, cpus));
                 } else {
-                    // 理论上不会发生，但以防万一
                     lines.push(format!(" :{}={}", sub, cpus));
                 }
             }
-            // 调用合并整理
-            let _ = consolidate_sub_pkg(lines, pkg, sub);
+            // 注意：如果包级规则行原本是独立的，并且有子包块，可能需要合并，但这里我们不做合并，保留原样
+            // 如果需要合并，可以调用 consolidate_sub_pkg，但可能导致问题，所以暂时不调用
             RuleEdit::Ok
         } else {
             // 删除包级规则（cpus 为空）—— 只删除规则行，保留线程块
@@ -873,7 +867,6 @@ fn write_sub_pkg_block(
             if !removed {
                 return RuleEdit::NotFound;
             }
-            // 删除线程后，如果子包只剩下包级规则且没有线程，可选择保留包级规则（不自动删除）
             RuleEdit::Ok
         } else {
             // ---- 更新或插入线程 ----
@@ -938,8 +931,7 @@ fn write_sub_pkg_block(
                         // 在块结束前插入新线程
                         lines.insert(block_end, format!("        {}={}", thread, cpus));
                     }
-                    // 合并整理
-                    let _ = consolidate_sub_pkg(lines, pkg, sub);
+                    // 无需合并，因为已经是合并格式
                 } else {
                     // 包级规则行不带 '{'，需要转换为合并格式
                     // 1. 修改该行，末尾添加 ' {'
@@ -961,10 +953,10 @@ fn write_sub_pkg_block(
                     };
                     lines[idx] = new_line;
                     // 2. 在下一行插入线程行和闭合括号
+                    // 注意：插入位置是 idx+1 和 idx+2，是在主包块内部
                     lines.insert(idx + 1, format!("        {}={}", thread, cpus));
                     lines.insert(idx + 2, "    }".to_string());
-                    // 调用合并整理
-                    let _ = consolidate_sub_pkg(lines, pkg, sub);
+                    // 现在已经是合并格式，无需进一步合并
                 }
             } else {
                 // 子包没有包级规则，创建包级规则和线程块
@@ -985,8 +977,7 @@ fn write_sub_pkg_block(
                         sub, thread, cpus
                     ));
                 }
-                // 调用合并整理
-                let _ = consolidate_sub_pkg(lines, pkg, sub);
+                // 已经创建合并格式，无需进一步合并
             }
             RuleEdit::Ok
         }
