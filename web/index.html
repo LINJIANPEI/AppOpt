@@ -1568,12 +1568,13 @@ ${r.pkgRow
             try {
                 // === 子包操作 ===
                 if (mrMode === 'add-sub') {
-                    const threadVal = jobs[0].thread.trim();
-                    if (!threadVal.startsWith(':')) return toast('子包名请以 : 开头，如 :push');
-                    const subName = threadVal.substring(1).trim();
+                    let subInput = jobs[0].thread.trim();
+                    if (!subInput.startsWith(':')) {
+                        subInput = ':' + subInput;
+                    }
+                    const subName = subInput.substring(1).trim();
                     if (!subName) return toast('请输入子包名');
                     const fullPkg = pkg + ':' + subName;
-                    // 保存为子包的包级规则（thread 为空）
                     await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus });
                     toast('子包已添加');
                     loadRules();
