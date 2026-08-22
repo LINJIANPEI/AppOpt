@@ -325,7 +325,7 @@ fn rules_json() -> String {
         groups[gi]["items"]
             .as_array_mut()
             .unwrap()
-            .push(json!({ "thread": r.thread, "spec": spec_name(&r.cpus, &cfg.topo) }));
+            .push(json!({ "thread": r.thread, "spec": r.spec }));
     }
     json!({ "rules": groups }).to_string()
 }

@@ -25,6 +25,7 @@ pub struct AffinityRule {
     pub thread_pattern: CString,
     pub cpuset_dir: String,
     pub cpus: CpuSet,
+    pub spec: String, // 新增：保存原始 CPU 规格字符串
 }
 
 pub struct AppConfig {
@@ -212,6 +213,7 @@ fn add_rule(
         thread_pattern: CString::new(thread).unwrap_or_default(),
         cpuset_dir,
         cpus: set,
+        spec: cpus_spec.to_string(), // 新增
     });
     true
 }
