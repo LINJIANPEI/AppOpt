@@ -850,14 +850,16 @@ fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target
     let sub_lines = lines.clone();
     let sub_target = target_scan(&sub_lines, &full_pkg);
     let has_pkg_rule = sub_target.pkg_line.is_some();
-    // 收集所有线程规则（包括多个块中的）
-    let all_threads: Vec<String> = sub_target
-        .threads
-        .values()
-        .flatten()
-        .filter(|loc| !loc.single) // 非单行规则（即块内的线程规则）
-        .map(|loc| lines[loc.idx].trim().to_string())
-        .collect();
+    // 收集所有线程规则（移除 !loc.single 过滤）
+    let mut all_threads: Vec<String> = Vec::new();
+    for locs in sub_target.threads.values() {
+        for loc in locs {
+            let line = lines[loc.idx].trim();
+            if !line.is_empty() && !line.starts_with(':') && !close_like(line) {
+                all_threads.push(line.to_string());
+            }
+        }
+    }
 
     if !has_pkg_rule || all_threads.is_empty() {
         return;
@@ -879,7 +881,6 @@ fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target
     }
     let Some(idx) = pkg_line_idx else { return };
 
-    // 提取 CPU 值
     let pkg_line = &lines[idx];
     let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
         pkg_line[eq_pos + 1..].trim()
@@ -887,11 +888,9 @@ fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target
         return;
     };
 
-    // 构建合并行： :子包=CPU {
     let merged_line = format!(" :{}={} {{", sub, cpus_val);
     lines[idx] = merged_line;
 
-    // 删除所有子包块（包括开始和结束行）
     let mut remove_indices: Vec<usize> = Vec::new();
     let sub_blocks = find_all_sub_blocks(&sub_lines, sub);
     for (start, end) in sub_blocks {
@@ -907,8 +906,9 @@ fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target
         lines.remove(*i);
     }
 
-    // 插入所有线程规则（缩进四个空格）
     let insert_pos = idx + 1;
+    all_threads.sort();
+    all_threads.dedup();
     for (offset, thread_line) in all_threads.iter().enumerate() {
         let trimmed = thread_line.trim();
         if !trimmed.is_empty() && !trimmed.starts_with('}') {
@@ -916,7 +916,6 @@ fn merge_sub_pkg_rules(lines: &mut Vec<String>, pkg: &str, sub: &str, t: &Target
         }
     }
 
-    // 确保有闭合括号
     let last_line = lines.last().map(|s| s.trim()).unwrap_or("");
     if !close_like(last_line) {
         lines.insert(insert_pos + all_threads.len(), "    }".to_string());
