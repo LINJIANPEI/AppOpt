@@ -74,6 +74,8 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
     let mut in_sub_block = false;
     let mut current_sub = String::new();
     let mut sub_lines: Vec<String> = Vec::new();
+    // 新增：记录块内子包行（:子包 = CPU）的位置
+    let mut sub_pkg_lines: Vec<(String, usize)> = Vec::new();
 
     let block_close = |t: &mut Target, target_block: &mut bool, i: usize| {
         if *target_block && t.block_close.is_none() {
@@ -97,6 +99,7 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
+        // ---- 子包块结束 ----
         if in_sub_block && close_like(p) {
             if !sub_lines.is_empty() {
                 let sub_target = target_scan(&sub_lines, &current_sub);
@@ -108,6 +111,7 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
+        // ---- 子包块开始 :子包 { ----
         if !in_block && !in_sub_block {
             if let Some(rest) = p.strip_prefix(':') {
                 if let Some(rest2) = rest.strip_suffix('{') {
@@ -127,12 +131,47 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
+        // ---- 主包块内 ----
         if in_block {
             if close_like(p) {
                 in_block = false;
                 block_close(&mut t, &mut target_block, i);
                 continue;
             }
+
+            // 【关键】识别块内的子包包级规则 :子包 = CPU
+            let trimmed = p.trim();
+            if trimmed.starts_with(':') && trimmed.contains('=') {
+                if let Some(eq_pos) = trimmed.rfind('=') {
+                    let sub = trimmed[1..eq_pos].trim();
+                    let cpus = trimmed[eq_pos + 1..].trim();
+                    if !sub.is_empty() && !cpus.is_empty() {
+                        // 记录子包存在
+                        t.sub_pkgs
+                            .entry(sub.to_string())
+                            .or_insert_with(Target::new);
+                        sub_pkg_lines.push((sub.to_string(), i));
+                        continue;
+                    }
+                }
+            }
+
+            // ---- 识别块内的子包块开始 :子包 { ----
+            if trimmed.starts_with(':') && trimmed.ends_with('{') {
+                let sub = trimmed[1..trimmed.len() - 1].trim();
+                if !sub.is_empty() {
+                    // 进入子包块解析（这里会递归处理）
+                    // 但由于我们是在扫描，我们将其标记为子包存在
+                    t.sub_pkgs
+                        .entry(sub.to_string())
+                        .or_insert_with(Target::new);
+                    // 实际上，子包块的内容会在后续行中被处理
+                    // 但我们需要防止它被当作线程规则
+                    continue;
+                }
+            }
+
+            // ---- 原有线程规则解析 ----
             match split_rule_line(p) {
                 Some((name, _, closed)) => {
                     if target_block && !name.is_empty() {
@@ -161,6 +200,7 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             continue;
         }
 
+        // ---- 外层解析 ----
         match parse_outer(p) {
             OuterLine::Single {
                 pkg: pg,
@@ -237,13 +277,11 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                 pending = None;
             }
             OuterLine::SubPkgRule { sub, .. } => {
-                // 如果当前在块内，记录子包已存在（用于后续更新）
-                if in_block {
-                    t.sub_pkgs
-                        .entry(sub.to_string())
-                        .or_insert_with(Target::new);
-                }
                 let _sub_pkg = format!("{}:{}", pkg, sub);
+                // 确保子包被记录
+                t.sub_pkgs
+                    .entry(sub.to_string())
+                    .or_insert_with(Target::new);
             }
             OuterLine::SubPkgBlock { sub: _ } => {}
         }
@@ -489,8 +527,7 @@ fn write_sub_pkg_block(
 
     if is_delete {
         if sub_in_block {
-            // 删除子包的所有规则
-            // 先尝试删除子包包级规则行（:子包 = CPU）
+            // 删除所有 :子包 = CPU 行
             let mut removed = false;
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
@@ -501,11 +538,10 @@ fn write_sub_pkg_block(
                     {
                         lines.remove(i);
                         removed = true;
-                        break;
                     }
                 }
             }
-            // 再尝试删除子包块（:子包 { ... }）
+            // 删除所有 :子包 { ... } 块
             let sub_lines = lines.clone();
             let sub_target = target_scan(&sub_lines, &full_pkg);
             if let Some(block_start) = sub_target.block_open {
