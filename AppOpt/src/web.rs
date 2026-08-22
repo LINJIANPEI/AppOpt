@@ -332,13 +332,12 @@ fn rules_json() -> String {
         let entry = groups.entry(main_pkg.to_string()).or_insert_with(|| {
             json!({
                 "pkg": main_pkg,
-                "items": [],           // 主包的包级规则 + 线程规则
-                "subs": {},            // 子包映射：子包名 -> { items: [] }
+                "items": [],
+                "subs": {},
             })
         });
 
         if is_sub {
-            // 子包规则（包级或线程）
             let subs = entry["subs"].as_object_mut().unwrap();
             let sub_entry = subs
                 .entry(sub_name.clone())
@@ -349,7 +348,6 @@ fn rules_json() -> String {
                 "full_pkg": r.pkg.clone(),
             }));
         } else {
-            // 主包规则
             entry["items"].as_array_mut().unwrap().push(json!({
                 "thread": r.thread.clone(),
                 "spec": r.spec.clone(),
