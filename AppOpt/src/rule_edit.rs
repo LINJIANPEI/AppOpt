@@ -1187,10 +1187,14 @@ fn extract_package_data(lines: &[String], ranges: &[(usize, usize)], pkg: &str) 
             if trimmed.starts_with(&format!("{}", pkg)) {
                 if let Some(eq_pos) = trimmed.rfind('=') {
                     let cpu_part = trimmed[eq_pos + 1..].trim();
-                    for part in cpu_part.split(',') {
-                        let p = part.trim();
-                        if !p.is_empty() {
-                            data.cpus.push(p.to_string());
+                    // ★ 修复：去除尾部的 '{' 和空白，避免累积
+                    let clean_cpu = cpu_part.trim_end_matches('{').trim_end();
+                    if !clean_cpu.is_empty() {
+                        for part in clean_cpu.split(',') {
+                            let p = part.trim();
+                            if !p.is_empty() {
+                                data.cpus.push(p.to_string());
+                            }
                         }
                     }
                 }
@@ -1419,9 +1423,7 @@ fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
         let start_line = &lines[*start];
         let trimmed = start_line.trim();
         if trimmed.ends_with('{') {
-            // 检查块的第一行是否包含 '=' 且不以 '{' 结尾（即包级 CPU 定义）
             let has_cpus = trimmed.contains('=') && !trimmed.ends_with('{');
-            // 检查块内是否有非注释内容（缩进的行）
             let mut has_content = false;
             for idx in (*start + 1)..*end {
                 let inner = lines[idx].trim();
@@ -1430,7 +1432,6 @@ fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
                     break;
                 }
             }
-            // 只有既无包级 CPU 也无块内内容时，才删除整个块
             if !has_cpus && !has_content {
                 for idx in (*start..=*end).rev() {
                     lines.remove(idx);
@@ -1511,7 +1512,6 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
-                // 主包可能因此变空，但 clean_empty_blocks 会正确处理
                 clean_empty_blocks(&mut lines, main_pkg);
                 return file_write(config_path, &lines);
             }
@@ -1527,20 +1527,17 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
     }
 
     if thread.is_empty() {
-        // 删除包级规则（保留线程和子包）
+        // 删除包级规则（清空 CPU）
         data.cpus.clear();
     } else {
-        // 删除指定线程
+        // 删除线程
         if !data.threads.contains_key(thread) {
             return RuleEdit::NotFound;
         }
         data.threads.remove(thread);
     }
 
-    // 重建该包的块
     let new_block = build_block(pkg, &data);
-
-    // 删除旧定义
     let insert_pos = *indices.iter().min().unwrap();
     let mut remove_indices = indices;
     remove_indices.sort();
@@ -1548,11 +1545,8 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
     for idx in remove_indices.into_iter().rev() {
         lines.remove(idx);
     }
-
-    // 在原位置插入新块
     lines.splice(insert_pos..insert_pos, new_block);
 
-    // 清理空块（增强版不会误删有包级规则的块）
     clean_empty_blocks(&mut lines, pkg);
     clean_empty_lines(&mut lines);
     file_write(config_path, &lines)
