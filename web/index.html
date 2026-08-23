@@ -1506,14 +1506,13 @@ ${r.pkgRow
                 pkgInput.readOnly = true;
                 const item = g.items.find(it => it.thread === thread);
                 mrOldThread = thread;
-                mrRows = [mkRow({ thread, ...(item ? parseSpec(item.spec) : {}) })];
+                mrRows = [mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub') {
                 $('mr-title').textContent = '添加子包';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
                 $('mr-addrow').hidden = true;
-                // 子包默认规则：输入框显示 :子包名，CPU 选择
                 mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
                 toast('请输入 :子包名，如 :push，并选择 CPU');
             } else if (mode === 'edit-sub') {
@@ -1525,7 +1524,8 @@ ${r.pkgRow
                 $('mr-addrow').hidden = true;
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
-                mrRows = [mkRow({ thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
+                // 注意：包级行 pkgRow 为 true，不显示线程名输入框
+                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '添加子包线程规则';
                 const g = rulesData[gi];
@@ -1539,14 +1539,14 @@ ${r.pkgRow
                 pkgInput.readOnly = true;
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => it.thread === thread) : null;
-                mrOldThread = thread;
-                mrRows = [mkRow({ thread, ...(item ? parseSpec(item.spec) : {}) })];
+                mrOldThread = thread; // 保存旧线程名，以便更新时删除
+                // 关键：显式设置 thread 字段
+                mrRows = [mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) })];
             }
 
             renderRows();
             $('modal-rule').hidden = false;
         }
-
         $('r-add').onclick = () => openRuleModal('add-pkg');
         $('mr-cancel').onclick = () => $('modal-rule').hidden = true;
         let mrSaving = false;

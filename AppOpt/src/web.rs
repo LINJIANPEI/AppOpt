@@ -482,15 +482,55 @@ fn suggest_api(req: &Request) -> (u16, String) {
         return err_json(400, "q 过长");
     }
     let list: Vec<String> = match v["pkg"].as_str().map(str::trim).filter(|p| !p.is_empty()) {
-        None => suggest_pkgs(q).into_iter().map(|(n, _)| n).collect(),
+        None => {
+            // 无 pkg 参数：返回包名列表
+            suggest_pkgs(q).into_iter().map(|(n, _)| n).collect()
+        }
         Some(pkg) => {
             if !token_ok(pkg, MAX_PKG_LEN) {
                 return err_json(400, "名称含有非法字符");
             }
-            suggest_threads(pkg, q)
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect()
+            // 如果 q 以 ':' 开头，表示搜索子包名
+            if q.starts_with(':') {
+                let sub_q = q.trim_start_matches(':').trim();
+                let cfg = current_cfg();
+                let sub_names: Vec<String> = cfg
+                    .as_ref()
+                    .map(|c| {
+                        c.rules
+                            .iter()
+                            .filter_map(|r| {
+                                // 只取以 pkg 开头且不等于 pkg 的包（即子包）
+                                if r.pkg.starts_with(pkg) && r.pkg != pkg {
+                                    // 提取子包后缀（如 ":sub"）
+                                    r.pkg.strip_prefix(pkg).and_then(|s| s.strip_prefix(':'))
+                                } else {
+                                    None
+                                }
+                            })
+                            .map(|s| format!(":{}", s))
+                            .collect::<std::collections::HashSet<_>>()
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                // 根据 sub_q 过滤
+                if sub_q.is_empty() {
+                    sub_names
+                } else {
+                    let lq = sub_q.to_ascii_lowercase();
+                    sub_names
+                        .into_iter()
+                        .filter(|s| s.to_ascii_lowercase().contains(&lq))
+                        .collect()
+                }
+            } else {
+                // 普通线程名建议
+                suggest_threads(pkg, q)
+                    .into_iter()
+                    .map(|(n, _)| n)
+                    .collect()
+            }
         }
     };
     (200, json!({ "ok": true, "list": list }).to_string())
