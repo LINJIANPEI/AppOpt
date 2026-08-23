@@ -77,15 +77,12 @@ impl Target {
 fn clean_empty_lines(lines: &mut Vec<String>) {
     let mut i = 0;
     while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed.is_empty() {
-            // 向后看是否还有空行
+        if lines[i].trim().is_empty() {
             let mut j = i + 1;
             while j < lines.len() && lines[j].trim().is_empty() {
                 j += 1;
             }
             if j > i + 1 {
-                // 保留 i 行，删除 i+1..j-1
                 lines.drain(i + 1..j);
             }
             i += 1;
@@ -1334,16 +1331,14 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
             {
                 let start = i;
                 let mut end = i;
-                // 检查是否为块开始
                 if trimmed.ends_with('{') || after.trim_start().starts_with('{') {
                     let mut depth = 1;
                     let mut j = i + 1;
                     while j < lines.len() {
                         let t = lines[j].trim();
-                        // 简单判断块深度（忽略注释和空行）
                         if t.ends_with('{') && !t.ends_with("{{") && !t.starts_with('}') {
                             depth += 1;
-                        } else if t == "}" || t.ends_with('}') && !t.starts_with('{') {
+                        } else if t == "}" || (t.ends_with('}') && !t.starts_with('{')) {
                             depth -= 1;
                             if depth == 0 {
                                 end = j;
@@ -1352,7 +1347,6 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                         }
                         j += 1;
                     }
-                    // 未找到闭合则只取本行
                 }
                 ranges.push((start, end));
                 i = end + 1;
@@ -1363,6 +1357,7 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     }
     ranges
 }
+
 /// 从给定的行范围中提取包级CPU、线程和子包信息
 fn extract_package_data(lines: &[String], ranges: &[(usize, usize)], pkg: &str) -> PackageData {
     let mut data = PackageData::default();
@@ -1560,7 +1555,6 @@ fn merge_and_write(lines: &mut Vec<String>, pkg: &str, thread: &str, cpus: &str)
     // 8. 写回
     file_write(path, lines)
 }
-
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let result = std::panic::catch_unwind(|| {
         let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
@@ -1570,8 +1564,139 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             .map(String::from)
             .collect();
 
-        // ---- 统一入口：无论主包还是子包，都调用合并逻辑 ----
-        merge_and_write(&mut lines, pkg, thread, cpus)
+        // 子包处理（委托给原逻辑，但加上清理）
+        if pkg.contains(':') {
+            let parts: Vec<&str> = pkg.split(':').collect();
+            if parts.len() == 2 {
+                let main_pkg = parts[0];
+                let sub = parts[1];
+                let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
+                if let RuleEdit::Ok = result {
+                    clean_empty_lines(&mut lines);
+                    return file_write(path, &lines);
+                }
+                return result;
+            }
+            return RuleEdit::Ok;
+        }
+
+        // --- 主包处理 ---
+        let ranges = find_package_ranges(&lines, pkg);
+        if ranges.is_empty() && thread.is_empty() && cpus.is_empty() {
+            return RuleEdit::NotFound;
+        }
+
+        // 提取数据
+        let mut all_cpus = Vec::new();
+        let mut thread_map = std::collections::HashMap::new();
+        for (start, end) in &ranges {
+            for idx in *start..=*end {
+                let line = &lines[idx];
+                let trimmed = line.trim();
+                if trimmed.starts_with(&format!("{}", pkg)) {
+                    if let Some(eq_pos) = trimmed.rfind('=') {
+                        let cpu_part = trimmed[eq_pos + 1..].trim();
+                        for part in cpu_part.split(',') {
+                            let p = part.trim();
+                            if !p.is_empty() {
+                                all_cpus.push(p.to_string());
+                            }
+                        }
+                    }
+                } else {
+                    let inner = trimmed.trim_start();
+                    if !inner.is_empty()
+                        && !inner.starts_with(':')
+                        && !inner.starts_with('{')
+                        && !inner.starts_with('}')
+                    {
+                        if let Some(eq_pos) = inner.rfind('=') {
+                            let tname = inner[..eq_pos].trim();
+                            let tcpus = inner[eq_pos + 1..].trim();
+                            if !tname.is_empty() && !tcpus.is_empty() {
+                                thread_map
+                                    .entry(tname.to_string())
+                                    .and_modify(|e| *e = format!("{},{}", e, tcpus))
+                                    .or_insert(tcpus.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 应用用户更新
+        if !thread.is_empty() && !cpus.is_empty() {
+            thread_map
+                .entry(thread.to_string())
+                .and_modify(|e| *e = format!("{},{}", e, cpus))
+                .or_insert(cpus.to_string());
+        } else if thread.is_empty() && !cpus.is_empty() {
+            all_cpus.push(cpus.to_string());
+        }
+
+        // 合并去重
+        all_cpus.sort();
+        all_cpus.dedup();
+        let merged_cpus = all_cpus.join(",");
+        for (_, cpus_str) in thread_map.iter_mut() {
+            let parts: Vec<&str> = cpus_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let mut unique = parts.clone();
+            unique.sort();
+            unique.dedup();
+            *cpus_str = unique.join(",");
+        }
+
+        // 删除所有旧定义
+        let mut remove_indices = Vec::new();
+        for (start, end) in &ranges {
+            for idx in *start..=*end {
+                remove_indices.push(idx);
+            }
+        }
+        remove_indices.sort();
+        remove_indices.dedup();
+        for idx in remove_indices.into_iter().rev() {
+            lines.remove(idx);
+        }
+
+        // 构建新块
+        let mut new_block = Vec::new();
+        let has_cpus = !merged_cpus.is_empty();
+        let has_threads = !thread_map.is_empty();
+        if has_cpus || has_threads {
+            if has_cpus {
+                new_block.push(format!("{}={} {{", pkg, merged_cpus));
+            } else {
+                new_block.push(format!("{} {{", pkg));
+            }
+            let mut threads: Vec<(&String, &String)> = thread_map.iter().collect();
+            threads.sort_by(|a, b| a.0.cmp(b.0));
+            for (name, cpus_val) in threads {
+                new_block.push(format!("    {}={}", name, cpus_val));
+            }
+            new_block.push("}".to_string());
+        } else {
+            // 无任何规则，直接返回
+            return RuleEdit::Ok;
+        }
+
+        // 插入到第一个非注释行之后
+        let mut insert_pos = lines.len();
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+                insert_pos = idx + 1;
+                break;
+            }
+        }
+        lines.splice(insert_pos..insert_pos, new_block);
+        clean_empty_lines(&mut lines);
+        file_write(path, &lines)
     });
 
     match result {
@@ -1582,23 +1707,22 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         }
     }
 }
+
 /// 检查指定包是否为空（只有包级行而无内部内容），若是则删除整个块
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
     for (start, end) in ranges.iter().rev() {
         let start_line = &lines[*start];
         if start_line.trim().ends_with('{') {
-            // 检查内部是否只有空白或注释
             let mut has_content = false;
             for idx in (*start + 1)..*end {
-                let t = lines[idx].trim();
-                if !t.is_empty() && !t.starts_with('#') && !t.starts_with("//") {
+                let trimmed = lines[idx].trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
                     has_content = true;
                     break;
                 }
             }
             if !has_content {
-                // 删除整个块
                 for idx in (*start..=*end).rev() {
                     lines.remove(idx);
                 }
@@ -1636,7 +1760,7 @@ fn delete_sub_pkg(lines: &mut Vec<String>, main_pkg: &str, sub: &str, thread: &s
     }
 
     if thread.is_empty() {
-        // 删除整个子包范围
+        // 删除整个子包
         let mut indices = Vec::new();
         for (start, end) in &ranges {
             for idx in *start..=*end {
@@ -1649,7 +1773,7 @@ fn delete_sub_pkg(lines: &mut Vec<String>, main_pkg: &str, sub: &str, thread: &s
             lines.remove(idx);
         }
     } else {
-        // 删除指定线程
+        // 删除子包内指定线程
         let mut found = false;
         for (start, end) in &ranges {
             for idx in (*start + 1)..*end {
@@ -1675,14 +1799,12 @@ fn delete_sub_pkg(lines: &mut Vec<String>, main_pkg: &str, sub: &str, thread: &s
         if !found {
             return RuleEdit::NotFound;
         }
-        // 清理子包空块
         clean_empty_blocks(lines, &sub_pkg);
     }
-
-    // 清理主包空块（如果主包因删除子包而变空）
     clean_empty_blocks(lines, main_pkg);
     RuleEdit::Ok
 }
+
 pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
@@ -1691,13 +1813,11 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
-    // 如果是子包，调用子包删除（暂时委托给原函数，但为了统一，我们后续可改造）
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
             let main_pkg = parts[0];
             let sub = parts[1];
-            // 删除子包内的线程或整个子包（若thread为空）
             let result = delete_sub_pkg(&mut lines, main_pkg, sub, thread);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
@@ -1708,14 +1828,13 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         return RuleEdit::NotFound;
     }
 
-    // 主包删除
     let ranges = find_package_ranges(&lines, pkg);
     if ranges.is_empty() {
         return RuleEdit::NotFound;
     }
 
     if thread.is_empty() {
-        // 删除整个包（所有范围）
+        // 删除整个包
         let mut indices = Vec::new();
         for (start, end) in &ranges {
             for idx in *start..=*end {
@@ -1728,7 +1847,7 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
             lines.remove(idx);
         }
     } else {
-        // 删除指定线程：找到它所在的范围，移除该行，然后清理空块
+        // 删除线程
         let mut found = false;
         for (start, end) in &ranges {
             for idx in (*start + 1)..*end {
@@ -1737,7 +1856,6 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
                 if inner.starts_with(&format!("{}=", thread))
                     || inner.starts_with(&format!("{} =", thread))
                 {
-                    // 匹配线程名
                     if let Some(eq_pos) = inner.find('=') {
                         let name_part = inner[..eq_pos].trim();
                         if name_part == thread {
@@ -1755,7 +1873,6 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         if !found {
             return RuleEdit::NotFound;
         }
-        // 清理空块
         clean_empty_blocks(&mut lines, pkg);
     }
 
@@ -1771,7 +1888,6 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
-    // 子包删除整个子包
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
@@ -1787,7 +1903,6 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
         return RuleEdit::NotFound;
     }
 
-    // 主包删除全部
     let ranges = find_package_ranges(&lines, pkg);
     if ranges.is_empty() {
         return RuleEdit::NotFound;
