@@ -1316,20 +1316,16 @@ ${chipHtml(it.spec)}
             const eb = e.target.closest('[data-edit]');
             if (eb) {
                 const parts = eb.dataset.edit.split(':');
-                const type = parts[0]; // 'main' 或 'sub'
+                const type = parts[0];
                 if (type === 'main') {
                     const gi = +parts[1];
                     const thread = parts[2] || '';
-                    openRuleModal(thread ? 'edit-thread' : 'edit-pkg', gi, thread);
+                    openRuleModal('edit-thread', gi, '', thread);  // 注意：传入空字符串作为 sub
                 } else if (type === 'sub') {
                     const gi = +parts[1];
                     const sub = parts[2];
                     const thread = parts[3] || '';
-                    if (thread) {
-                        openRuleModal('edit-sub-thread', gi, sub, thread);
-                    } else {
-                        openRuleModal('edit-sub', gi, sub);
-                    }
+                    openRuleModal('edit-sub-thread', gi, sub, thread);
                 }
                 return;
             }
@@ -1397,9 +1393,9 @@ ${chipHtml(it.spec)}
             const vis = semanticVisible();
             const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
             const sem = parts.filter(p => CORE_KEYS.includes(p) && vis.includes(p));
-            if (spec === 'all-core') return { sem: vis, all: true, custom: false, customVal: '' };
-            if (parts.length && sem.length === parts.length) return { sem, all: false, custom: false, customVal: '' };
-            return { sem: [], all: false, custom: true, customVal: spec };
+            if (spec === 'all-core') return { sem: vis, all: true };
+            if (parts.length && sem.length === parts.length) return { sem };
+            return { custom: true, customVal: spec };
         }
 
         const mkRow = o => ({ thread: '', sem: [], all: false, custom: false, customVal: '', ...o });
@@ -1490,7 +1486,11 @@ ${r.pkgRow
                 const pkgItem = g.items.find(it => !it.thread);
                 mrHadPkgRule = !!pkgItem;
                 mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
-                for (const it of g.items) if (it.thread) mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
+                for (const it of g.items) {
+                    if (it.thread) {
+                        mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
+                    }
+                }
             } else if (mode === 'edit-pkg') {
                 $('mr-title').textContent = '包级默认规则';
                 pkgInput.value = rulesData[gi].pkg;
@@ -1507,16 +1507,10 @@ ${r.pkgRow
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
-                // 从 g.items 中查找该线程
                 const item = g.items.find(it => it.thread === thread);
-                if (!item) {
-                    toast('未找到该线程规则');
-                    return;
-                }
                 mrOldThread = thread;
-                // 构造 row，包含 thread 和解析后的 spec
-                const parsed = parseSpec(item.spec);
-                const row = mkRow({ thread: thread, ...parsed });
+                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+                row.thread = thread; // 强制确保
                 mrRows = [row];
                 console.log('edit-thread row:', row);
             } else if (mode === 'add-sub') {
@@ -1536,8 +1530,7 @@ ${r.pkgRow
                 $('mr-addrow').hidden = true;
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
-                const parsed = item ? parseSpec(item.spec) : {};
-                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...parsed })];
+                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '添加子包线程规则';
                 const g = rulesData[gi];
@@ -1551,33 +1544,23 @@ ${r.pkgRow
                 pkgInput.readOnly = true;
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => it.thread === thread) : null;
-                if (!item) {
-                    toast('未找到该线程规则');
-                    return;
-                }
                 mrOldThread = thread;
-                const parsed = parseSpec(item.spec);
-                const row = mkRow({ thread: thread, ...parsed });
+                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+                row.thread = thread; // 强制确保
                 mrRows = [row];
                 console.log('edit-sub-thread row:', row);
             }
 
             renderRows();
 
-            // 对于编辑线程的模式，强制设置输入框值并更新 chip 高亮
+            // 对于编辑线程的模式，额外确保输入框值
             if (mode === 'edit-thread' || mode === 'edit-sub-thread') {
                 const input = document.querySelector('#mr-rows .rr-thread');
                 if (input && thread) {
                     input.value = thread;
-                    // 同步 mrRows
                     if (mrRows.length > 0) {
                         mrRows[0].thread = thread;
                     }
-                }
-                // 再次确保 CPU 芯片高亮（因为 renderRows 中已处理，但以防万一）
-                const rowDiv = document.querySelector('#mr-rows .tree-row');
-                if (rowDiv && mrRows.length > 0) {
-                    updateRowChips(rowDiv, mrRows[0]);
                 }
             }
 
