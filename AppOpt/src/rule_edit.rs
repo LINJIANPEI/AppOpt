@@ -1144,134 +1144,88 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// 收集指定包（可能是主包或子包）的所有相关行及解析数据
-fn collect_package(lines: &[String], pkg: &str) -> (PackageData, Vec<usize>) {
+/// 从给定的行范围中提取包级CPU、线程和子包信息
+fn extract_package_data(lines: &[String], ranges: &[(usize, usize)], pkg: &str) -> PackageData {
     let mut data = PackageData::default();
-    let mut indices = Vec::new();
 
-    let is_sub = pkg.contains(':');
-    let prefix = if is_sub {
-        let sub_name = pkg.split(':').last().unwrap();
-        format!(":{}", sub_name)
-    } else {
-        pkg.to_string()
-    };
-
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
-            i += 1;
-            continue;
-        }
-
-        if trimmed.starts_with(&prefix) {
-            let after = &trimmed[prefix.len()..];
-            if after.is_empty()
-                || after.starts_with('=')
-                || after.starts_with('{')
-                || after.starts_with(' ')
-            {
-                let start = i;
-                let mut end = i;
-                if trimmed.ends_with('{') || after.trim_start().starts_with('{') {
-                    let mut depth = 1;
-                    for j in i + 1..lines.len() {
-                        let t = lines[j].trim();
-                        if t.ends_with('{') && !t.ends_with("{{") {
-                            depth += 1;
-                        } else if t == "}" || (t.ends_with('}') && !t.starts_with('{')) {
-                            depth -= 1;
-                            if depth == 0 {
-                                end = j;
-                                break;
-                            }
+    for (start, end) in ranges {
+        for idx in *start..=*end {
+            let line = &lines[idx];
+            let trimmed = line.trim();
+            // 包级行
+            if trimmed.starts_with(&format!("{}", pkg)) {
+                if let Some(eq_pos) = trimmed.rfind('=') {
+                    let cpu_part = trimmed[eq_pos + 1..].trim();
+                    for part in cpu_part.split(',') {
+                        let p = part.trim();
+                        if !p.is_empty() {
+                            data.cpus.push(p.to_string());
                         }
                     }
                 }
-                let collected: Vec<usize> = (start..=end).collect();
-                indices.extend(collected.clone());
-
-                for idx in start..=end {
-                    let line = &lines[idx];
-                    let ln = line.trim();
-                    if ln.starts_with(&prefix) {
-                        if let Some(eq_pos) = ln.rfind('=') {
-                            let cpus_str = ln[eq_pos + 1..].trim();
-                            for part in cpus_str.split(',') {
-                                let p = part.trim();
-                                if !p.is_empty() {
-                                    data.cpus.push(p.to_string());
-                                }
-                            }
-                        }
-                    } else {
-                        let inner = ln.trim_start();
-                        if inner.starts_with(':') {
-                            // 子包行，暂不处理，稍后递归
-                        } else if !inner.is_empty()
-                            && !inner.starts_with('{')
-                            && !inner.starts_with('}')
-                        {
-                            if let Some(eq_pos) = inner.rfind('=') {
-                                let tname = inner[..eq_pos].trim();
-                                let tcpus = inner[eq_pos + 1..].trim();
-                                if !tname.is_empty() && !tcpus.is_empty() && !tname.starts_with(':')
-                                {
-                                    data.threads
-                                        .entry(tname.to_string())
-                                        .and_modify(|e| *e = format!("{},{}", e, tcpus))
-                                        .or_insert(tcpus.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                i = end + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    // 递归收集子包
-    let mut sub_pkgs_to_collect = Vec::new();
-    for &idx in &indices {
-        let line = &lines[idx];
-        let trimmed = line.trim();
-        if trimmed.starts_with(':') && !trimmed.starts_with("::") {
-            let sub_name = if let Some(eq_pos) = trimmed.find('=') {
-                trimmed[1..eq_pos].trim()
-            } else if let Some(brace_pos) = trimmed.find('{') {
-                trimmed[1..brace_pos].trim()
             } else {
-                continue;
-            };
-            if !sub_name.is_empty() {
-                sub_pkgs_to_collect.push(sub_name.to_string());
+                let inner = trimmed.trim_start();
+                // 子包（以 ':' 开头）
+                if inner.starts_with(':') {
+                    let sub_name = if let Some(eq_pos) = inner.find('=') {
+                        inner[1..eq_pos].trim()
+                    } else if let Some(brace_pos) = inner.find('{') {
+                        inner[1..brace_pos].trim()
+                    } else {
+                        ""
+                    };
+                    if !sub_name.is_empty() {
+                        let sub_ranges =
+                            find_package_ranges(lines, &format!("{}:{}", pkg, sub_name));
+                        if !sub_ranges.is_empty() {
+                            let sub_data = extract_package_data(
+                                lines,
+                                &sub_ranges,
+                                &format!("{}:{}", pkg, sub_name),
+                            );
+                            data.sub_pkgs.insert(sub_name.to_string(), sub_data);
+                        }
+                    }
+                } else if !inner.is_empty() && !inner.starts_with('{') && !inner.starts_with('}') {
+                    // 线程行
+                    if let Some(eq_pos) = inner.rfind('=') {
+                        let thread_name = inner[..eq_pos].trim();
+                        let cpus_val = inner[eq_pos + 1..].trim();
+                        if !thread_name.is_empty() && !cpus_val.is_empty() {
+                            data.threads
+                                .entry(thread_name.to_string())
+                                .and_modify(|e| *e = format!("{},{}", e, cpus_val))
+                                .or_insert(cpus_val.to_string());
+                        }
+                    }
+                }
             }
         }
     }
-    sub_pkgs_to_collect.sort();
-    sub_pkgs_to_collect.dedup();
+    data
+}
 
-    for sub_name in sub_pkgs_to_collect {
-        let sub_full_pkg = if is_sub {
-            format!("{}:{}", pkg, sub_name)
-        } else {
-            format!("{}:{}", pkg, sub_name)
-        };
-        let (sub_data, sub_indices) = collect_package(lines, &sub_full_pkg);
-        data.sub_pkgs.insert(sub_name, sub_data);
-        for idx in sub_indices {
-            if !indices.contains(&idx) {
-                indices.push(idx);
-            }
-        }
+/// 收集指定包（主包或子包）的所有数据，并返回相关行索引
+fn collect_package(lines: &[String], pkg: &str) -> (PackageData, Vec<usize>) {
+    // 使用 find_package_ranges 获取精确的行范围
+    let ranges = find_package_ranges(lines, pkg);
+    if ranges.is_empty() {
+        return (PackageData::default(), Vec::new());
     }
 
+    // 从这些范围中提取数据（包级CPU、线程、子包递归）
+    let data = extract_package_data(lines, &ranges, pkg);
+
+    // 生成所有相关行的索引列表（用于删除）
+    let mut indices = Vec::new();
+    for (start, end) in &ranges {
+        for idx in *start..=*end {
+            indices.push(idx);
+        }
+    }
     indices.sort();
     indices.dedup();
+
     (data, indices)
 }
 
