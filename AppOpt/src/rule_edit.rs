@@ -632,6 +632,19 @@ fn write_sub_pkg_block(
     cpus: &str,
     delete_all: bool,
 ) -> RuleEdit {
+    // 辅助：从行中提取线程名（等号左侧去除空格）
+    fn extract_thread_name(line: &str) -> Option<String> {
+        let trimmed = line.trim();
+        trimmed.find('=').and_then(|eq_pos| {
+            let name = trimmed[..eq_pos].trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+    }
+
     let full_pkg = format!("{}:{}", pkg, sub);
     let mut t = target_scan(lines, pkg);
 
@@ -865,7 +878,6 @@ fn write_sub_pkg_block(
                 insert_lines.push(format!(" :{}={} {{", sub, cpus));
                 // 保留原线程的缩进（通常是 8 个空格，但为了美观，统一使用 8 个空格）
                 for tl in &thread_lines {
-                    // 如果原来有缩进，保留；否则添加 8 个空格
                     let trimmed = tl.trim();
                     if !trimmed.is_empty() {
                         let indent = if tl.starts_with(' ') {
@@ -939,6 +951,7 @@ fn write_sub_pkg_block(
                 for i in start..close {
                     let trimmed = lines[i].trim();
                     if trimmed.starts_with(&format!(":{} =", sub)) && trimmed.ends_with('{') {
+                        // 合并格式
                         let mut depth = 1;
                         for j in (i + 1)..close {
                             let next_trimmed = lines[j].trim();
@@ -956,6 +969,7 @@ fn write_sub_pkg_block(
                         break;
                     } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub)
                     {
+                        // 独立块
                         let mut depth = 1;
                         for j in (i + 1)..close {
                             let next_trimmed = lines[j].trim();
@@ -975,12 +989,15 @@ fn write_sub_pkg_block(
                 }
             }
             if let (Some(start_idx), Some(end_idx)) = (sub_block_start, sub_block_end) {
+                // 在块内查找要删除的线程行（使用提取线程名比较）
                 for i in (start_idx + 1)..end_idx {
-                    let trimmed = lines[i].trim();
-                    if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':') {
-                        lines.remove(i);
-                        removed = true;
-                        break;
+                    let line = &lines[i];
+                    if let Some(name) = extract_thread_name(line) {
+                        if name == thread {
+                            lines.remove(i);
+                            removed = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -1027,24 +1044,27 @@ fn write_sub_pkg_block(
                     }
                     let mut found = false;
                     for i in (block_start + 1)..block_end {
-                        let trimmed = lines[i].trim();
-                        if trimmed.starts_with(&format!("{}=", thread)) && !trimmed.starts_with(':')
-                        {
-                            if let Some(comment_pos) = comment_at(&lines[i]) {
-                                lines[i] = format!(
-                                    "        {}={}{}",
-                                    thread,
-                                    cpus,
-                                    &lines[i][comment_pos..]
-                                );
-                            } else {
-                                lines[i] = format!("        {}={}", thread, cpus);
+                        let line = &lines[i];
+                        if let Some(name) = extract_thread_name(line) {
+                            if name == thread {
+                                // 更新现有线程
+                                if let Some(comment_pos) = comment_at(line) {
+                                    lines[i] = format!(
+                                        "        {}={}{}",
+                                        thread,
+                                        cpus,
+                                        &line[comment_pos..]
+                                    );
+                                } else {
+                                    lines[i] = format!("        {}={}", thread, cpus);
+                                }
+                                found = true;
+                                break;
                             }
-                            found = true;
-                            break;
                         }
                     }
                     if !found {
+                        // 在块结束前插入新线程
                         lines.insert(block_end, format!("        {}={}", thread, cpus));
                     }
                 } else {
