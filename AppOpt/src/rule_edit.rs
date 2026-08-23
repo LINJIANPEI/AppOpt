@@ -294,10 +294,6 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
     let t = target_scan(lines, pkg);
     let mut items: Vec<(ThreadLoc, String)> = Vec::new();
     for loc in t.singles() {
-        // 增加索引有效性检查
-        if loc.idx >= lines.len() {
-            continue;
-        }
         let raw_line = lines[loc.idx].trim();
         let raw = strip_comment(raw_line);
         let body = raw.strip_suffix('{').map(str::trim_end).unwrap_or(raw);
@@ -306,6 +302,7 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
             items.push((*loc, line));
         }
     }
+    // 如果没有需要移动的线程行，直接返回，不做任何修改
     if items.is_empty() {
         return;
     }
