@@ -91,7 +91,6 @@ fn clean_empty_lines(lines: &mut Vec<String>) {
         }
     }
 }
-
 fn target_scan(lines: &[String], pkg: &str) -> Target {
     let mut t = Target::new();
     let mut pending: Option<usize> = None;
@@ -1311,6 +1310,7 @@ fn format_sub_package(sub_name: &str, data: &PackageData) -> Vec<String> {
     lines.push("    }".to_string());
     lines
 }
+
 /// 查找包的所有定义范围（包级行及其块）
 fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let pkg_prefix = format!("{}", pkg);
@@ -1556,17 +1556,16 @@ fn merge_and_write(lines: &mut Vec<String>, pkg: &str, thread: &str, cpus: &str)
     file_write(path, lines)
 }
 
-pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
+pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let result = std::panic::catch_unwind(|| {
         let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
-        let mut lines: Vec<String> = fs::read_to_string(path)
+        let mut lines: Vec<String> = fs::read_to_string(config_path)
             .unwrap_or_default()
             .lines()
             .map(String::from)
             .collect();
-        let config_path = path; // 避免与属性名冲突
 
-        // 子包处理（委托给原逻辑，但加上清理）
+        // 子包处理
         if pkg.contains(':') {
             let parts: Vec<&str> = pkg.split(':').collect();
             if parts.len() == 2 {
@@ -1683,7 +1682,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             }
             new_block.push("}".to_string());
         } else {
-            // 无任何规则，直接返回
             return RuleEdit::Ok;
         }
 
@@ -1787,14 +1785,13 @@ fn delete_sub_pkg(lines: &mut Vec<String>, main_pkg: &str, sub: &str, thread: &s
     RuleEdit::Ok
 }
 
-pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
+pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
-    let mut lines: Vec<String> = fs::read_to_string(path)
+    let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
         .lines()
         .map(String::from)
         .collect();
-    let config_path = path;
 
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
@@ -1863,14 +1860,13 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
     file_write(config_path, &lines)
 }
 
-pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
+pub fn rule_delete_pkg(config_path: &str, pkg: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
-    let mut lines: Vec<String> = fs::read_to_string(path)
+    let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
         .lines()
         .map(String::from)
         .collect();
-    let config_path = path;
 
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
