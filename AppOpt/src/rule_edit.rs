@@ -1093,57 +1093,62 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         }
 
         // ---- 常规方式（主包编辑） ----
-        // 判断是否需要规范化：只有主包存在子包或线程规则时才规范化，避免简单规则触发崩溃
-        let has_complex = {
-            let t = target_scan(&lines, pkg);
-            !t.threads.is_empty()
-                || !t.sub_pkgs.is_empty()
-                || t.pkg_line.is_some_and(|pl| {
-                    matches!(
-                        pl,
-                        PkgLine::OpenInline(_) | PkgLine::BareOpen(_) | PkgLine::BarePending(_)
-                    )
-                })
-        };
-        if has_complex {
-            normalize_sub_pkgs(&mut lines, pkg);
-        }
+        // 先规范化线程和子包结构（这一步会确保块格式统一）
+        normalize_sub_pkgs(&mut lines, pkg);
         let t = target_scan(&lines, pkg);
 
         if thread.is_empty() {
-            match t.pkg_line {
-                Some(PkgLine::Standalone(i)) => {
-                    lines[i] = spec_swap(&lines[i], cpus);
+            // ★★★ 修改：直接按行查找包级行，避免依赖解析索引 ★★★
+            let mut found = false;
+            let pkg_prefix = format!("{}", pkg);
+            for i in 0..lines.len() {
+                let trimmed = lines[i].trim();
+                // 跳过注释行和空行
+                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+                    continue;
                 }
-                Some(PkgLine::BarePending(i)) => {
-                    lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
-                    if let Some(open) = t.block_open
-                        && matches!(
-                            parse_outer(lines[open].trim()),
-                            OuterLine::BareOpen { pkg: "" }
-                        )
+                // 检查该行是否以包名开头，且不是子包（不以冒号开头），且不是块内行（前面有空格/制表符）
+                // 注意：trimmed 已去除前导空格，所以直接用 starts_with 匹配包名
+                if trimmed.starts_with(&pkg_prefix) {
+                    // 检查包名后面是否跟着 '='、'{' 或空格（即包级行）
+                    let after_pkg = &trimmed[pkg_prefix.len()..];
+                    if after_pkg.is_empty()
+                        || after_pkg.starts_with('=')
+                        || after_pkg.starts_with('{')
+                        || after_pkg.starts_with(' ')
                     {
-                        lines.remove(open);
+                        // 找到包级行，根据是否已有 '=' 进行更新
+                        if trimmed.contains('=') {
+                            // 有等号，替换等号后的 CPU 规格
+                            lines[i] = spec_swap(&lines[i], cpus);
+                        } else if trimmed.ends_with('{') {
+                            // 无等号但有 '{'，转为带等号格式
+                            lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
+                        } else {
+                            // 其他情况（如单独包名），转为带等号
+                            lines[i] = with_comment(&format!("{}={}", pkg, cpus), &lines[i]);
+                        }
+                        found = true;
+                        break;
                     }
                 }
-                Some(PkgLine::OpenInline(i)) => {
-                    lines[i] = spec_swap(&lines[i], cpus);
-                }
-                Some(PkgLine::BareOpen(i)) => {
-                    lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
-                }
-                None if t.unterminated => return RuleEdit::Malformed,
-                None => lines.push(format!("{}={}", pkg, cpus)),
+            }
+            if !found {
+                // 未找到现有包级行，在文件末尾添加新规则
+                lines.push(format!("{}={}", pkg, cpus));
             }
         } else if let Some(locs) = t.threads.get(thread) {
+            // 线程规则已存在：更新最后一条，删除其他重复
             let last = locs.last().copied().unwrap();
             lines[last.idx] = spec_swap(&lines[last.idx], cpus);
             for loc in locs[..locs.len() - 1].iter().rev() {
                 line_remove(&mut lines, pkg, loc);
             }
         } else if let Some(close) = t.block_close {
+            // 块已存在，在线程块末尾插入新线程规则
             lines.insert(close, format!("\t{}={}", thread, cpus));
         } else if let Some(PkgLine::Standalone(i)) = t.pkg_line {
+            // 只有包级规则（单行），将其转为块并插入线程规则
             lines[i] = format!("{} {{", lines[i].trim_end());
             lines.splice(
                 i + 1..i + 1,
@@ -1152,6 +1157,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         } else if t.unterminated {
             return RuleEdit::Malformed;
         } else {
+            // 既无包级也无块，创建新块
             lines.push(bare_open_line(pkg));
             lines.push(format!("\t{}={}", thread, cpus));
             lines.push("}".to_string());
