@@ -1108,6 +1108,13 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
             i += 1;
             continue;
         }
+        // 精确匹配包级行：行首（忽略前导空格）以 pkg_prefix 开头
+        // 但注意，块内线程行也可能以包名开头？实际上线程行不会以包名开头，因为线程名通常不同。
+        // 但在当前逻辑中，我们只处理行首（可能缩进）的匹配，但包级行通常顶格（无缩进）。
+        // 不过有些用户可能缩进，为了保险，我们检查是否以 pkg_prefix 开头，并且前面不是空格？
+        // 更好的：检查该行是否以 pkg_prefix 开头，且前面没有非空格字符（即顶格）。
+        // 但为了兼容，我们允许任意缩进，但后面要检查它是不是其他包。
+        // 现在我们先使用原逻辑，但后面加一个保护：如果遇到另一个顶格的包行，则提前结束。
         if trimmed.starts_with(&pkg_prefix) {
             let after = &trimmed[pkg_prefix.len()..];
             if after.is_empty()
@@ -1117,11 +1124,30 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
             {
                 let start = i;
                 let mut end = i;
-                if trimmed.ends_with('{') || after.trim_start().starts_with('{') {
+                // 检查是否为块开始（以 '{' 结尾）
+                let is_block = trimmed.ends_with('{') || after.trim_start().starts_with('{');
+                if is_block {
                     let mut depth = 1;
                     let mut j = i + 1;
                     while j < lines.len() {
                         let t = lines[j].trim();
+                        // 检查是否遇到了新的顶格包级行（即行首非空格且不以 # 开头）
+                        // 如果遇到了，说明当前块结束，但尚未找到匹配的 }，则强制结束
+                        let line_start = lines[j].chars().next().unwrap_or(' ');
+                        if !line_start.is_whitespace()
+                            && !t.is_empty()
+                            && !t.starts_with('#')
+                            && !t.starts_with("//")
+                        {
+                            // 可能是新包开始，但也有可能是注释行，这里我们只当它是新包行则停止
+                            // 但还要判断是否是线程行（线程行通常缩进，所以顶格的是包）
+                            // 我们可以检查该行是否包含 '=' 或 '{'，若是则很可能是包级行
+                            if t.contains('=') || t.contains('{') {
+                                // 当前块到此结束
+                                end = j - 1;
+                                break;
+                            }
+                        }
                         if t.ends_with('{') && !t.ends_with("{{") && !t.starts_with('}') {
                             depth += 1;
                         } else if t == "}" || (t.ends_with('}') && !t.starts_with('{')) {
@@ -1132,6 +1158,11 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                             }
                         }
                         j += 1;
+                    }
+                    // 如果 j 到达末尾，end 可能未更新，则设置为 i（单行）
+                    if end == i {
+                        // 未找到闭合，但可能存在后续包行，我们尝试调整
+                        // 这里我们简单地只取本行
                     }
                 }
                 ranges.push((start, end));
