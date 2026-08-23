@@ -645,6 +645,44 @@ fn write_sub_pkg_block(
         })
     }
 
+    // 辅助：判断一行是否为子包块开始（包括合并格式和独立块）
+    fn is_sub_block_start(line: &str, sub: &str) -> bool {
+        let trimmed = line.trim();
+        // 匹配 :sub 开头，且以 { 结尾（中间可能有 = 和 CPU 列表）
+        trimmed.starts_with(&format!(":{}", sub)) && trimmed.ends_with('{')
+    }
+
+    // 辅助：在指定范围内查找子包块的范围（开始行索引，结束行索引）
+    // 如果找不到返回 None
+    fn find_sub_block_range(
+        lines: &[String],
+        start: usize,
+        end: usize,
+        sub: &str,
+    ) -> Option<(usize, usize)> {
+        for i in start..end {
+            let trimmed = lines[i].trim();
+            if is_sub_block_start(trimmed, sub) {
+                // 找到块开始，寻找匹配的闭合 '}'
+                let mut depth = 1;
+                for j in (i + 1)..lines.len() {
+                    let next_trimmed = lines[j].trim();
+                    if close_like(next_trimmed) {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some((i, j));
+                        }
+                    } else if is_sub_block_start(next_trimmed, sub) {
+                        depth += 1;
+                    }
+                }
+                // 如果未找到闭合，返回 None
+                return None;
+            }
+        }
+        None
+    }
+
     let full_pkg = format!("{}:{}", pkg, sub);
     let mut t = target_scan(lines, pkg);
 
@@ -728,8 +766,7 @@ fn write_sub_pkg_block(
     // === 删除整个子包（delete_all = true） ===
     if delete_all {
         let mut remove_indices = Vec::new();
-
-        // 1. 找到所有包级规则行（:sub=CPU 或 :sub = CPU）以及其对应的块
+        // 1. 删除包级规则行（:sub=CPU 或 :sub = CPU）及其合并块
         if let Some(close) = t.block_close {
             let start = t.block_open.unwrap_or(0);
             for i in start..close {
@@ -739,26 +776,17 @@ fn write_sub_pkg_block(
                 {
                     remove_indices.push(i);
                     if trimmed.ends_with('{') {
-                        let mut depth = 1;
-                        for j in (i + 1)..lines.len() {
-                            let next_trimmed = lines[j].trim();
-                            if close_like(next_trimmed) {
-                                depth -= 1;
-                                if depth == 0 {
-                                    for k in i..=j {
-                                        remove_indices.push(k);
-                                    }
-                                    break;
-                                }
-                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                                depth += 1;
+                        if let Some((start_idx, end_idx)) =
+                            find_sub_block_range(lines, i, lines.len(), sub)
+                        {
+                            for k in start_idx..=end_idx {
+                                remove_indices.push(k);
                             }
                         }
                     }
                 }
             }
         }
-
         // 2. 删除所有独立子包块（:sub { ... }）
         let blocks = find_all_sub_blocks(lines, sub);
         for (start, end) in blocks {
@@ -766,17 +794,14 @@ fn write_sub_pkg_block(
                 remove_indices.push(i);
             }
         }
-
         if remove_indices.is_empty() {
             return RuleEdit::NotFound;
         }
-
         remove_indices.sort_unstable();
         remove_indices.dedup();
         for idx in remove_indices.iter().rev() {
             lines.remove(*idx);
         }
-
         return RuleEdit::Ok;
     }
 
@@ -798,31 +823,22 @@ fn write_sub_pkg_block(
                         || trimmed.starts_with(&format!(":{}=", sub))
                     {
                         remove_indices.push(i);
+                        // 如果是合并格式，收集其中的线程
                         if trimmed.ends_with('{') {
-                            let mut depth = 1;
-                            for j in (i + 1)..lines.len() {
-                                let next_trimmed = lines[j].trim();
-                                if close_like(next_trimmed) {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        for k in (i + 1)..j {
-                                            let line_content = lines[k].trim();
-                                            if !line_content.is_empty()
-                                                && !line_content.starts_with(':')
-                                                && !close_like(line_content)
-                                            {
-                                                thread_lines.push(lines[k].clone());
-                                            }
-                                        }
-                                        for k in i..=j {
-                                            remove_indices.push(k);
-                                        }
-                                        break;
+                            if let Some((start_idx, end_idx)) =
+                                find_sub_block_range(lines, i, lines.len(), sub)
+                            {
+                                for k in (start_idx + 1)..end_idx {
+                                    let line_content = lines[k].trim();
+                                    if !line_content.is_empty()
+                                        && !line_content.starts_with(':')
+                                        && !close_like(line_content)
+                                    {
+                                        thread_lines.push(lines[k].clone());
                                     }
-                                } else if next_trimmed.starts_with(':')
-                                    && next_trimmed.ends_with('{')
-                                {
-                                    depth += 1;
+                                }
+                                for k in start_idx..=end_idx {
+                                    remove_indices.push(k);
                                 }
                             }
                         }
@@ -896,6 +912,7 @@ fn write_sub_pkg_block(
                 }
                 if let Some(idx) = pkg_rule_idx {
                     if is_block {
+                        // 合并格式转为独立块（去掉 =CPU）
                         let line = &lines[idx];
                         let comment = match comment_at(line) {
                             Some(pos) => &line[pos..],
@@ -923,59 +940,21 @@ fn write_sub_pkg_block(
         if cpus.is_empty() {
             // 删除指定线程
             let mut removed = false;
-            let mut sub_block_start = None;
-            let mut sub_block_end = None;
             if let Some(close) = t.block_close {
                 let start = t.block_open.unwrap_or(0);
-                for i in start..close {
-                    let trimmed = lines[i].trim();
-                    // 【修复】放宽合并格式匹配：以 :子包 开头且以 { 结尾
-                    if trimmed.starts_with(&format!(":{}", sub)) && trimmed.ends_with('{') {
-                        // 合并格式（包括 :MSF=e-core { 和 :MSF { 等）
-                        let mut depth = 1;
-                        for j in (i + 1)..close {
-                            let next_trimmed = lines[j].trim();
-                            if close_like(next_trimmed) {
-                                depth -= 1;
-                                if depth == 0 {
-                                    sub_block_start = Some(i);
-                                    sub_block_end = Some(j);
-                                    break;
-                                }
-                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                                depth += 1;
+                // 查找子包块范围
+                if let Some((block_start, block_end)) =
+                    find_sub_block_range(lines, start, close, sub)
+                {
+                    // 在块内查找目标线程
+                    for i in (block_start + 1)..block_end {
+                        let line = &lines[i];
+                        if let Some(name) = extract_thread_name(line) {
+                            if name == thread {
+                                lines.remove(i);
+                                removed = true;
+                                break;
                             }
-                        }
-                        break;
-                    // 独立块检测（保留）
-                    } else if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub)
-                    {
-                        let mut depth = 1;
-                        for j in (i + 1)..close {
-                            let next_trimmed = lines[j].trim();
-                            if close_like(next_trimmed) {
-                                depth -= 1;
-                                if depth == 0 {
-                                    sub_block_start = Some(i);
-                                    sub_block_end = Some(j);
-                                    break;
-                                }
-                            } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                                depth += 1;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-            if let (Some(start_idx), Some(end_idx)) = (sub_block_start, sub_block_end) {
-                for i in (start_idx + 1)..end_idx {
-                    let line = &lines[i];
-                    if let Some(name) = extract_thread_name(line) {
-                        if name == thread {
-                            lines.remove(i);
-                            removed = true;
-                            break;
                         }
                     }
                 }
@@ -992,15 +971,13 @@ fn write_sub_pkg_block(
                 let start = t.block_open.unwrap_or(0);
                 for i in start..close {
                     let trimmed = lines[i].trim();
-                    // 同样放宽匹配
-                    if trimmed.starts_with(&format!(":{}", sub)) && trimmed.ends_with('{') {
+                    if is_sub_block_start(trimmed, sub) {
                         pkg_rule_line_idx = Some(i);
                         pkg_rule_is_block = true;
                         break;
                     } else if trimmed.starts_with(&format!(":{} =", sub))
                         || trimmed.starts_with(&format!(":{}=", sub))
                     {
-                        // 带等号但不以 { 结尾（独立行）
                         pkg_rule_line_idx = Some(i);
                         pkg_rule_is_block = false;
                         break;
@@ -1011,43 +988,35 @@ fn write_sub_pkg_block(
             if let Some(idx) = pkg_rule_line_idx {
                 if pkg_rule_is_block {
                     // 合并格式，在其块内查找/插入线程
-                    let mut block_start = idx;
-                    let mut block_end = idx;
-                    let mut depth = 1;
-                    for j in (idx + 1)..lines.len() {
-                        let next_trimmed = lines[j].trim();
-                        if close_like(next_trimmed) {
-                            depth -= 1;
-                            if depth == 0 {
-                                block_end = j;
-                                break;
-                            }
-                        } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                            depth += 1;
-                        }
-                    }
-                    let mut found = false;
-                    for i in (block_start + 1)..block_end {
-                        let line = &lines[i];
-                        if let Some(name) = extract_thread_name(line) {
-                            if name == thread {
-                                if let Some(comment_pos) = comment_at(line) {
-                                    lines[i] = format!(
-                                        "        {}={}{}",
-                                        thread,
-                                        cpus,
-                                        &line[comment_pos..]
-                                    );
-                                } else {
-                                    lines[i] = format!("        {}={}", thread, cpus);
+                    if let Some((block_start, block_end)) =
+                        find_sub_block_range(lines, idx, lines.len(), sub)
+                    {
+                        let mut found = false;
+                        for i in (block_start + 1)..block_end {
+                            let line = &lines[i];
+                            if let Some(name) = extract_thread_name(line) {
+                                if name == thread {
+                                    if let Some(comment_pos) = comment_at(line) {
+                                        lines[i] = format!(
+                                            "        {}={}{}",
+                                            thread,
+                                            cpus,
+                                            &line[comment_pos..]
+                                        );
+                                    } else {
+                                        lines[i] = format!("        {}={}", thread, cpus);
+                                    }
+                                    found = true;
+                                    break;
                                 }
-                                found = true;
-                                break;
                             }
                         }
-                    }
-                    if !found {
-                        lines.insert(block_end, format!("        {}={}", thread, cpus));
+                        if !found {
+                            lines.insert(block_end, format!("        {}={}", thread, cpus));
+                        }
+                    } else {
+                        // 理论上不会发生
+                        return RuleEdit::Malformed;
                     }
                 } else {
                     // 包级规则行不带 '{'，转换为合并格式
