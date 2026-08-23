@@ -1318,10 +1318,10 @@ ${chipHtml(it.spec)}
                 const parts = eb.dataset.edit.split(':');
                 const type = parts[0];
                 if (type === 'main') {
-                    const gi = +parts[1];
-                    const thread = parts[2] || '';
-                    openRuleModal('edit-thread', gi, '', thread);  // 注意：传入空字符串作为 sub
-                } else if (type === 'sub') {
+    const gi = +parts[1];
+    const thread = parts[2] || '';
+    openRuleModal('edit-thread', gi, '', thread);  // 传空 sub
+} else if (type === 'sub') {
                     const gi = +parts[1];
                     const sub = parts[2];
                     const thread = parts[3] || '';
@@ -1389,14 +1389,14 @@ ${chipHtml(it.spec)}
             return [];
         }
         function parseSpec(spec) {
-            if (!spec || !spec.trim()) return { sem: [], all: false, custom: false, customVal: '' };
-            const vis = semanticVisible();
-            const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
-            const sem = parts.filter(p => CORE_KEYS.includes(p) && vis.includes(p));
-            if (spec === 'all-core') return { sem: vis, all: true };
-            if (parts.length && sem.length === parts.length) return { sem };
-            return { custom: true, customVal: spec };
-        }
+    if (!spec || !spec.trim()) return { sem: [], all: false, custom: false, customVal: '' };
+    const vis = semanticVisible();
+    const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
+    const sem = parts.filter(p => CORE_KEYS.includes(p) && vis.includes(p));
+    if (spec === 'all-core') return { sem: vis, all: true };
+    if (parts.length && sem.length === parts.length) return { sem };
+    return { custom: true, customVal: spec };
+}
 
         const mkRow = o => ({ thread: '', sem: [], all: false, custom: false, customVal: '', ...o });
         function specOf(r) {
@@ -1419,21 +1419,43 @@ ${chipHtml(it.spec)}
         }
         let mrRows = [];
         function renderRows() {
-            const box = $('mr-rows'), tree = isTree();
-            box.innerHTML = mrRows.map((r, i) => `
-<div class="tree-row${r.pkgRow ? '' : ' branch'}" data-ri="${i}">
-${r.pkgRow
-                    ? '<div class="tr-head"><span class="tr-tag">包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>'
-                    : `<div class="tr-head sg-wrap"><input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}"><div class="sg-box" hidden></div>${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}</div>`}
-<div class="core-chips">${CHIP_HTML}</div>
-<input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
-</div>`).join('');
-            mrRows.forEach((r, i) => {
-                const el = box.children[i];
-                applyRowTopo(el); updateRowChips(el, r);
-                if (!r.pkgRow) suggest_bind(el.querySelector('.rr-thread'), el.querySelector('.sg-box'), { thread: true, onpick: v => r.thread = v.trim() });
-            });
+    const box = $('mr-rows'), tree = isTree();
+    box.innerHTML = mrRows.map((r, i) => {
+        if (r.pkgRow) {
+            // 包级行：无线程输入框
+            return `<div class="tree-row" data-ri="${i}">
+                <div class="tr-head"><span class="tr-tag">包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
+                <div class="core-chips">${CHIP_HTML}</div>
+                <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
+            </div>`;
+        } else {
+            // 线程行：显示输入框
+            return `<div class="tree-row branch" data-ri="${i}">
+                <div class="tr-head sg-wrap">
+                    <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
+                    <div class="sg-box" hidden></div>
+                    ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
+                </div>
+                <div class="core-chips">${CHIP_HTML}</div>
+                <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
+            </div>`;
         }
+    }).join('');
+
+    // 绑定事件（保持不变）
+    mrRows.forEach((r, i) => {
+        const el = box.children[i];
+        applyRowTopo(el);
+        updateRowChips(el, r);
+        if (!r.pkgRow) {
+            const input = el.querySelector('.rr-thread');
+            const sgBox = el.querySelector('.sg-box');
+            if (input && sgBox) {
+                suggest_bind(input, sgBox, { thread: true, onpick: v => r.thread = v.trim() });
+            }
+        }
+    });
+}
         $('mr-rows').addEventListener('click', e => {
             const del = e.target.closest('.rr-del');
             if (del) { mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1); renderRows(); return }
@@ -1521,17 +1543,18 @@ ${r.pkgRow
                 $('mr-addrow').hidden = true;
                 mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
                 toast('请输入 :子包名，如 :push，并选择 CPU');
-            } else if (mode === 'edit-sub') {
-                $('mr-title').textContent = '编辑子包包级规则';
-                const g = rulesData[gi];
-                const fullPkg = g.pkg + ':' + sub;
-                pkgInput.value = fullPkg;
-                pkgInput.readOnly = true;
-                $('mr-addrow').hidden = true;
-                const subData = g.subs && g.subs[sub];
-                const item = subData ? subData.items.find(it => !it.thread) : null;
-                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
-            } else if (mode === 'add-sub-thread') {
+            } // 示例：edit-sub 分支
+} else if (mode === 'edit-sub') {
+    $('mr-title').textContent = '编辑子包包级规则';
+    const g = rulesData[gi];
+    const fullPkg = g.pkg + ':' + sub;
+    pkgInput.value = fullPkg;
+    pkgInput.readOnly = true;
+    $('mr-addrow').hidden = true;
+    const subData = g.subs && g.subs[sub];
+    const item = subData ? subData.items.find(it => !it.thread) : null;
+    mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
+} else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '添加子包线程规则';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
