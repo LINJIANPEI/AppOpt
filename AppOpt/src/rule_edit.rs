@@ -1178,6 +1178,7 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
     } else {
         return RuleEdit::NotFound;
     }
+
     file_write(path, &lines)
 }
 pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
