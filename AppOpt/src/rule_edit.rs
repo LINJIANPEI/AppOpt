@@ -65,6 +65,28 @@ impl Target {
     }
 }
 
+/// 删除连续空行，只保留最多一个空行
+fn clean_empty_lines(lines: &mut Vec<String>) {
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.is_empty() {
+            // 向后看是否还有空行
+            let mut j = i + 1;
+            while j < lines.len() && lines[j].trim().is_empty() {
+                j += 1;
+            }
+            if j > i + 1 {
+                // 保留 i 行，删除 i+1..j-1
+                lines.drain(i + 1..j);
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
 fn target_scan(lines: &[String], pkg: &str) -> Target {
     let mut t = Target::new();
     let mut pending: Option<usize> = None;
@@ -1169,6 +1191,157 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
     }
 }
 
+/// 删除子包内容，thread 为空时删除整个子包，否则删除该子包内的指定线程
+fn delete_sub_pkg_advanced(
+    lines: &mut Vec<String>,
+    main_pkg: &str,
+    sub: &str,
+    thread: &str,
+) -> RuleEdit {
+    let sub_prefix = format!(":{}", sub);
+    let mut found = false;
+
+    if thread.is_empty() {
+        // 删除整个子包（包括包级行和所有线程）
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim();
+            if trimmed.starts_with(&sub_prefix) && (trimmed.contains('=') || trimmed.ends_with('{'))
+            {
+                // 判断是否为块
+                let is_block = trimmed.ends_with('{') || trimmed.trim_end().ends_with('{');
+                if is_block {
+                    let start = i;
+                    let mut depth = 1;
+                    let mut end = i;
+                    for j in i + 1..lines.len() {
+                        let t = lines[j].trim();
+                        if t.ends_with('{') && !t.ends_with("{{") {
+                            depth += 1;
+                        } else if t == "}" || t.ends_with('}') && !t.starts_with('{') {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = j;
+                                break;
+                            }
+                        }
+                    }
+                    lines.drain(start..=end);
+                    found = true;
+                    break;
+                } else {
+                    lines.remove(i);
+                    found = true;
+                    break;
+                }
+            }
+            i += 1;
+        }
+        if !found {
+            return RuleEdit::NotFound;
+        }
+        // 检查主包块是否因删除子包而变空，若空则删除主包块
+        // 重新扫描主包
+        let t_main = target_scan(lines, main_pkg);
+        if let (Some(open), Some(close)) = (t_main.block_open, t_main.block_close) {
+            let mut inner_non_empty = false;
+            for i in open + 1..close {
+                let trimmed = lines[i].trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with(':') {
+                    inner_non_empty = true;
+                    break;
+                }
+            }
+            if !inner_non_empty {
+                // 主包块为空，删除整个主包块
+                lines.drain(open..=close);
+            }
+        }
+        RuleEdit::Ok
+    } else {
+        // 删除子包内的线程
+        // 定位子包块
+        let mut sub_block_start = None;
+        let mut sub_block_end = None;
+        for i in 0..lines.len() {
+            let trimmed = lines[i].trim();
+            if trimmed.starts_with(&sub_prefix)
+                && (trimmed.ends_with('{') || trimmed.trim_end().ends_with('{'))
+            {
+                sub_block_start = Some(i);
+                let mut depth = 1;
+                for j in i + 1..lines.len() {
+                    let t = lines[j].trim();
+                    if t.ends_with('{') && !t.ends_with("{{") {
+                        depth += 1;
+                    } else if t == "}" || t.ends_with('}') && !t.starts_with('{') {
+                        depth -= 1;
+                        if depth == 0 {
+                            sub_block_end = Some(j);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        if let (Some(start), Some(end)) = (sub_block_start, sub_block_end) {
+            let mut removed = false;
+            for i in (start + 1..end).rev() {
+                let trimmed = lines[i].trim();
+                if trimmed.starts_with(&format!("{}=", thread))
+                    || trimmed.starts_with(&format!("{} =", thread))
+                {
+                    // 精确匹配线程名
+                    if let Some(eq_pos) = trimmed.find('=') {
+                        let name_part = trimmed[..eq_pos].trim();
+                        if name_part == thread {
+                            lines.remove(i);
+                            removed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !removed {
+                return RuleEdit::NotFound;
+            }
+            // 检查子包块内是否还有有效内容（线程或子包）
+            let mut inner_non_empty = false;
+            for i in start + 1..end {
+                let trimmed = lines[i].trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with(':') {
+                    inner_non_empty = true;
+                    break;
+                }
+            }
+            if !inner_non_empty {
+                // 子包块为空，删除整个子包块
+                lines.drain(start..=end);
+            }
+            // 检查主包块是否为空（只包含子包已删除，可能变空）
+            let t_main = target_scan(lines, main_pkg);
+            if let (Some(open), Some(close)) = (t_main.block_open, t_main.block_close) {
+                let mut main_inner_non_empty = false;
+                for i in open + 1..close {
+                    let trimmed = lines[i].trim();
+                    if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with(':')
+                    {
+                        main_inner_non_empty = true;
+                        break;
+                    }
+                }
+                if !main_inner_non_empty {
+                    lines.drain(open..=close);
+                }
+            }
+            RuleEdit::Ok
+        } else {
+            RuleEdit::NotFound
+        }
+    }
+}
+
 pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
@@ -1177,27 +1350,25 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
-    // ---- 子包处理（委托给 write_sub_pkg_block，但不规范化） ----
+    // ---- 子包处理 ----
     let parts: Vec<&str> = pkg.split(':').collect();
     if parts.len() == 2 {
         let main_pkg = parts[0];
         let sub = parts[1];
-        // 使用 write_sub_pkg_block 的删除模式（thread 非空时删除该线程，thread 为空时删除包级规则）
-        // 但 write_sub_pkg_block 可能仍调用 normalize，为确保安全，我们单独处理子包删除
-        // 为简化，此处直接调用原有逻辑（但未改，可能仍有风险）
-        // 但因主包删除已修复，子包后续可优化。
-        let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", false);
-        return match result {
-            RuleEdit::Ok => file_write(path, &lines),
-            _ => result,
-        };
+        // 使用改进后的子包删除函数（见后文）
+        let result = delete_sub_pkg_advanced(&mut lines, main_pkg, sub, thread);
+        if let RuleEdit::Ok = result {
+            clean_empty_lines(&mut lines);
+            return file_write(path, &lines);
+        }
+        return result;
     }
 
     // ---- 主包删除 ----
     if thread.is_empty() {
-        // 删除包级规则行
-        let pkg_prefix = format!("{}", pkg);
+        // 删除整个包（包括块）
         let mut found = false;
+        let pkg_prefix = format!("{}", pkg);
         for i in (0..lines.len()).rev() {
             let trimmed = lines[i].trim();
             if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
@@ -1210,9 +1381,8 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
                     || after_pkg.starts_with('{')
                     || after_pkg.starts_with(' ')
                 {
-                    // 如果是块开始行（含 '{'），还需删除整个块
-                    if trimmed.ends_with('{') {
-                        // 找到匹配的 '}'
+                    // 如果是块开始行（含 '{'），删除整个块
+                    if trimmed.ends_with('{') || after_pkg.trim_start().starts_with('{') {
                         let mut depth = 1;
                         let mut end = i;
                         for j in i + 1..lines.len() {
@@ -1227,7 +1397,6 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
                                 }
                             }
                         }
-                        // 删除从 i 到 end 的所有行
                         lines.drain(i..=end);
                     } else {
                         lines.remove(i);
@@ -1247,11 +1416,29 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
             for loc in locs.iter().rev() {
                 line_remove(&mut lines, pkg, loc);
             }
+            // 检查块是否为空（仅剩 "{" 和 "}"）
+            // 重新扫描该包块
+            let new_t = target_scan(&lines, pkg);
+            if let (Some(open), Some(close)) = (new_t.block_open, new_t.block_close) {
+                let mut inner_non_empty = false;
+                for i in open + 1..close {
+                    let trimmed = lines[i].trim();
+                    if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                        inner_non_empty = true;
+                        break;
+                    }
+                }
+                if !inner_non_empty {
+                    // 删除整个块
+                    lines.drain(open..=close);
+                }
+            }
         } else {
             return RuleEdit::NotFound;
         }
     }
 
+    clean_empty_lines(&mut lines);
     file_write(path, &lines)
 }
 
@@ -1268,16 +1455,16 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
     if parts.len() == 2 {
         let main_pkg = parts[0];
         let sub = parts[1];
-        // 使用 write_sub_pkg_block 的 delete_all 模式
-        let result = write_sub_pkg_block(&mut lines, main_pkg, sub, "", "", true);
+        // 使用子包高级删除（删除整个子包）
+        let result = delete_sub_pkg_advanced(&mut lines, main_pkg, sub, "");
         if let RuleEdit::Ok = result {
+            clean_empty_lines(&mut lines);
             return file_write(path, &lines);
         }
-        // 若失败，回退到直接删除（但 write_sub_pkg_block 已处理）
-        // 这里保留原逻辑，但可加一个直接扫描删除
+        return result;
     }
 
-    // ---- 主包删除全部规则 ----
+    // ---- 主包删除全部 ----
     let mut start_line = None;
     let mut end_line = None;
     let pkg_prefix = format!("{}", pkg);
@@ -1295,8 +1482,7 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
                 || after_pkg.starts_with(' ')
             {
                 start_line = Some(i);
-                if trimmed.ends_with('{') {
-                    // 找到对应的 '}'
+                if trimmed.ends_with('{') || after_pkg.trim_start().starts_with('{') {
                     let mut depth = 1;
                     for j in i + 1..lines.len() {
                         let t = lines[j].trim();
@@ -1311,7 +1497,7 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
                         }
                     }
                     if end_line.is_none() {
-                        end_line = Some(i); // 未闭合，只删本行
+                        end_line = Some(i);
                     }
                 } else {
                     end_line = Some(i);
@@ -1327,6 +1513,7 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
         return RuleEdit::NotFound;
     }
 
+    clean_empty_lines(&mut lines);
     file_write(path, &lines)
 }
 
