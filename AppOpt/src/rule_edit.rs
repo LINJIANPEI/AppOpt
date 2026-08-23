@@ -18,6 +18,13 @@ pub enum RuleEdit {
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+#[derive(Default, Clone)]
+struct PackageData {
+    cpus: Vec<String>,
+    threads: HashMap<String, String>, // thread_name -> cpus (merged string)
+    sub_pkgs: HashMap<String, PackageData>,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum PkgLine {
     Standalone(usize),
@@ -1092,6 +1099,220 @@ fn write_sub_pkg_block(
         }
     }
 }
+/// 收集指定包（可能是主包或子包）的所有相关行及解析数据
+fn collect_package(lines: &[String], pkg: &str) -> (PackageData, Vec<usize>) {
+    let mut data = PackageData::default();
+    let mut indices = Vec::new();
+
+    // 判断是否为子包（包含 ':'）
+    let is_sub = pkg.contains(':');
+    let prefix = if is_sub {
+        let sub_name = pkg.split(':').last().unwrap();
+        format!(":{}", sub_name)
+    } else {
+        pkg.to_string()
+    };
+
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            i += 1;
+            continue;
+        }
+
+        // 匹配包级行（以 prefix 开头，且后面是 =、{、空格或结束）
+        if trimmed.starts_with(&prefix) {
+            let after = &trimmed[prefix.len()..];
+            if after.is_empty()
+                || after.starts_with('=')
+                || after.starts_with('{')
+                || after.starts_with(' ')
+            {
+                let start = i;
+                let mut end = i;
+                // 如果是块开始，找到匹配的 '}'
+                if trimmed.ends_with('{') || after.trim_start().starts_with('{') {
+                    let mut depth = 1;
+                    for j in i + 1..lines.len() {
+                        let t = lines[j].trim();
+                        if t.ends_with('{') && !t.ends_with("{{") {
+                            depth += 1;
+                        } else if t == "}" || t.ends_with('}') && !t.starts_with('{') {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = j;
+                                break;
+                            }
+                        }
+                    }
+                }
+                // 收集这些行
+                let collected: Vec<usize> = (start..=end).collect();
+                indices.extend(collected.clone());
+
+                // 解析这些行内容
+                for idx in start..=end {
+                    let line = &lines[idx];
+                    let ln = line.trim();
+                    if ln.starts_with(&prefix) {
+                        // 包级行
+                        if let Some(eq_pos) = ln.rfind('=') {
+                            let cpus_str = ln[eq_pos + 1..].trim();
+                            for part in cpus_str.split(',') {
+                                let p = part.trim();
+                                if !p.is_empty() {
+                                    data.cpus.push(p.to_string());
+                                }
+                            }
+                        }
+                    } else {
+                        // 可能是线程或子包
+                        let inner = ln.trim_start();
+                        if inner.starts_with(':') {
+                            // 子包行：提取子包名，但不立即处理（由后续递归处理）
+                            // 我们这里仅记录子包存在，后续通过递归收集
+                            // 但为了不重复，我们跳过，在循环外递归
+                        } else if !inner.is_empty()
+                            && !inner.starts_with('{')
+                            && !inner.starts_with('}')
+                        {
+                            // 线程行
+                            if let Some(eq_pos) = inner.rfind('=') {
+                                let thread_name = inner[..eq_pos].trim();
+                                let cpus = inner[eq_pos + 1..].trim();
+                                if !thread_name.is_empty()
+                                    && !cpus.is_empty()
+                                    && !thread_name.starts_with(':')
+                                {
+                                    data.threads
+                                        .entry(thread_name.to_string())
+                                        .and_modify(|e| {
+                                            // 合并 CPU（简单追加，后续统一去重）
+                                            if !e.split(',').any(|x| x.trim() == cpus) {
+                                                e.push_str(",");
+                                                e.push_str(cpus);
+                                            }
+                                        })
+                                        .or_insert(cpus.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // 递归收集子包
+    // 我们需要在已经收集的 indices 中找子包行，但为了简洁，我们重新扫描 lines，但只针对子包行
+    // 更高效：在解析过程中记录子包名，但为简化，我们再次扫描所有行（但只在 indices 范围内）
+    let mut sub_pkgs_to_collect = Vec::new();
+    for &idx in &indices {
+        let line = &lines[idx];
+        let trimmed = line.trim();
+        if trimmed.starts_with(':') && !trimmed.starts_with("::") {
+            // 提取子包名
+            let sub_name = if let Some(eq_pos) = trimmed.find('=') {
+                trimmed[1..eq_pos].trim()
+            } else if let Some(brace_pos) = trimmed.find('{') {
+                trimmed[1..brace_pos].trim()
+            } else {
+                continue;
+            };
+            if !sub_name.is_empty() {
+                sub_pkgs_to_collect.push(sub_name.to_string());
+            }
+        }
+    }
+    // 去重子包名
+    sub_pkgs_to_collect.sort();
+    sub_pkgs_to_collect.dedup();
+
+    for sub_name in sub_pkgs_to_collect {
+        let sub_full_pkg = if is_sub {
+            format!("{}:{}", pkg, sub_name)
+        } else {
+            format!("{}:{}", pkg, sub_name)
+        };
+        let (sub_data, sub_indices) = collect_package(lines, &sub_full_pkg);
+        data.sub_pkgs.insert(sub_name, sub_data);
+        // 合并子包的索引到主索引
+        for idx in sub_indices {
+            if !indices.contains(&idx) {
+                indices.push(idx);
+            }
+        }
+    }
+
+    // 排序去重索引
+    indices.sort();
+    indices.dedup();
+
+    (data, indices)
+}
+
+/// 生成子包的规范化块字符串（返回多行）
+fn format_sub_package(sub_name: &str, data: &PackageData) -> Vec<String> {
+    let mut lines = Vec::new();
+    let cpus = data.cpus.join(",");
+    let has_threads = !data.threads.is_empty();
+    let has_subs = !data.sub_pkgs.is_empty();
+
+    if cpus.is_empty() && !has_threads && !has_subs {
+        return lines;
+    }
+
+    let first_line = if cpus.is_empty() {
+        format!("    :{} {{", sub_name)
+    } else {
+        format!("    :{}={} {{", sub_name, cpus)
+    };
+    lines.push(first_line);
+
+    // 线程
+    let mut thread_vec: Vec<(String, String)> = data
+        .threads
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    thread_vec.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, cpus) in thread_vec {
+        // 合并去重 CPU
+        let parts: Vec<&str> = cpus
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut unique = parts;
+        unique.sort();
+        unique.dedup();
+        let merged = unique.join(",");
+        lines.push(format!("        {}={}", name, merged));
+    }
+
+    // 子包（递归）
+    let mut sub_vec: Vec<(String, PackageData)> = data
+        .sub_pkgs
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    sub_vec.sort_by(|a, b| a.0.cmp(&b.0));
+    for (sub, sub_data) in sub_vec {
+        let sub_lines = format_sub_package(&sub, &sub_data);
+        // 缩进调整：每行增加两个空格
+        for line in sub_lines {
+            lines.push(format!("    {}", line));
+        }
+    }
+
+    lines.push("    }".to_string());
+    lines
+}
 
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let result = std::panic::catch_unwind(|| {
@@ -1102,83 +1323,117 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             .map(String::from)
             .collect();
 
-        // ---- 子包处理 ----
-        let parts: Vec<&str> = pkg.split(':').collect();
-        if parts.len() == 2 {
-            let main_pkg = parts[0];
-            let sub = parts[1];
-            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
-            return match result {
-                RuleEdit::Ok => file_write(path, &lines),
-                _ => result,
-            };
+        // ---- 使用目标包名（可能含 ':'）作为根，进行合并去重 ----
+        let target_pkg = pkg.to_string();
+
+        // 1. 收集目标包的所有相关行及解析数据
+        let (mut data, indices) = collect_package(&lines, &target_pkg);
+        // 如果没有任何相关行且没有提供新规则（thread 和 cpus 都为空），则视为 NotFound
+        if indices.is_empty() && thread.is_empty() && cpus.is_empty() {
+            return RuleEdit::NotFound;
         }
 
-        // ---- 包级规则（直接查找替换） ----
-        if thread.is_empty() {
-            let mut found = false;
-            let pkg_prefix = format!("{}", pkg);
-            for i in 0..lines.len() {
-                let trimmed = lines[i].trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
-                    continue;
-                }
-                if trimmed.starts_with(&pkg_prefix) {
-                    let after_pkg = &trimmed[pkg_prefix.len()..];
-                    if after_pkg.is_empty()
-                        || after_pkg.starts_with('=')
-                        || after_pkg.starts_with('{')
-                        || after_pkg.starts_with(' ')
-                    {
-                        if trimmed.contains('=') {
-                            lines[i] = spec_swap(&lines[i], cpus);
-                        } else if trimmed.ends_with('{') {
-                            lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
-                        } else {
-                            lines[i] = with_comment(&format!("{}={}", pkg, cpus), &lines[i]);
-                        }
-                        found = true;
-                        break;
+        // 2. 将新规则合并到 data 中
+        if !cpus.is_empty() {
+            // 如果是包级规则更新（thread 为空），则合并到包级 cpus
+            if thread.is_empty() {
+                for part in cpus.split(',') {
+                    let p = part.trim();
+                    if !p.is_empty() && !data.cpus.contains(&p.to_string()) {
+                        data.cpus.push(p.to_string());
                     }
                 }
+            } else {
+                // 线程规则：合并到对应线程
+                data.threads
+                    .entry(thread.to_string())
+                    .and_modify(|e| {
+                        // 合并 CPU
+                        for part in cpus.split(',') {
+                            let p = part.trim();
+                            if !p.is_empty() && !e.split(',').any(|x| x.trim() == p) {
+                                e.push_str(",");
+                                e.push_str(p);
+                            }
+                        }
+                    })
+                    .or_insert(cpus.to_string());
             }
-            if !found {
-                lines.push(format!("{}={}", pkg, cpus));
+        }
+
+        // 3. 合并去重包级 CPU
+        data.cpus.sort();
+        data.cpus.dedup();
+        let merged_cpus = data.cpus.join(",");
+
+        // 4. 合并线程 CPU（已经由 data.threads 维护了去重，但进一步规范化排序）
+        let mut merged_threads: Vec<(String, String)> = Vec::new();
+        for (name, cpus_str) in data.threads {
+            let parts: Vec<&str> = cpus_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let mut unique = parts;
+            unique.sort();
+            unique.dedup();
+            let merged = unique.join(",");
+            merged_threads.push((name, merged));
+        }
+        merged_threads.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // 5. 子包递归处理（已经在 collect_package 中收集了 data.sub_pkgs，但需要确保每个子包也合并）
+        // collect_package 已经递归收集了子包数据，但未合并去重，我们在这里再递归调用一次 normalize 逻辑
+        // 但更简单：在 collect_package 中已经返回了合并后的子包数据，我们直接使用即可
+        // 生成子包的规范化块字符串
+        let mut sub_block_lines = Vec::new();
+        for (sub_name, sub_data) in &data.sub_pkgs {
+            let sub_block = format_sub_package(sub_name, sub_data);
+            sub_block_lines.extend(sub_block);
+        }
+
+        // 6. 删除所有收集的行
+        for idx in indices.iter().rev() {
+            lines.remove(*idx);
+        }
+
+        // 7. 构建新块
+        let mut new_block = Vec::new();
+        let has_threads = !merged_threads.is_empty();
+        let has_subs = !sub_block_lines.is_empty();
+
+        if has_threads || has_subs {
+            let first_line = if merged_cpus.is_empty() {
+                format!("{} {{", target_pkg)
+            } else {
+                format!("{}={} {{", target_pkg, merged_cpus)
+            };
+            new_block.push(first_line);
+            for (name, cpus) in merged_threads {
+                new_block.push(format!("    {}={}", name, cpus));
             }
-            return file_write(path, &lines);
-        }
-
-        // ---- 线程规则（仅使用 target_scan 定位，不规范化） ----
-        let t = target_scan(&lines, pkg);
-
-        let existing_locs = t.threads.get(thread).cloned().unwrap_or_default();
-        if !existing_locs.is_empty() {
-            let last = existing_locs.last().copied().unwrap();
-            lines[last.idx] = spec_swap(&lines[last.idx], cpus);
-            for loc in existing_locs[..existing_locs.len() - 1].iter().rev() {
-                line_remove(&mut lines, pkg, loc);
+            new_block.extend(sub_block_lines);
+            new_block.push("}".to_string());
+        } else {
+            // 只有包级规则，无线程无子包
+            if merged_cpus.is_empty() {
+                // 没有任何有效内容，不写入
+                return RuleEdit::Ok;
             }
-            return file_write(path, &lines);
+            new_block.push(format!("{}={}", target_pkg, merged_cpus));
         }
 
-        // 插入新线程
-        if let (Some(open), Some(close)) = (t.block_open, t.block_close) {
-            lines.insert(close, format!("\t{}={}", thread, cpus));
-            return file_write(path, &lines);
+        // 8. 插入到合适位置（第一个非注释行之后）
+        let mut insert_pos = 0;
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+                insert_pos = i + 1;
+                break;
+            }
         }
+        lines.splice(insert_pos..insert_pos, new_block);
 
-        if let Some(PkgLine::Standalone(i)) = t.pkg_line {
-            lines[i] = format!("{} {{", lines[i].trim_end());
-            lines.splice(
-                i + 1..i + 1,
-                [format!("\t{}={}", thread, cpus), "}".to_string()],
-            );
-            return file_write(path, &lines);
-        }
-
-        lines.push(bare_open_line(pkg));
-        lines.push(format!("\t{}={}", thread, cpus));
-        lines.push("}".to_string());
         file_write(path, &lines)
     });
 
