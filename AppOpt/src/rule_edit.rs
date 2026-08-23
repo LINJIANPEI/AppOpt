@@ -1341,7 +1341,7 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
             .map(String::from)
             .collect();
 
-        // 子包处理（编辑子包时，仍使用原 write_sub_pkg_block）
+        // 子包处理（保持原有逻辑）
         if pkg.contains(':') {
             let parts: Vec<&str> = pkg.split(':').collect();
             if parts.len() == 2 {
@@ -1357,7 +1357,7 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
             return RuleEdit::Ok;
         }
 
-        // --- 主包处理：使用 collect_package 递归收集 ---
+        // --- 主包处理 ---
         let (mut data, indices) = collect_package(&lines, pkg);
         if indices.is_empty() && thread.is_empty() && cpus.is_empty() {
             return RuleEdit::NotFound;
@@ -1376,7 +1376,16 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
         // 合并去重
         let merged = merge_data(data);
 
-        // 删除所有旧定义（collect_package 已返回所有相关行索引）
+        // ★★★ 修复点：记录原包起始位置（删除前） ★★★
+        let insert_pos = if indices.is_empty() {
+            // 新包 → 追加到文件末尾
+            lines.len()
+        } else {
+            // 已存在包 → 使用最小索引（原包起始位置）
+            *indices.iter().min().unwrap()
+        };
+
+        // 删除所有旧定义（从大到小删除，保持索引有效）
         let mut remove_indices = indices.clone();
         remove_indices.sort();
         remove_indices.dedup();
@@ -1387,9 +1396,9 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
         // 构建新块
         let new_block = build_block(pkg, &merged);
 
-        // 插入到合适位置
-        let insert_pos = find_insert_pos(&lines);
+        // 插入到正确位置
         lines.splice(insert_pos..insert_pos, new_block);
+
         clean_empty_lines(&mut lines);
         file_write(config_path, &lines)
     });
@@ -1402,6 +1411,7 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
         }
     }
 }
+
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
