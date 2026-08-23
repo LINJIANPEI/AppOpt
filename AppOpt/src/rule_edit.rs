@@ -1503,7 +1503,7 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
-    // ---- 子包处理（委托给 write_sub_pkg_block） ----
+    // ---- 子包处理 ----
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
@@ -1534,7 +1534,9 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
         if trimmed.contains('=') {
             if let Some(eq_pos) = trimmed.rfind('=') {
                 let pkg_part = trimmed[..eq_pos].trim();
-                let has_brace = trimmed.contains('{') && trimmed.rfind('{') > eq_pos;
+                // ★ 修复：正确处理 Option<usize>
+                let has_brace =
+                    trimmed.contains('{') && trimmed.rfind('{').is_some_and(|pos| pos > eq_pos);
                 let comment = match comment_at(line) {
                     Some(pos) => &line[pos..],
                     None => "",
