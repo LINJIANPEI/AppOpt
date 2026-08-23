@@ -1055,7 +1055,6 @@ fn write_sub_pkg_block(
                     ));
                 }
             }
-
             RuleEdit::Ok
         }
     }
