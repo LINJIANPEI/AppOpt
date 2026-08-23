@@ -1320,15 +1320,22 @@ ${chipHtml(it.spec)}
                 if (type === 'main') {
                     const gi = +parts[1];
                     const thread = parts[2] || '';
-                    openRuleModal('edit-thread', gi, '', thread);
+                    if (thread === '') {
+                        // 主包包级规则
+                        openRuleModal('edit-pkg', gi);
+                    } else {
+                        // 主包线程规则
+                        openRuleModal('edit-thread', gi, '', thread);
+                    }
                 } else if (type === 'sub') {
                     const gi = +parts[1];
                     const sub = parts[2];
                     const thread = parts[3] || '';
                     if (thread === '') {
-                        // 包级规则（thread 为空）
+                        // 子包包级规则
                         openRuleModal('edit-sub', gi, sub);
                     } else {
+                        // 子包线程规则
                         openRuleModal('edit-sub-thread', gi, sub, thread);
                     }
                 }
@@ -1426,17 +1433,14 @@ ${chipHtml(it.spec)}
 
         function renderRows() {
             const box = $('mr-rows'), tree = isTree();
-            console.log('renderRows, mrRows=', mrRows);
             box.innerHTML = mrRows.map((r, i) => {
                 if (r.pkgRow === true) {
-                    // 包级行：无线程输入框
                     return `<div class="tree-row" data-ri="${i}">
                 <div class="tr-head"><span class="tr-tag">包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
                 <div class="core-chips">${CHIP_HTML}</div>
                 <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
             </div>`;
                 } else {
-                    // 线程行：显示输入框
                     return `<div class="tree-row branch" data-ri="${i}">
                 <div class="tr-head sg-wrap">
                     <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
@@ -1507,6 +1511,7 @@ ${chipHtml(it.spec)}
                 pkgInput.readOnly = false;
                 mrRows = [mkRow({ pkgRow: true })];
             } else if (mode === 'edit-app') {
+                // 编辑整个应用（包含包级和所有线程）
                 $('mr-title').textContent = '编辑应用';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
@@ -1522,6 +1527,7 @@ ${chipHtml(it.spec)}
                     }
                 }
             } else if (mode === 'edit-pkg') {
+                // 主包包级规则编辑
                 $('mr-title').textContent = '包级默认规则';
                 pkgInput.value = rulesData[gi].pkg;
                 pkgInput.readOnly = true;

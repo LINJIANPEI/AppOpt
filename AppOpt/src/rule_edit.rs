@@ -407,6 +407,7 @@ fn file_write(path: &str, lines: &[String]) -> RuleEdit {
             f.sync_all()
         })
         .and_then(|_| fs::rename(&tmp, path));
+
     if res.is_ok() {
         RuleEdit::Ok
     } else {
