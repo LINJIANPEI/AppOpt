@@ -1503,7 +1503,7 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
-    // ---- 子包处理 ----
+    // ---- 子包处理（委托给 write_sub_pkg_block） ----
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
@@ -1521,37 +1521,74 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
     }
 
     // ---- 主包处理 ----
-    let (mut data, indices) = collect_package(&lines, pkg);
-    if indices.is_empty() {
+    let ranges = find_package_ranges(&lines, pkg);
+    if ranges.is_empty() {
         return RuleEdit::NotFound;
     }
 
     if thread.is_empty() {
-        // 删除包级规则（清空 CPU）
-        data.cpus.clear();
+        // 删除包级规则：修改第一行，去掉 =CPU 部分
+        let start = ranges[0].0;
+        let line = &lines[start];
+        let trimmed = line.trim();
+        if trimmed.contains('=') {
+            if let Some(eq_pos) = trimmed.rfind('=') {
+                let pkg_part = trimmed[..eq_pos].trim();
+                let has_brace = trimmed.contains('{') && trimmed.rfind('{') > eq_pos;
+                let comment = match comment_at(line) {
+                    Some(pos) => &line[pos..],
+                    None => "",
+                };
+                let new_line = if has_brace {
+                    format!("{} {{", pkg_part)
+                } else {
+                    pkg_part.to_string()
+                };
+                let indent = line
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect::<String>();
+                lines[start] = format!("{}{}{}", indent, new_line, comment);
+            }
+        } else {
+            // 没有包级规则，无需操作
+            return RuleEdit::Ok;
+        }
+        clean_empty_blocks(&mut lines, pkg);
+        clean_empty_lines(&mut lines);
+        return file_write(config_path, &lines);
     } else {
-        // 删除线程
-        if !data.threads.contains_key(thread) {
+        // 删除指定线程（在块内查找，包括子包内的线程）
+        let mut found = false;
+        for (start, end) in &ranges {
+            for idx in (*start + 1)..*end {
+                let trimmed = lines[idx].trim();
+                let inner = trimmed.trim_start();
+                if inner.starts_with(&format!("{}=", thread))
+                    || inner.starts_with(&format!("{} =", thread))
+                {
+                    if let Some(eq_pos) = inner.find('=') {
+                        let name_part = inner[..eq_pos].trim();
+                        if name_part == thread {
+                            lines.remove(idx);
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        if !found {
             return RuleEdit::NotFound;
         }
-        data.threads.remove(thread);
+        clean_empty_blocks(&mut lines, pkg);
+        clean_empty_lines(&mut lines);
+        return file_write(config_path, &lines);
     }
-
-    let new_block = build_block(pkg, &data);
-    let insert_pos = *indices.iter().min().unwrap();
-    let mut remove_indices = indices;
-    remove_indices.sort();
-    remove_indices.dedup();
-    for idx in remove_indices.into_iter().rev() {
-        lines.remove(idx);
-    }
-    lines.splice(insert_pos..insert_pos, new_block);
-
-    clean_empty_blocks(&mut lines, pkg);
-    clean_empty_lines(&mut lines);
-    file_write(config_path, &lines)
 }
-
 pub fn rule_delete_pkg(config_path: &str, pkg: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(config_path)
