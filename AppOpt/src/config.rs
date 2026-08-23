@@ -127,13 +127,11 @@ pub enum OuterLine<'a> {
         open: bool,
     },
     Junk,
-    // 新增：子包单行规则
     SubPkgRule {
         sub: &'a str,
         cpus: &'a str,
         open: bool,
     },
-    // 新增：子包块开始
     SubPkgBlock {
         sub: &'a str,
     },
@@ -141,15 +139,14 @@ pub enum OuterLine<'a> {
 
 pub fn parse_outer(p: &str) -> OuterLine<'_> {
     let p = strip_comment(p);
-    let trimmed = p.trim();
+    let trimmed = p.trim(); // ★ 关键：去除首尾空格
 
-    // ---- 优先识别子包语法 ----
+    // ---- 子包语法 ----
     if let Some(rest) = trimmed.strip_prefix(':') {
         if let Some(eq_pos) = rest.rfind('=') {
             let sub = rest[..eq_pos].trim();
             let cpus = rest[eq_pos + 1..].trim();
             if !sub.is_empty() && !cpus.is_empty() {
-                // 判断后面是否有 '{'（如 :MSF=e-core {）
                 let open = rest.ends_with('{') || rest.ends_with(" {");
                 return OuterLine::SubPkgRule { sub, cpus, open };
             }
@@ -164,9 +161,9 @@ pub fn parse_outer(p: &str) -> OuterLine<'_> {
     }
 
     // ---- 原有逻辑 ----
-    let (open, body) = match p.strip_suffix('{') {
+    let (open, body) = match trimmed.strip_suffix('{') {
         Some(b) => (true, b.trim_end()),
-        None => (false, p),
+        None => (false, trimmed),
     };
 
     if let Some((pkg, thread, cpus)) = split_single_line(body) {
@@ -203,7 +200,6 @@ pub fn parse_outer(p: &str) -> OuterLine<'_> {
         }
     }
 }
-
 fn add_rule(
     rules: &mut Vec<AffinityRule>,
     topo: &CpuTopology,
@@ -678,4 +674,3 @@ fn inotify_rewatch(inotify_fd: i32) -> bool {
     INOTIFY_WD.store(new_wd, Ordering::Release);
     true
 }
-
