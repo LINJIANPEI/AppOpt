@@ -302,7 +302,6 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
             items.push((*loc, line));
         }
     }
-    // 如果没有需要移动的线程行，直接返回，不做任何修改
     if items.is_empty() {
         return;
     }
@@ -344,7 +343,6 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
 
 fn normalize_sub_pkgs(lines: &mut Vec<String>, pkg: &str) {
     let t = target_scan(lines, pkg);
-    // 收集所有子包名，过滤空键，避免 format!("{}:{}", pkg, "") 导致错误
     let sub_keys: Vec<String> = t
         .sub_pkgs
         .iter()
@@ -1074,80 +1072,92 @@ fn write_sub_pkg_block(
 }
 
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
-    let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
-    let mut lines: Vec<String> = fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(String::from)
-        .collect();
+    let result = std::panic::catch_unwind(|| {
+        let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
+        let mut lines: Vec<String> = fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect();
 
-    // 处理子包：如果 pkg 包含 ':' 且恰好两部分，则使用子包写入逻辑
-    let parts: Vec<&str> = pkg.split(':').collect();
-    if parts.len() == 2 {
-        let main_pkg = parts[0];
-        let sub = parts[1];
-        let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
-        // 直接返回，不进行常规回退
-        return match result {
-            RuleEdit::Ok => file_write(path, &lines),
-            _ => result,
-        };
-    }
+        // 处理子包：如果 pkg 包含 ':' 且恰好两部分，则使用子包写入逻辑
+        let parts: Vec<&str> = pkg.split(':').collect();
+        if parts.len() == 2 {
+            let main_pkg = parts[0];
+            let sub = parts[1];
+            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
+            return match result {
+                RuleEdit::Ok => file_write(path, &lines),
+                _ => result,
+            };
+        }
 
-    // ---- 常规方式（原有逻辑） ----
-    if !pkg.is_empty() && !pkg.starts_with(':') {
-        normalize_sub_pkgs(&mut lines, pkg);
-    }
-    let t = target_scan(&lines, pkg);
+        // ---- 常规方式（主包编辑，保留规范化） ----
+        // 如果 pkg 有效，调用 normalize_sub_pkgs 对主包及所有子包进行规范化
+        if !pkg.is_empty() && !pkg.starts_with(':') {
+            // 这里即使 panic，外层也会捕获
+            normalize_sub_pkgs(&mut lines, pkg);
+        }
+        let t = target_scan(&lines, pkg);
 
-    if thread.is_empty() {
-        match t.pkg_line {
-            Some(PkgLine::Standalone(i)) => {
-                lines[i] = spec_swap(&lines[i], cpus);
-            }
-            Some(PkgLine::BarePending(i)) => {
-                lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
-                if let Some(open) = t.block_open
-                    && matches!(
-                        parse_outer(lines[open].trim()),
-                        OuterLine::BareOpen { pkg: "" }
-                    )
-                {
-                    lines.remove(open);
+        // 执行增删改操作（与原逻辑一致）
+        if thread.is_empty() {
+            match t.pkg_line {
+                Some(PkgLine::Standalone(i)) => {
+                    lines[i] = spec_swap(&lines[i], cpus);
                 }
+                Some(PkgLine::BarePending(i)) => {
+                    lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
+                    if let Some(open) = t.block_open
+                        && matches!(
+                            parse_outer(lines[open].trim()),
+                            OuterLine::BareOpen { pkg: "" }
+                        )
+                    {
+                        lines.remove(open);
+                    }
+                }
+                Some(PkgLine::OpenInline(i)) => {
+                    lines[i] = spec_swap(&lines[i], cpus);
+                }
+                Some(PkgLine::BareOpen(i)) => {
+                    lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
+                }
+                None if t.unterminated => return RuleEdit::Malformed,
+                None => lines.push(format!("{}={}", pkg, cpus)),
             }
-            Some(PkgLine::OpenInline(i)) => {
-                lines[i] = spec_swap(&lines[i], cpus);
+        } else if let Some(locs) = t.threads.get(thread) {
+            let last = locs.last().copied().unwrap();
+            lines[last.idx] = spec_swap(&lines[last.idx], cpus);
+            for loc in locs[..locs.len() - 1].iter().rev() {
+                line_remove(&mut lines, pkg, loc);
             }
-            Some(PkgLine::BareOpen(i)) => {
-                lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
-            }
-            None if t.unterminated => return RuleEdit::Malformed,
-            None => lines.push(format!("{}={}", pkg, cpus)),
+        } else if let Some(close) = t.block_close {
+            lines.insert(close, format!("\t{}={}", thread, cpus));
+        } else if let Some(PkgLine::Standalone(i)) = t.pkg_line {
+            lines[i] = format!("{} {{", lines[i].trim_end());
+            lines.splice(
+                i + 1..i + 1,
+                [format!("\t{}={}", thread, cpus), "}".to_string()],
+            );
+        } else if t.unterminated {
+            return RuleEdit::Malformed;
+        } else {
+            lines.push(bare_open_line(pkg));
+            lines.push(format!("\t{}={}", thread, cpus));
+            lines.push("}".to_string());
         }
-    } else if let Some(locs) = t.threads.get(thread) {
-        let last = locs.last().copied().unwrap();
-        lines[last.idx] = spec_swap(&lines[last.idx], cpus);
-        for loc in locs[..locs.len() - 1].iter().rev() {
-            line_remove(&mut lines, pkg, loc);
-        }
-    } else if let Some(close) = t.block_close {
-        lines.insert(close, format!("\t{}={}", thread, cpus));
-    } else if let Some(PkgLine::Standalone(i)) = t.pkg_line {
-        lines[i] = format!("{} {{", lines[i].trim_end());
-        lines.splice(
-            i + 1..i + 1,
-            [format!("\t{}={}", thread, cpus), "}".to_string()],
-        );
-    } else if t.unterminated {
-        return RuleEdit::Malformed;
-    } else {
-        lines.push(bare_open_line(pkg));
-        lines.push(format!("\t{}={}", thread, cpus));
-        lines.push("}".to_string());
-    }
 
-    file_write(path, &lines)
+        file_write(path, &lines)
+    });
+
+    match result {
+        Ok(edit) => edit,
+        Err(e) => {
+            eprintln!("!!! rule_upsert panic: {:?}", e);
+            RuleEdit::IoErr
+        }
+    }
 }
 
 pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
