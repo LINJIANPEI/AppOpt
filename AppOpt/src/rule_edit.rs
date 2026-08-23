@@ -1323,13 +1323,19 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             .map(String::from)
             .collect();
 
-        // ---- 子包处理（委托给专门函数，但为了安全，我们在此处直接处理） ----
-        // 如果 pkg 包含 ':'，则调用子包处理逻辑，但为了保持一致，我们将逻辑合并
-        // 但为了代码清晰，我们将子包处理也放在这里，但使用相同策略
-        // 这里我们采用统一处理：将 pkg 视为目标包名（可能含 ':'），然后处理
+        // ---- 子包处理（直接委托给原逻辑，不改） ----
+        let parts: Vec<&str> = pkg.split(':').collect();
+        if parts.len() == 2 {
+            let main_pkg = parts[0];
+            let sub = parts[1];
+            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
+            return match result {
+                RuleEdit::Ok => file_write(path, &lines),
+                _ => result,
+            };
+        }
 
-        // ---- 第一步：收集目标包的所有相关行范围 ----
-        // 我们需要找到该包的所有定义（包级行及其块），并获取它们的起止索引
+        // ---- 主包处理 ----
         let pkg_prefix = format!("{}", pkg);
         let mut ranges = Vec::new(); // (start, end) 包含包级行和整个块
         let mut i = 0;
@@ -1339,7 +1345,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
                 i += 1;
                 continue;
             }
-            // 检查是否为包级行（以包名开头，后面跟着 '='、'{' 或空格）
             if trimmed.starts_with(&pkg_prefix) {
                 let after = &trimmed[pkg_prefix.len()..];
                 if after.is_empty()
@@ -1349,7 +1354,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
                 {
                     let start = i;
                     let mut end = i;
-                    // 如果是块开始（含 '{'），需要寻找对应的 '}'
                     if trimmed.ends_with('{') || after.trim_start().starts_with('{') {
                         let mut depth = 1;
                         let mut j = i + 1;
@@ -1366,8 +1370,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
                             }
                             j += 1;
                         }
-                        // 如果未找到闭合，则仅包级行自己（块不完整，但无法处理）
-                        // 仍将 start..end 作为范围，但可能缺少闭合，不过我们会尽力。
                     }
                     ranges.push((start, end));
                     i = end + 1;
@@ -1377,12 +1379,12 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             i += 1;
         }
 
-        // 如果没有找到任何相关行，且 thread 和 cpus 都为空（即没有提供新规则），则返回 NotFound
+        // 若没有找到任何相关行且无新规则，则 NotFound
         if ranges.is_empty() && thread.is_empty() && cpus.is_empty() {
             return RuleEdit::NotFound;
         }
 
-        // ---- 第二步：提取所有相关行的内容，解析出包级 CPU 和线程规则 ----
+        // ---- 提取内容，合并去重 ----
         let mut all_cpus = Vec::new();
         let mut thread_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
@@ -1391,7 +1393,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             for idx in *start..=*end {
                 let line = &lines[idx];
                 let trimmed = line.trim();
-                // 包级行
                 if trimmed.starts_with(&pkg_prefix) {
                     if let Some(eq_pos) = trimmed.rfind('=') {
                         let cpu_part = trimmed[eq_pos + 1..].trim();
@@ -1403,7 +1404,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
                         }
                     }
                 } else {
-                    // 可能是线程或子包，但我们只关注线程（不包含 ':' 前缀）
                     let inner = trimmed.trim_start();
                     if !inner.starts_with(':')
                         && !inner.is_empty()
@@ -1425,13 +1425,11 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             }
         }
 
-        // ---- 第三步：合并去重 ----
-        // 包级 CPU 去重
+        // 合并去重
         all_cpus.sort();
         all_cpus.dedup();
         let merged_cpus = all_cpus.join(",");
 
-        // 线程 CPU 合并去重（对每个线程）
         for (name, cpus_str) in thread_map.iter_mut() {
             let parts: Vec<&str> = cpus_str
                 .split(',')
@@ -1444,29 +1442,11 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             *cpus_str = unique.join(",");
         }
 
-        // ---- 第四步：删除所有相关行（注意：需要从后往前删） ----
-        // 收集所有要删除的索引
-        let mut indices_to_remove = Vec::new();
-        for (start, end) in &ranges {
-            for idx in *start..=*end {
-                indices_to_remove.push(idx);
-            }
-        }
-        indices_to_remove.sort();
-        indices_to_remove.dedup();
-        // 从后往前删除
-        for idx in indices_to_remove.into_iter().rev() {
-            if idx < lines.len() {
-                lines.remove(idx);
-            }
-        }
-
-        // ---- 第五步：构建新块 ----
+        // ---- 构建新块 ----
         let mut new_block = Vec::new();
         let has_threads = !thread_map.is_empty();
         let has_cpus = !merged_cpus.is_empty();
 
-        // 决定第一行
         let first_line = if has_cpus {
             format!("{}={} {{", pkg, merged_cpus)
         } else {
@@ -1475,7 +1455,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
 
         if has_threads || has_cpus {
             new_block.push(first_line);
-            // 排序线程名，使输出稳定
             let mut threads_vec: Vec<(&String, &String)> = thread_map.iter().collect();
             threads_vec.sort_by(|a, b| a.0.cmp(b.0));
             for (name, cpus_val) in threads_vec {
@@ -1483,31 +1462,32 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             }
             new_block.push("}".to_string());
         } else {
-            // 既没有 CPU 也没有线程，则视为空规则，不添加
-            // 但这时不应该发生，因为如果既有包级又有线程，才会进入。
-            // 若只有包级且 CPU 非空，则第一行应为单行
             if has_cpus {
                 new_block.push(format!("{}={}", pkg, merged_cpus));
             } else {
-                // 什么都没有，直接返回 Ok（无变化）
                 return RuleEdit::Ok;
             }
         }
 
-        // ---- 第六步：插入新块到合适位置 ----
-        // 我们希望插入到第一个非注释行之后（或文件末尾）
-        let mut insert_pos = lines.len();
-        for (idx, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
-                insert_pos = idx + 1;
-                break;
+        // ---- 替换原有范围：从最小 start 到最大 end ----
+        if !ranges.is_empty() {
+            let first_start = ranges.iter().map(|(s, _)| *s).min().unwrap();
+            let last_end = ranges.iter().map(|(_, e)| *e).max().unwrap();
+            // 替换该范围为新块
+            lines.splice(first_start..=last_end, new_block);
+        } else {
+            // 没有旧定义，插入到第一个非注释行之后（或文件末尾）
+            let mut insert_pos = lines.len();
+            for (idx, line) in lines.iter().enumerate() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+                    insert_pos = idx + 1;
+                    break;
+                }
             }
+            lines.splice(insert_pos..insert_pos, new_block);
         }
-        // 如果 insert_pos 为 0，说明文件为空或全是注释，则插入到开头
-        lines.splice(insert_pos..insert_pos, new_block);
 
-        // ---- 写回文件 ----
         file_write(path, &lines)
     });
 
