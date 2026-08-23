@@ -374,41 +374,54 @@ fn pkg_shape_ok(pkg: &str) -> bool {
 }
 
 fn rule_api(req: &Request) -> (u16, String) {
-    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
-        return err_json(400, "请求体不是合法 JSON");
-    };
-    let (Some(pkg), Some(cpus)) = (
-        v["pkg"].as_str().map(str::trim),
-        v["cpus"].as_str().map(str::trim),
-    ) else {
-        return err_json(400, "缺少 pkg 或 cpus 字段");
-    };
-    let thread = v["thread"].as_str().map(str::trim).unwrap_or("");
-    let Some(cfg) = current_cfg() else {
-        return err_json(500, "配置未就绪");
-    };
-    if !token_ok(pkg, MAX_PKG_LEN) || (!thread.is_empty() && !token_ok(thread, MAX_THREAD_LEN)) {
-        return err_json(400, "名称含有非法字符");
-    }
-    if thread.is_empty() && !pkg_shape_ok(pkg) {
-        return err_json(400, "包名含 { 且以 } 结尾时不支持包级规则，可改用线程规则");
-    }
-    if cpus.is_empty()
-        || cpus.len() >= 64
-        || !spec_like(cpus)
-        || parse_cpu_spec(cpus, &cfg.topo).count() == 0
-    {
-        return err_json(400, "无效的 CPU 规格");
-    }
-
-    let file = lock_ignore_poison(&CONFIG_FILE).clone();
-    match rule_upsert(&file, pkg, thread, cpus) {
-        RuleEdit::Ok => {
-            config_reload_now();
-            (200, json!({ "ok": true }).to_string())
+    let result = std::panic::catch_unwind(|| {
+        // ----- 原有逻辑开始 -----
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
+            return err_json(400, "请求体不是合法 JSON");
+        };
+        let (Some(pkg), Some(cpus)) = (
+            v["pkg"].as_str().map(str::trim),
+            v["cpus"].as_str().map(str::trim),
+        ) else {
+            return err_json(400, "缺少 pkg 或 cpus 字段");
+        };
+        let thread = v["thread"].as_str().map(str::trim).unwrap_or("");
+        let Some(cfg) = current_cfg() else {
+            return err_json(500, "配置未就绪");
+        };
+        if !token_ok(pkg, MAX_PKG_LEN) || (!thread.is_empty() && !token_ok(thread, MAX_THREAD_LEN))
+        {
+            return err_json(400, "名称含有非法字符");
         }
-        RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
-        _ => err_json(500, "配置文件写入失败"),
+        if thread.is_empty() && !pkg_shape_ok(pkg) {
+            return err_json(400, "包名含 { 且以 } 结尾时不支持包级规则，可改用线程规则");
+        }
+        if cpus.is_empty()
+            || cpus.len() >= 64
+            || !spec_like(cpus)
+            || parse_cpu_spec(cpus, &cfg.topo).count() == 0
+        {
+            return err_json(400, "无效的 CPU 规格");
+        }
+
+        let file = lock_ignore_poison(&CONFIG_FILE).clone();
+        match rule_upsert(&file, pkg, thread, cpus) {
+            RuleEdit::Ok => {
+                config_reload_now();
+                (200, json!({ "ok": true }).to_string())
+            }
+            RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
+            _ => err_json(500, "配置文件写入失败"),
+        }
+        // ----- 原有逻辑结束 -----
+    });
+
+    match result {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("!!! rule_api panic: {:?}", e);
+            err_json(500, "内部错误，请查看日志")
+        }
     }
 }
 
@@ -440,35 +453,47 @@ fn rule_del_api(req: &Request) -> (u16, String) {
 }
 
 fn rule_rename_api(req: &Request) -> (u16, String) {
-    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
-        return err_json(400, "请求体不是合法 JSON");
-    };
-    let (Some(old), Some(new)) = (
-        v["old"].as_str().map(str::trim),
-        v["new"].as_str().map(str::trim),
-    ) else {
-        return err_json(400, "缺少 old 或 new 字段");
-    };
-    if !token_ok(old, MAX_PKG_LEN) || !token_ok(new, MAX_PKG_LEN) {
-        return err_json(400, "名称含有非法字符");
-    }
-    if !pkg_shape_ok(new) {
-        return err_json(400, "包名含 { 且以 } 结尾时不可作为重命名目标");
-    }
-    if old == new {
-        return (200, json!({ "ok": true }).to_string());
-    }
-
-    let file = lock_ignore_poison(&CONFIG_FILE).clone();
-    match rule_rename(&file, old, new) {
-        RuleEdit::Ok => {
-            config_reload_now();
-            (200, json!({ "ok": true }).to_string())
+    let result = std::panic::catch_unwind(|| {
+        // ----- 原有逻辑开始 -----
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
+            return err_json(400, "请求体不是合法 JSON");
+        };
+        let (Some(old), Some(new)) = (
+            v["old"].as_str().map(str::trim),
+            v["new"].as_str().map(str::trim),
+        ) else {
+            return err_json(400, "缺少 old 或 new 字段");
+        };
+        if !token_ok(old, MAX_PKG_LEN) || !token_ok(new, MAX_PKG_LEN) {
+            return err_json(400, "名称含有非法字符");
         }
-        RuleEdit::NotFound => err_json(404, "原包名不存在"),
-        RuleEdit::Conflict => err_json(409, "目标包名已存在规则"),
-        RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
-        RuleEdit::IoErr => err_json(500, "配置文件写入失败"),
+        if !pkg_shape_ok(new) {
+            return err_json(400, "包名含 { 且以 } 结尾时不可作为重命名目标");
+        }
+        if old == new {
+            return (200, json!({ "ok": true }).to_string());
+        }
+
+        let file = lock_ignore_poison(&CONFIG_FILE).clone();
+        match rule_rename(&file, old, new) {
+            RuleEdit::Ok => {
+                config_reload_now();
+                (200, json!({ "ok": true }).to_string())
+            }
+            RuleEdit::NotFound => err_json(404, "原包名不存在"),
+            RuleEdit::Conflict => err_json(409, "目标包名已存在规则"),
+            RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
+            RuleEdit::IoErr => err_json(500, "配置文件写入失败"),
+        }
+        // ----- 原有逻辑结束 -----
+    });
+
+    match result {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("!!! rule_rename_api panic: {:?}", e);
+            err_json(500, "内部错误，请查看日志")
+        }
     }
 }
 

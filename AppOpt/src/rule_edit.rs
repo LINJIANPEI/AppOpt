@@ -347,7 +347,20 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
 
 fn normalize_sub_pkgs(lines: &mut Vec<String>, pkg: &str) {
     let t = target_scan(lines, pkg);
-    for (sub, _) in &t.sub_pkgs {
+    // 收集所有子包名，过滤空键，避免 format!("{}:{}", pkg, "") 导致错误
+    let sub_keys: Vec<String> = t
+        .sub_pkgs
+        .iter()
+        .filter_map(|(k, _)| {
+            let k = k.trim();
+            if k.is_empty() {
+                None
+            } else {
+                Some(k.to_string())
+            }
+        })
+        .collect();
+    for sub in sub_keys {
         let sub_pkg = format!("{}:{}", pkg, sub);
         normalize_singles(lines, &sub_pkg);
         normalize_sub_pkgs(lines, &sub_pkg);
@@ -1085,7 +1098,9 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
     }
 
     // ---- 常规方式（原有逻辑） ----
-    normalize_sub_pkgs(&mut lines, pkg);
+    if !pkg.is_empty() && !pkg.starts_with(':') {
+        normalize_sub_pkgs(&mut lines, pkg);
+    }
     let t = target_scan(&lines, pkg);
 
     if thread.is_empty() {
