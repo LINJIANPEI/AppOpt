@@ -1356,7 +1356,7 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
             .map(String::from)
             .collect();
 
-        // 子包处理（编辑子包时，仍使用原 write_sub_pkg_block，但为了统一，也可调用 collect_package，暂不处理）
+        // 子包处理（编辑子包时，仍使用原 write_sub_pkg_block）
         if pkg.contains(':') {
             let parts: Vec<&str> = pkg.split(':').collect();
             if parts.len() == 2 {
@@ -1373,8 +1373,8 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
         }
 
         // --- 主包处理：使用 collect_package 递归收集 ---
-        let (mut data, ranges) = collect_package(&lines, pkg);
-        if ranges.is_empty() && thread.is_empty() && cpus.is_empty() {
+        let (mut data, indices) = collect_package(&lines, pkg);
+        if indices.is_empty() && thread.is_empty() && cpus.is_empty() {
             return RuleEdit::NotFound;
         }
 
@@ -1391,13 +1391,8 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
         // 合并去重
         let merged = merge_data(data);
 
-        // 删除所有旧定义
-        let mut remove_indices = Vec::new();
-        for (start, end) in &ranges {
-            for idx in *start..=*end {
-                remove_indices.push(idx);
-            }
-        }
+        // 删除所有旧定义（collect_package 已返回所有相关行索引）
+        let mut remove_indices = indices.clone();
         remove_indices.sort();
         remove_indices.dedup();
         for idx in remove_indices.into_iter().rev() {
@@ -1422,7 +1417,6 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
         }
     }
 }
-
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
