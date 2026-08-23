@@ -1210,6 +1210,7 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
     }
     file_write(path, &lines)
 }
+
 pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
