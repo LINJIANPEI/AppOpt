@@ -1497,12 +1497,14 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .map(String::from)
         .collect();
 
+    // ---- 子包处理 ----
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
             let main_pkg = parts[0];
             let sub = parts[1];
-            let result = delete_sub_pkg(&mut lines, main_pkg, sub, thread);
+            // 调用 write_sub_pkg_block，cpus 传空表示删除，delete_all=false 只删单条
+            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
                 return file_write(config_path, &lines);
@@ -1512,53 +1514,38 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
         return RuleEdit::NotFound;
     }
 
-    let ranges = find_package_ranges(&lines, pkg);
-    if ranges.is_empty() {
+    // ---- 主包处理 ----
+    // 收集当前包的所有定义行和数据
+    let (mut data, indices) = collect_package(&lines, pkg);
+    if indices.is_empty() {
         return RuleEdit::NotFound;
     }
 
     if thread.is_empty() {
-        // 删除整个包
-        let mut indices = Vec::new();
-        for (start, end) in &ranges {
-            for idx in *start..=*end {
-                indices.push(idx);
-            }
-        }
-        indices.sort();
-        indices.dedup();
-        for idx in indices.into_iter().rev() {
-            lines.remove(idx);
-        }
+        // 删除包级规则（清空 CPU 定义，保留线程和子包）
+        data.cpus.clear();
     } else {
-        // 删除线程
-        let mut found = false;
-        for (start, end) in &ranges {
-            for idx in (*start + 1)..*end {
-                let trimmed = lines[idx].trim();
-                let inner = trimmed.trim_start();
-                if inner.starts_with(&format!("{}=", thread))
-                    || inner.starts_with(&format!("{} =", thread))
-                {
-                    if let Some(eq_pos) = inner.find('=') {
-                        let name_part = inner[..eq_pos].trim();
-                        if name_part == thread {
-                            lines.remove(idx);
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if found {
-                break;
-            }
-        }
-        if !found {
+        // 删除指定线程
+        if !data.threads.contains_key(thread) {
             return RuleEdit::NotFound;
         }
-        clean_empty_blocks(&mut lines, pkg);
+        data.threads.remove(thread);
     }
+
+    // 重建该包的块
+    let new_block = build_block(pkg, &data);
+
+    // 删除旧定义（记录最小索引用于插入）
+    let insert_pos = *indices.iter().min().unwrap();
+    let mut remove_indices = indices;
+    remove_indices.sort();
+    remove_indices.dedup();
+    for idx in remove_indices.into_iter().rev() {
+        lines.remove(idx);
+    }
+
+    // 在原位置插入新块
+    lines.splice(insert_pos..insert_pos, new_block);
 
     clean_empty_lines(&mut lines);
     file_write(config_path, &lines)
