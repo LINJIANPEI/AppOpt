@@ -1544,7 +1544,7 @@ ${chipHtml(it.spec)}
                 mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
                 toast('请输入 :子包名，如 :push，并选择 CPU');
             } // 示例：edit-sub 分支
-} else if (mode === 'edit-sub') {
+else if (mode === 'edit-sub') {
     $('mr-title').textContent = '编辑子包包级规则';
     const g = rulesData[gi];
     const fullPkg = g.pkg + ':' + sub;
