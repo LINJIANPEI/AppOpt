@@ -145,24 +145,19 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                     let sub = trimmed[1..eq_pos].trim();
                     let cpus = trimmed[eq_pos + 1..].trim();
                     if !sub.is_empty() && !cpus.is_empty() {
-                        // 记录子包存在
                         t.sub_pkgs
                             .entry(sub.to_string())
                             .or_insert_with(Target::new);
-                        // 如果是 :子包=CPU {，则后面会进入子包块，但这里我们已经记录了子包
-                        // 继续处理可能会跳过该行，但这里我们只是记录，不解析内容
                         continue;
                     }
                 }
             }
 
             // ---- 处理块内的子包块开始 :子包 { ----
-            // 只有在主包块内（非子包块内）才允许开启新的子包块
             if !in_sub_block && trimmed.starts_with(':') && trimmed.ends_with('{') {
                 let sub = trimmed[1..trimmed.len() - 1].trim();
                 if !sub.is_empty() {
                     let _sub_pkg = format!("{}:{}", pkg, sub);
-                    // 并确保子包被记录
                     t.sub_pkgs
                         .entry(sub.to_string())
                         .or_insert_with(Target::new);
@@ -259,13 +254,16 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                     }
                 } else if let Some(pi) = pending.take() {
                     in_block = true;
-                    if let OuterLine::Pending { pkg: pp } = parse_outer(lines[pi].trim())
-                        && pp == pkg
-                    {
-                        target_block = true;
-                        block_open(&mut t, i);
-                        if t.pkg_line.is_none() {
-                            t.pkg_line = Some(PkgLine::BarePending(pi));
+                    // 增加边界检查
+                    if pi < lines.len() {
+                        if let OuterLine::Pending { pkg: pp } = parse_outer(lines[pi].trim()) {
+                            if pp == pkg {
+                                target_block = true;
+                                block_open(&mut t, i);
+                                if t.pkg_line.is_none() {
+                                    t.pkg_line = Some(PkgLine::BarePending(pi));
+                                }
+                            }
                         }
                     }
                 }
@@ -277,7 +275,6 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
                 pending = None;
             }
             OuterLine::SubPkgRule { sub, .. } => {
-                // 记录子包存在
                 t.sub_pkgs
                     .entry(sub.to_string())
                     .or_insert_with(Target::new);
@@ -297,6 +294,10 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
     let t = target_scan(lines, pkg);
     let mut items: Vec<(ThreadLoc, String)> = Vec::new();
     for loc in t.singles() {
+        // 增加索引有效性检查
+        if loc.idx >= lines.len() {
+            continue;
+        }
         let raw_line = lines[loc.idx].trim();
         let raw = strip_comment(raw_line);
         let body = raw.strip_suffix('{').map(str::trim_end).unwrap_or(raw);
