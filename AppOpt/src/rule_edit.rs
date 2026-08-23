@@ -1092,15 +1092,24 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             };
         }
 
-        // ---- 常规方式（主包编辑，保留规范化） ----
-        // 如果 pkg 有效，调用 normalize_sub_pkgs 对主包及所有子包进行规范化
-        if !pkg.is_empty() && !pkg.starts_with(':') {
-            // 这里即使 panic，外层也会捕获
+        // ---- 常规方式（主包编辑） ----
+        // 判断是否需要规范化：只有主包存在子包或线程规则时才规范化，避免简单规则触发崩溃
+        let has_complex = {
+            let t = target_scan(&lines, pkg);
+            !t.threads.is_empty()
+                || !t.sub_pkgs.is_empty()
+                || t.pkg_line.is_some_and(|pl| {
+                    matches!(
+                        pl,
+                        PkgLine::OpenInline(_) | PkgLine::BareOpen(_) | PkgLine::BarePending(_)
+                    )
+                })
+        };
+        if has_complex {
             normalize_sub_pkgs(&mut lines, pkg);
         }
         let t = target_scan(&lines, pkg);
 
-        // 执行增删改操作（与原逻辑一致）
         if thread.is_empty() {
             match t.pkg_line {
                 Some(PkgLine::Standalone(i)) => {
