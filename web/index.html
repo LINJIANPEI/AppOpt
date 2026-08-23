@@ -1483,112 +1483,111 @@ ${chipHtml(it.spec)}
         const isTree = () => mrMode === 'add-pkg' || mrMode === 'edit-app';
 
         async function openRuleModal(mode, gi, sub, thread) {
-            await fetchTopo();
-            mrMode = mode;
-            mrOldThread = '';
-            const pkgInput = $('mr-pkg');
-            const tree = isTree();
-            pkgInput.readOnly = !tree;
-            $('mr-addrow').hidden = !tree;
+    await fetchTopo();
+    mrMode = mode;
+    mrOldThread = '';
+    const pkgInput = $('mr-pkg');
+    const tree = isTree();
+    pkgInput.readOnly = !tree;
+    $('mr-addrow').hidden = !tree;
 
-            console.log('openRuleModal called:', { mode, gi, sub, thread });
+    console.log('openRuleModal called:', { mode, gi, sub, thread });
 
-            if (mode === 'add-pkg') {
-                $('mr-title').textContent = '添加应用';
-                pkgInput.value = '';
-                pkgInput.readOnly = false;
-                mrRows = [mkRow({ pkgRow: true })];
-            } else if (mode === 'edit-app') {
-                $('mr-title').textContent = '编辑应用';
-                const g = rulesData[gi];
-                pkgInput.value = g.pkg;
-                pkgInput.readOnly = true;
-                mrOldPkg = g.pkg;
-                mrOldThreads = new Set(g.items.filter(it => it.thread).map(it => it.thread));
-                const pkgItem = g.items.find(it => !it.thread);
-                mrHadPkgRule = !!pkgItem;
-                mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
-                for (const it of g.items) {
-                    if (it.thread) {
-                        mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
-                    }
-                }
-            } else if (mode === 'edit-pkg') {
-                $('mr-title').textContent = '包级默认规则';
-                pkgInput.value = rulesData[gi].pkg;
-                pkgInput.readOnly = true;
-                const item = rulesData[gi].items.find(it => !it.thread);
-                mrRows = [mkRow({ pkgRow: true, ...(item ? parseSpec(item.spec) : {}) })];
-            } else if (mode === 'add-thread') {
-                $('mr-title').textContent = '添加线程规则';
-                pkgInput.value = rulesData[gi].pkg;
-                pkgInput.readOnly = true;
-                mrRows = [mkRow({})];
-            } else if (mode === 'edit-thread') {
-                $('mr-title').textContent = '编辑线程规则';
-                const g = rulesData[gi];
-                pkgInput.value = g.pkg;
-                pkgInput.readOnly = true;
-                const item = g.items.find(it => it.thread === thread);
-                mrOldThread = thread;
-                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
-                row.thread = thread; // 强制确保
-                mrRows = [row];
-                console.log('edit-thread row:', row);
-            } else if (mode === 'add-sub') {
-                $('mr-title').textContent = '添加子包';
-                const g = rulesData[gi];
-                pkgInput.value = g.pkg;
-                pkgInput.readOnly = true;
-                $('mr-addrow').hidden = true;
-                mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
-                toast('请输入 :子包名，如 :push，并选择 CPU');
-            } // 示例：edit-sub 分支
-else if (mode === 'edit-sub') {
-    $('mr-title').textContent = '编辑子包包级规则';
-    const g = rulesData[gi];
-    const fullPkg = g.pkg + ':' + sub;
-    pkgInput.value = fullPkg;
-    pkgInput.readOnly = true;
-    $('mr-addrow').hidden = true;
-    const subData = g.subs && g.subs[sub];
-    const item = subData ? subData.items.find(it => !it.thread) : null;
-    mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
-} else if (mode === 'add-sub-thread') {
-                $('mr-title').textContent = '添加子包线程规则';
-                const g = rulesData[gi];
-                pkgInput.value = g.pkg + ':' + sub;
-                pkgInput.readOnly = true;
-                mrRows = [mkRow({})];
-            } else if (mode === 'edit-sub-thread') {
-                $('mr-title').textContent = '编辑子包线程规则';
-                const g = rulesData[gi];
-                pkgInput.value = g.pkg + ':' + sub;
-                pkgInput.readOnly = true;
-                const subData = g.subs && g.subs[sub];
-                const item = subData ? subData.items.find(it => it.thread === thread) : null;
-                mrOldThread = thread;
-                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
-                row.thread = thread; // 强制确保
-                mrRows = [row];
-                console.log('edit-sub-thread row:', row);
+    if (mode === 'add-pkg') {
+        $('mr-title').textContent = '添加应用';
+        pkgInput.value = '';
+        pkgInput.readOnly = false;
+        mrRows = [mkRow({ pkgRow: true })];
+    } else if (mode === 'edit-app') {
+        $('mr-title').textContent = '编辑应用';
+        const g = rulesData[gi];
+        pkgInput.value = g.pkg;
+        pkgInput.readOnly = true;
+        mrOldPkg = g.pkg;
+        mrOldThreads = new Set(g.items.filter(it => it.thread).map(it => it.thread));
+        const pkgItem = g.items.find(it => !it.thread);
+        mrHadPkgRule = !!pkgItem;
+        mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
+        for (const it of g.items) {
+            if (it.thread) {
+                mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
             }
-
-            renderRows();
-
-            // 对于编辑线程的模式，额外确保输入框值
-            if (mode === 'edit-thread' || mode === 'edit-sub-thread') {
-                const input = document.querySelector('#mr-rows .rr-thread');
-                if (input && thread) {
-                    input.value = thread;
-                    if (mrRows.length > 0) {
-                        mrRows[0].thread = thread;
-                    }
-                }
-            }
-
-            $('modal-rule').hidden = false;
         }
+    } else if (mode === 'edit-pkg') {
+        $('mr-title').textContent = '包级默认规则';
+        pkgInput.value = rulesData[gi].pkg;
+        pkgInput.readOnly = true;
+        const item = rulesData[gi].items.find(it => !it.thread);
+        mrRows = [mkRow({ pkgRow: true, ...(item ? parseSpec(item.spec) : {}) })];
+    } else if (mode === 'add-thread') {
+        $('mr-title').textContent = '添加线程规则';
+        pkgInput.value = rulesData[gi].pkg;
+        pkgInput.readOnly = true;
+        mrRows = [mkRow({})];
+    } else if (mode === 'edit-thread') {
+        $('mr-title').textContent = '编辑线程规则';
+        const g = rulesData[gi];
+        pkgInput.value = g.pkg;
+        pkgInput.readOnly = true;
+        const item = g.items.find(it => it.thread === thread);
+        mrOldThread = thread;
+        const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+        row.thread = thread;
+        mrRows = [row];
+        console.log('edit-thread row:', row);
+    } else if (mode === 'add-sub') {
+        $('mr-title').textContent = '添加子包';
+        const g = rulesData[gi];
+        pkgInput.value = g.pkg;
+        pkgInput.readOnly = true;
+        $('mr-addrow').hidden = true;
+        mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
+        toast('请输入 :子包名，如 :push，并选择 CPU');
+    } else if (mode === 'edit-sub') {
+        $('mr-title').textContent = '编辑子包包级规则';
+        const g = rulesData[gi];
+        const fullPkg = g.pkg + ':' + sub;
+        pkgInput.value = fullPkg;
+        pkgInput.readOnly = true;
+        $('mr-addrow').hidden = true;
+        const subData = g.subs && g.subs[sub];
+        const item = subData ? subData.items.find(it => !it.thread) : null;
+        mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
+    } else if (mode === 'add-sub-thread') {
+        $('mr-title').textContent = '添加子包线程规则';
+        const g = rulesData[gi];
+        pkgInput.value = g.pkg + ':' + sub;
+        pkgInput.readOnly = true;
+        mrRows = [mkRow({})];
+    } else if (mode === 'edit-sub-thread') {
+        $('mr-title').textContent = '编辑子包线程规则';
+        const g = rulesData[gi];
+        pkgInput.value = g.pkg + ':' + sub;
+        pkgInput.readOnly = true;
+        const subData = g.subs && g.subs[sub];
+        const item = subData ? subData.items.find(it => it.thread === thread) : null;
+        mrOldThread = thread;
+        const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+        row.thread = thread;
+        mrRows = [row];
+        console.log('edit-sub-thread row:', row);
+    }
+
+    renderRows();
+
+    // 对于编辑线程的模式，额外确保输入框值
+    if (mode === 'edit-thread' || mode === 'edit-sub-thread') {
+        const input = document.querySelector('#mr-rows .rr-thread');
+        if (input && thread) {
+            input.value = thread;
+            if (mrRows.length > 0) {
+                mrRows[0].thread = thread;
+            }
+        }
+    }
+
+    $('modal-rule').hidden = false;
+}
 
         $('r-add').onclick = () => openRuleModal('add-pkg');
         $('mr-cancel').onclick = () => $('modal-rule').hidden = true;
