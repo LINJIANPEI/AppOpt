@@ -1345,12 +1345,13 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
             .map(String::from)
             .collect();
 
-        // 子包处理（保持原有逻辑）
+        // 子包处理
         if pkg.contains(':') {
             let parts: Vec<&str> = pkg.split(':').collect();
             if parts.len() == 2 {
                 let main_pkg = parts[0];
                 let sub = parts[1];
+                // 若 cpus 非空，则是写入操作（覆盖）；若为空，则是删除操作（由调用方处理）
                 let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
                 if let RuleEdit::Ok = result {
                     clean_empty_lines(&mut lines);
@@ -1367,42 +1368,35 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> Ru
             return RuleEdit::NotFound;
         }
 
-        // 应用用户更新
+        // ★ 修复：使用覆盖（替换）而非追加
         if !thread.is_empty() && !cpus.is_empty() {
-            data.threads
-                .entry(thread.to_string())
-                .and_modify(|e| *e = format!("{},{}", e, cpus))
-                .or_insert(cpus.to_string());
+            // 线程规则：直接替换
+            data.threads.insert(thread.to_string(), cpus.to_string());
         } else if thread.is_empty() && !cpus.is_empty() {
-            data.cpus.push(cpus.to_string());
+            // 包级规则：替换原有 cpus 列表
+            data.cpus = vec![cpus.to_string()];
         }
+        // 如果 cpus 为空，则保持现有数据（由调用方决定删除，例如通过 rule_delete）
 
         // 合并去重
         let merged = merge_data(data);
 
-        // ★★★ 修复点：记录原包起始位置（删除前） ★★★
+        let new_block = build_block(pkg, &merged);
+
+        // 删除旧定义
         let insert_pos = if indices.is_empty() {
-            // 新包 → 追加到文件末尾
             lines.len()
         } else {
-            // 已存在包 → 使用最小索引（原包起始位置）
             *indices.iter().min().unwrap()
         };
-
-        // 删除所有旧定义（从大到小删除，保持索引有效）
-        let mut remove_indices = indices.clone();
+        let mut remove_indices = indices;
         remove_indices.sort();
         remove_indices.dedup();
         for idx in remove_indices.into_iter().rev() {
             lines.remove(idx);
         }
 
-        // 构建新块
-        let new_block = build_block(pkg, &merged);
-
-        // 插入到正确位置
         lines.splice(insert_pos..insert_pos, new_block);
-
         clean_empty_lines(&mut lines);
         file_write(config_path, &lines)
     });
