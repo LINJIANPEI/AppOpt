@@ -73,7 +73,7 @@ impl Target {
     }
 }
 
-/// 删除连续空行，只保留最多一个空行
+/// 清理连续空行（只保留一个空行）
 fn clean_empty_lines(lines: &mut Vec<String>) {
     let mut i = 0;
     while i < lines.len() {
@@ -1311,7 +1311,7 @@ fn format_sub_package(sub_name: &str, data: &PackageData) -> Vec<String> {
     lines.push("    }".to_string());
     lines
 }
-/// 返回所有匹配的 (start, end) 行索引（包括包级行和整个块）
+/// 查找包的所有定义范围（包级行及其块）
 fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let pkg_prefix = format!("{}", pkg);
     let mut ranges = Vec::new();
@@ -1555,6 +1555,7 @@ fn merge_and_write(lines: &mut Vec<String>, pkg: &str, thread: &str, cpus: &str)
     // 8. 写回
     file_write(path, lines)
 }
+
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let result = std::panic::catch_unwind(|| {
         let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
@@ -1563,6 +1564,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             .lines()
             .map(String::from)
             .collect();
+        let config_path = path; // 避免与属性名冲突
 
         // 子包处理（委托给原逻辑，但加上清理）
         if pkg.contains(':') {
@@ -1573,7 +1575,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
                 let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
                 if let RuleEdit::Ok = result {
                     clean_empty_lines(&mut lines);
-                    return file_write(path, &lines);
+                    return file_write(config_path, &lines);
                 }
                 return result;
             }
@@ -1696,7 +1698,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         }
         lines.splice(insert_pos..insert_pos, new_block);
         clean_empty_lines(&mut lines);
-        file_write(path, &lines)
+        file_write(config_path, &lines)
     });
 
     match result {
@@ -1708,7 +1710,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
     }
 }
 
-/// 检查指定包是否为空（只有包级行而无内部内容），若是则删除整个块
+/// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
     for (start, end) in ranges.iter().rev() {
@@ -1731,27 +1733,7 @@ fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     }
 }
 
-/// 清理连续空行
-fn clean_empty_lines(lines: &mut Vec<String>) {
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed.is_empty() {
-            let mut j = i + 1;
-            while j < lines.len() && lines[j].trim().is_empty() {
-                j += 1;
-            }
-            if j > i + 1 {
-                lines.drain(i + 1..j);
-            }
-            i += 1;
-        } else {
-            i += 1;
-        }
-    }
-}
-
-/// 删除子包内的线程（thread非空）或整个子包（thread为空）
+/// 子包删除辅助
 fn delete_sub_pkg(lines: &mut Vec<String>, main_pkg: &str, sub: &str, thread: &str) -> RuleEdit {
     let sub_pkg = format!("{}:{}", main_pkg, sub);
     let ranges = find_package_ranges(lines, &sub_pkg);
@@ -1812,6 +1794,7 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
         .lines()
         .map(String::from)
         .collect();
+    let config_path = path;
 
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
@@ -1821,7 +1804,7 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
             let result = delete_sub_pkg(&mut lines, main_pkg, sub, thread);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
-                return file_write(path, &lines);
+                return file_write(config_path, &lines);
             }
             return result;
         }
@@ -1877,7 +1860,7 @@ pub fn rule_delete(path: &str, pkg: &str, thread: &str) -> RuleEdit {
     }
 
     clean_empty_lines(&mut lines);
-    file_write(path, &lines)
+    file_write(config_path, &lines)
 }
 
 pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
@@ -1887,6 +1870,7 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
         .lines()
         .map(String::from)
         .collect();
+    let config_path = path;
 
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
@@ -1896,7 +1880,7 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
             let result = delete_sub_pkg(&mut lines, main_pkg, sub, "");
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
-                return file_write(path, &lines);
+                return file_write(config_path, &lines);
             }
             return result;
         }
@@ -1920,7 +1904,7 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
         lines.remove(idx);
     }
     clean_empty_lines(&mut lines);
-    file_write(path, &lines)
+    file_write(config_path, &lines)
 }
 
 pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
