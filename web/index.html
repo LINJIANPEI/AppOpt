@@ -1472,6 +1472,9 @@ ${r.pkgRow
             pkgInput.readOnly = !tree;
             $('mr-addrow').hidden = !tree;
 
+            // 调试：打印传入参数
+            console.log('openRuleModal called with:', { mode, gi, sub, thread });
+
             if (mode === 'add-pkg') {
                 $('mr-title').textContent = '添加应用';
                 pkgInput.value = '';
@@ -1524,13 +1527,14 @@ ${r.pkgRow
                 $('mr-addrow').hidden = true;
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
-                // 注意：包级行 pkgRow 为 true，不显示线程名输入框
+                // 包级规则行，pkgRow=true，不显示线程名输入框
                 mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '添加子包线程规则';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
+                // 添加线程，线程名输入框为空
                 mrRows = [mkRow({})];
             } else if (mode === 'edit-sub-thread') {
                 $('mr-title').textContent = '编辑子包线程规则';
@@ -1540,13 +1544,29 @@ ${r.pkgRow
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => it.thread === thread) : null;
                 mrOldThread = thread; // 保存旧线程名，以便更新时删除
-                // 关键：显式设置 thread 字段
-                mrRows = [mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) })];
+                // 确保线程名被设置
+                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+                // 强制设置 thread（以防 parseSpec 覆盖）
+                row.thread = thread;
+                mrRows = [row];
+                console.log('edit-sub-thread row:', row); // 调试
             }
 
             renderRows();
+            // 如果模式是编辑子包线程，再次确保输入框值正确（保险）
+            if (mode === 'edit-sub-thread') {
+                const input = document.querySelector('#mr-rows .rr-thread');
+                if (input) {
+                    input.value = thread;
+                    // 也更新 mrRows[0].thread
+                    if (mrRows.length > 0) {
+                        mrRows[0].thread = thread;
+                    }
+                }
+            }
             $('modal-rule').hidden = false;
         }
+
         $('r-add').onclick = () => openRuleModal('add-pkg');
         $('mr-cancel').onclick = () => $('modal-rule').hidden = true;
         let mrSaving = false;
