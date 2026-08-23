@@ -1080,7 +1080,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             .map(String::from)
             .collect();
 
-        // 子包处理（保持不变）
+        // ---- 子包处理（保持原样） ----
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
             let main_pkg = parts[0];
@@ -1092,7 +1092,7 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             };
         }
 
-        // ★★★ 包级规则更新：跳过规范化，直接查找替换 ★★★
+        // ---- 包级规则（直接查找替换，不规范化） ----
         if thread.is_empty() {
             let mut found = false;
             let pkg_prefix = format!("{}", pkg);
@@ -1101,7 +1101,6 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
                 if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
                     continue;
                 }
-                // 精确匹配包名（确保是包级行，而非子包）
                 if trimmed.starts_with(&pkg_prefix) {
                     let after_pkg = &trimmed[pkg_prefix.len()..];
                     if after_pkg.is_empty()
@@ -1123,40 +1122,49 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
                 }
             }
             if !found {
-                // 未找到，追加新行
                 lines.push(format!("{}={}", pkg, cpus));
             }
-            // 直接写回文件，跳过规范化
             return file_write(path, &lines);
         }
 
-        // ---- 线程规则处理（必须规范化） ----
-        normalize_sub_pkgs(&mut lines, pkg);
-        let t = target_scan(&lines, pkg);
+        // ---- 线程规则：使用 target_scan 定位块，但不调用 normalize ----
+        let t = target_scan(&lines, pkg); // 只解析，不修改
 
-        // 原有线程规则更新逻辑（不变）
-        if let Some(locs) = t.threads.get(thread) {
-            let last = locs.last().copied().unwrap();
+        // 检查是否存在同名的线程规则（可能有多条，我们只更新最后一条）
+        let existing_locs = t.threads.get(thread).cloned().unwrap_or_default();
+        if !existing_locs.is_empty() {
+            // 更新最后一条线程规则
+            let last = existing_locs.last().copied().unwrap();
             lines[last.idx] = spec_swap(&lines[last.idx], cpus);
-            for loc in locs[..locs.len() - 1].iter().rev() {
+            // 删除其他重复（如果存在）
+            for loc in existing_locs[..existing_locs.len() - 1].iter().rev() {
                 line_remove(&mut lines, pkg, loc);
             }
-        } else if let Some(close) = t.block_close {
+            return file_write(path, &lines);
+        }
+
+        // 线程规则不存在，需要插入
+        if let (Some(open), Some(close)) = (t.block_open, t.block_close) {
+            // 已有块，在块内插入新线程行（放在结束大括号之前）
             lines.insert(close, format!("\t{}={}", thread, cpus));
-        } else if let Some(PkgLine::Standalone(i)) = t.pkg_line {
+            return file_write(path, &lines);
+        }
+
+        // 没有块：检查是否有包级行（Standalone 或 BareOpen）
+        if let Some(PkgLine::Standalone(i)) = t.pkg_line {
+            // 将包级行转为块
             lines[i] = format!("{} {{", lines[i].trim_end());
             lines.splice(
                 i + 1..i + 1,
                 [format!("\t{}={}", thread, cpus), "}".to_string()],
             );
-        } else if t.unterminated {
-            return RuleEdit::Malformed;
-        } else {
-            lines.push(bare_open_line(pkg));
-            lines.push(format!("\t{}={}", thread, cpus));
-            lines.push("}".to_string());
+            return file_write(path, &lines);
         }
 
+        // 没有包级行也没有块：创建新块
+        lines.push(bare_open_line(pkg));
+        lines.push(format!("\t{}={}", thread, cpus));
+        lines.push("}".to_string());
         file_write(path, &lines)
     });
 
