@@ -5,6 +5,7 @@ use crate::config::AppConfig;
 use crate::cpuset::{CpuSet, CpuTopology};
 use crate::rule_match::{comm_to_pkg, thread_affinity};
 
+
 pub struct TaskEntry {
     pub pid: i32,
     pub pkg: String,
