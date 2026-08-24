@@ -515,6 +515,7 @@
             box-shadow: 0 2px 12px var(--btn-shadow);
             display: inline-flex;
             align-items: center;
+            justify-content: center;
             gap: 4px;
             flex-shrink: 0;
             border: none;
@@ -535,6 +536,9 @@
             font-size: 14px;
             font-weight: 500;
             transition: background .15s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
         }
         .btn-outline:active {
             background: rgba(0, 0, 0, 0.05);
@@ -641,17 +645,18 @@
             font-weight: 400;
         }
 
+        /* 修正：添加线程/子包按钮尺寸缩小 */
         .rule-add {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
-            margin: 8px 14px 10px;
-            padding: 9px 0;
+            gap: 4px;
+            margin: 6px 14px 8px;
+            padding: 6px 0;               /* 减小上下内边距 */
             border: 1.5px dashed var(--border);
             border-radius: var(--radius-sm);
             color: var(--sub);
-            font-size: 13px;
+            font-size: 12px;              /* 缩小字号 */
             font-weight: 500;
             transition: all .15s;
             width: calc(100% - 28px);
@@ -665,6 +670,14 @@
             border-color: var(--blue);
             color: var(--blue);
             background: var(--blue-light);
+        }
+        .rule-add svg {
+            width: 14px;                 /* 缩小图标 */
+            height: 14px;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
         }
 
         .icon-btn {
@@ -799,7 +812,7 @@
             overflow: auto;
             animation: popIn .2s cubic-bezier(.2, 1.1, .4, 1);
             box-shadow: var(--sh-lg);
-            text-align: center; /* 让内部元素默认居中 */
+            text-align: center;
         }
         .modal h3 {
             font-size: 17px;
@@ -807,7 +820,7 @@
             margin-bottom: 16px;
         }
         .modal input {
-            text-align: left; /* 输入框左对齐 */
+            text-align: left;
             background: var(--input-bg);
             border: 1px solid var(--border);
             border-radius: var(--radius-sm);
@@ -821,8 +834,10 @@
             background: var(--input-focus);
         }
         .modal .sg-wrap {
-            text-align: left; /* 建议下拉框左对齐 */
+            text-align: left;
         }
+
+        /* 弹窗底部按钮 - 确保文字居中 */
         .modal-actions {
             display: flex;
             gap: 10px;
@@ -837,6 +852,9 @@
             font-weight: 600;
             transition: all .15s;
             max-width: 120px;
+            display: flex;           /* 关键：flex 使文字居中 */
+            align-items: center;
+            justify-content: center;
         }
         .modal-actions button:active {
             transform: scale(.95);
@@ -848,7 +866,7 @@
             gap: 6px;
             margin-bottom: 10px;
             flex-wrap: wrap;
-            justify-content: center;  /* 居中 */
+            justify-content: center;
         }
         .core-chips button {
             padding: 6px 14px;
@@ -2173,43 +2191,35 @@
         const themeSelector = document.getElementById('theme-selector');
         const themeBtns = themeSelector.querySelectorAll('button');
 
-        // 获取当前系统主题
         function getSystemTheme() {
             return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         }
 
-        // 应用主题
         function applyTheme(theme) {
             const isDark = theme === 'dark';
             document.body.classList.toggle('light', !isDark);
             document.body.classList.toggle('dark', isDark);
             const meta = document.getElementById('theme-color');
             if (meta) meta.content = isDark ? '#0f172a' : '#f1f5f9';
-            // 更新按钮高亮
             themeBtns.forEach(btn => {
                 btn.classList.toggle('on', btn.dataset.theme === theme);
             });
             localStorage.setItem('theme', theme);
         }
 
-        // 获取当前应使用的主题（考虑auto）
         function resolveTheme(mode) {
             if (mode === 'auto') return getSystemTheme();
-            return mode; // 'dark' 或 'light'
+            return mode;
         }
 
-        // 初始化主题
         function initTheme() {
             const saved = localStorage.getItem('theme') || 'auto';
-            // 确保按钮选中状态
             themeBtns.forEach(btn => {
                 btn.classList.toggle('on', btn.dataset.theme === saved);
             });
             const effective = resolveTheme(saved);
             applyTheme(effective);
-            // 保存模式（非effective，而是saved）
             localStorage.setItem('theme', saved);
-            // 监听系统主题变化
             const media = window.matchMedia('(prefers-color-scheme: dark)');
             media.addEventListener('change', () => {
                 const currentMode = localStorage.getItem('theme') || 'auto';
@@ -2220,20 +2230,16 @@
             });
         }
 
-        // 主题切换点击事件
         themeBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 const mode = btn.dataset.theme;
                 const effective = resolveTheme(mode);
                 applyTheme(effective);
-                // 存储模式
                 localStorage.setItem('theme', mode);
-                // 更新高亮
                 themeBtns.forEach(b => b.classList.toggle('on', b === btn));
             });
         });
 
-        // 初始化主题
         initTheme();
 
         // ============================================================
