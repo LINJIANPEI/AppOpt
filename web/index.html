@@ -914,7 +914,20 @@
             margin-right: 4px;
             font-weight: 600;
         }
-    </style>
+    
+/* UI refinement: display-only, no backend/API behavior changed */
+:root{--radius-lg:18px;--radius-md:14px}
+.card,.panel,.grp,.sub-group,.modal{border-radius:var(--radius-lg)!important}
+.card{box-shadow:0 4px 18px rgba(0,0,0,.06)}
+.grp-head,.sub-head{min-height:48px}
+.core-chips{gap:8px!important}
+.core-chips button{border-radius:12px!important;padding:8px 13px!important;font-weight:600;transition:transform .15s ease,background .15s ease,box-shadow .15s ease}
+.core-chips button:active{transform:scale(.96)}
+.chip{border-radius:999px!important;padding:5px 10px!important;font-weight:600}
+.icon-btn{border-radius:10px!important}
+button{transition:transform .12s ease,opacity .12s ease}
+button:active{transform:scale(.98)}
+</style>
 </head>
 
 <body>
