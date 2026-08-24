@@ -4,33 +4,46 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-    <meta name="theme-color" content="#f2f2f7">
+    <meta name="theme-color" content="#f0f2f5">
     <title>AppOpt</title>
     <style>
-        :root {
-            --bg: #f2f2f7;
-            --card: #fff;
-            --fg: #1c1c1e;
-            --sub: #8e8e93;
-            --blue: #007aff;
-            --orange: #ff9500;
-            --red: #ff3b30;
-            --border: rgba(0, 0, 0, .08);
-            --font: system-ui, -apple-system, "PingFang SC", sans-serif;
-            --mono: 'SF Mono', Consolas, monospace;
-            --r-md: 16px;
-            --sh: 0 1px 2px rgba(0, 0, 0, .04), 0 4px 16px rgba(0, 0, 0, .05);
-            --max-w: 760px
-        }
-
+        /* ===== 基础重置 & 变量 ===== */
         * {
             box-sizing: border-box;
             margin: 0;
-            padding: 0
+            padding: 0;
+        }
+        [hidden] {
+            display: none !important;
         }
 
-        [hidden] {
-            display: none !important
+        :root {
+            --bg: #f0f2f5;
+            --card: #ffffff;
+            --fg: #1c1c1e;
+            --sub: #8e8e93;
+            --border: rgba(0, 0, 0, .06);
+            --blue: #5B7FFF;
+            --blue-light: #eef1ff;
+            --orange: #ff9500;
+            --red: #ff3b30;
+            --green: #00b894;
+            --green-bg: #e8f8f3;
+            --purple: #6c5ce7;
+            --purple-bg: #f0edff;
+            --gray: #636e72;
+            --gray-bg: #f0f0f0;
+            --font: system-ui, -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+            --mono: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+            --r-md: 16px;
+            --sh: 0 2px 12px rgba(0, 0, 0, .06), 0 1px 4px rgba(0, 0, 0, .04);
+            --sh-lg: 0 8px 32px rgba(0, 0, 0, .10);
+            --max-w: 800px;
+            --nav-h: 52px;
+            --tab-h: 60px;
+            --radius: 14px;
+            --radius-sm: 10px;
+            --transition: .2s cubic-bezier(.25, .46, .45, .94);
         }
 
         body {
@@ -40,7 +53,8 @@
             font-size: 14px;
             -webkit-tap-highlight-color: transparent;
             height: 100dvh;
-            overflow: hidden
+            overflow: hidden;
+            line-height: 1.5;
         }
 
         button {
@@ -48,9 +62,16 @@
             border: none;
             font-family: inherit;
             background: none;
-            color: inherit
+            color: inherit;
+            outline: none;
+        }
+        input {
+            font-family: inherit;
+            outline: none;
+            color: var(--fg);
         }
 
+        /* ===== 应用容器 ===== */
         .app {
             position: relative;
             max-width: var(--max-w);
@@ -58,177 +79,278 @@
             display: flex;
             flex-direction: column;
             height: 100dvh;
-            overflow: hidden
+            overflow: hidden;
+            background: var(--bg);
         }
-
-        @media(max-width:760px) {
+        @media(max-width:800px) {
             .app {
-                width: 100%
+                width: 100%;
             }
         }
 
+        /* ===== 主面板 ===== */
         .main {
             flex: 1;
-            overflow: hidden
+            overflow: hidden;
+            position: relative;
         }
-
         .panel {
             height: 100%;
-            overflow: auto;
-            padding: 12px 12px 24px;
-            -webkit-overflow-scrolling: touch
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 16px 16px 24px;
+            -webkit-overflow-scrolling: touch;
+            scroll-behavior: smooth;
+        }
+        .panel::-webkit-scrollbar {
+            width: 4px;
+        }
+        .panel::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, .12);
+            border-radius: 8px;
         }
 
+        /* ===== 卡片 & 动画 ===== */
         @keyframes fadeUp {
             from {
                 opacity: 0;
-                transform: translateY(6px)
+                transform: translateY(10px);
             }
-
             to {
                 opacity: 1;
-                transform: none
+                transform: none;
             }
         }
-
-        .card,
-        .grp {
-            background: var(--card);
-            border-radius: var(--r-md);
-            margin-bottom: 12px;
-            box-shadow: var(--sh);
-            animation: fadeUp .15s ease both
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+        @keyframes popIn {
+            from {
+                opacity: 0;
+                transform: scale(.94) translateY(12px);
+            }
+            to {
+                opacity: 1;
+                transform: none;
+            }
         }
 
         .card {
-            padding: 16px
+            background: var(--card);
+            border-radius: var(--radius);
+            margin-bottom: 14px;
+            box-shadow: var(--sh);
+            animation: fadeUp .18s ease both;
+            padding: 18px 20px;
+            transition: box-shadow .2s;
+        }
+        .card:hover {
+            box-shadow: var(--sh-lg);
         }
 
         .card-title {
-            font-size: 13px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
             color: var(--sub);
-            margin-bottom: 12px
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card-title::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border);
         }
 
+        /* ===== 行布局 ===== */
         .row {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             padding: 8px 0;
-            font-size: 14px
+            font-size: 14px;
         }
-
         .row+.row {
-            border-top: 1px solid var(--border)
+            border-top: 1px solid var(--border);
         }
-
         .row .label {
             color: var(--sub);
-            flex-shrink: 0
+            flex-shrink: 0;
+            font-weight: 450;
         }
-
         .row .value {
             font-weight: 600;
             text-align: right;
-            word-break: break-all
+            word-break: break-all;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
         .mono {
             font-family: var(--mono);
-            font-size: 13px
+            font-size: 13px;
         }
 
+        /* ===== 徽章 ===== */
         .badge {
-            padding: 2px 10px;
+            padding: 3px 12px;
             border-radius: 999px;
             font-size: 12px;
-            font-weight: 600
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
-
         .badge.ebpf {
-            background: rgba(52, 199, 89, .14);
-            color: #248a3d
+            background: var(--green-bg);
+            color: var(--green);
         }
-
         .badge.proc {
-            background: rgba(0, 122, 255, .13);
-            color: #0062cc
+            background: var(--blue-light);
+            color: var(--blue);
         }
 
+        /* ===== 统计网格 ===== */
         .grid2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px
+            gap: 10px;
         }
-
+        .grid3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+        }
         .stat {
             background: var(--bg);
-            border-radius: 12px;
-            padding: 12px 8px;
-            text-align: center
+            border-radius: var(--radius-sm);
+            padding: 14px 8px;
+            text-align: center;
+            transition: background .2s;
         }
-
+        .stat:hover {
+            background: rgba(0, 0, 0, .04);
+        }
         .stat .num {
-            font-size: 24px;
+            font-size: 26px;
             font-weight: 700;
-            font-variant-numeric: tabular-nums
+            font-variant-numeric: tabular-nums;
+            line-height: 1.2;
         }
-
         .stat .lbl {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--sub);
-            margin-top: 2px
+            margin-top: 4px;
+            font-weight: 450;
         }
 
+        /* ===== Chip (核心标签) ===== */
         .chip {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 11px;
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 12px;
+            border-radius: 999px;
+            font-size: 12px;
             font-weight: 600;
             font-family: var(--mono);
-            max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap
+            gap: 4px;
+            white-space: nowrap;
         }
-
         .chip.e {
-            background: rgba(52, 199, 89, .15);
-            color: #248a3d
+            background: var(--green-bg);
+            color: var(--green);
         }
-
+        .chip.e::before {
+            content: '🟢';
+            font-size: 10px;
+        }
         .chip.p {
-            background: rgba(0, 122, 255, .13);
-            color: #0062cc
+            background: var(--blue-light);
+            color: var(--blue);
         }
-
+        .chip.p::before {
+            content: '🔵';
+            font-size: 10px;
+        }
         .chip.h {
-            background: rgba(175, 82, 222, .15);
-            color: #8944ab
+            background: var(--purple-bg);
+            color: var(--purple);
         }
-
+        .chip.h::before {
+            content: '🟣';
+            font-size: 10px;
+        }
         .chip.c {
-            background: rgba(142, 142, 147, .16);
-            color: #636366
+            background: var(--gray-bg);
+            color: var(--gray);
+        }
+        .chip.c::before {
+            content: '⚪';
+            font-size: 10px;
+        }
+        .chip.sm {
+            font-size: 11px;
+            padding: 1px 10px;
         }
 
-        .tabbar,
-        .navbar {
-            background: rgba(255, 255, 255, .85);
-            backdrop-filter: blur(20px) saturate(1.6);
-            -webkit-backdrop-filter: blur(20px) saturate(1.6)
+        /* ===== 核心分层卡片 ===== */
+        .core-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 16px;
+        }
+        .core-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .core-item .core-label {
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .core-item .core-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+        .core-item .core-val {
+            font-family: var(--mono);
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--sub);
         }
 
+        /* ===== 标签栏 ===== */
         .tabbar {
             display: flex;
-            height: 56px;
+            height: var(--tab-h);
+            background: rgba(255, 255, 255, .82);
+            backdrop-filter: blur(24px) saturate(1.6);
+            -webkit-backdrop-filter: blur(24px) saturate(1.6);
             border-top: 1px solid var(--border);
             flex-shrink: 0;
-            padding-bottom: env(safe-area-inset-bottom)
+            padding-bottom: env(safe-area-inset-bottom);
+            z-index: 10;
+            position: relative;
         }
-
         .tab {
             flex: 1;
             color: var(--sub);
@@ -238,9 +360,10 @@
             align-items: center;
             justify-content: center;
             gap: 2px;
-            transition: color .15s
+            transition: color var(--transition);
+            position: relative;
+            padding: 4px 0;
         }
-
         .tab svg {
             width: 24px;
             height: 24px;
@@ -249,526 +372,582 @@
             stroke-width: 1.8;
             stroke-linecap: round;
             stroke-linejoin: round;
-            transition: transform .15s
+            transition: transform var(--transition);
         }
-
         .tab.active {
-            color: var(--blue)
+            color: var(--blue);
         }
-
         .tab.active svg {
-            transform: translateY(-1px) scale(1.08)
+            transform: translateY(-1px) scale(1.06);
+        }
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 30%;
+            right: 30%;
+            height: 2.5px;
+            background: var(--blue);
+            border-radius: 0 0 4px 4px;
+        }
+        .tab:active {
+            opacity: .6;
         }
 
         @media(orientation:landscape) {
             .app {
-                flex-direction: row
+                flex-direction: row;
             }
-
             .tabbar {
                 flex-direction: column;
                 height: 100%;
-                width: 64px;
+                width: 68px;
                 border-top: none;
                 border-right: 1px solid var(--border);
                 order: -1;
                 justify-content: center;
-                padding-bottom: 0
+                padding-bottom: 0;
+                backdrop-filter: blur(20px);
             }
-
             .tab {
                 flex: 1;
-                max-height: 64px
+                max-height: 72px;
+                padding: 8px 0;
+            }
+            .tab.active::after {
+                top: 20%;
+                bottom: 20%;
+                left: 0;
+                right: auto;
+                width: 2.5px;
+                height: auto;
+                border-radius: 0 4px 4px 0;
             }
         }
 
+        /* ===== 顶部栏 ===== */
         .bar {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 10px;
-            gap: 8px
+            gap: 10px;
+            margin-bottom: 14px;
         }
-
         #r-filter {
             flex: 1;
             min-width: 0;
-            width: auto;
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
             font-size: 13px;
             color: var(--fg);
-            outline: none;
-            font-family: inherit
+            transition: border-color var(--transition), box-shadow var(--transition);
+            box-shadow: var(--sh);
         }
-
         #r-filter:focus {
-            border-color: var(--blue)
+            border-color: var(--blue);
+            box-shadow: 0 0 0 3px rgba(91, 127, 255, .12), var(--sh);
+        }
+        #r-filter::placeholder {
+            color: var(--sub);
         }
 
         .btn {
             background: var(--blue);
             color: #fff;
-            padding: 8px 14px;
+            padding: 9px 18px;
             border-radius: 999px;
             font-size: 13px;
-            font-weight: 500;
-            transition: transform .12s, opacity .12s
+            font-weight: 600;
+            transition: transform .15s, opacity .15s, box-shadow .2s;
+            box-shadow: 0 2px 8px rgba(91, 127, 255, .3);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
         }
-
         .btn:active {
             transform: scale(.94);
-            opacity: .8
+            opacity: .8;
         }
-
+        .btn:hover {
+            box-shadow: 0 4px 16px rgba(91, 127, 255, .35);
+        }
         .btn-outline {
             background: none;
             color: var(--sub);
             border: 1px solid var(--border);
-            padding: 8px 14px;
+            padding: 9px 18px;
             border-radius: 999px;
-            font-size: 14px
+            font-size: 14px;
+            font-weight: 500;
+            transition: background .15s, border-color .15s;
         }
-
         .btn-outline:active {
-            opacity: .6
+            background: rgba(0, 0, 0, .04);
+        }
+        .btn-danger {
+            background: var(--red);
+            box-shadow: 0 2px 8px rgba(255, 59, 48, .3);
+        }
+        .btn-danger:hover {
+            box-shadow: 0 4px 16px rgba(255, 59, 48, .35);
         }
 
+        /* ===== 规则分组 ===== */
         .grp {
-            margin-bottom: 10px;
-            overflow: hidden
+            background: var(--card);
+            border-radius: var(--radius);
+            margin-bottom: 12px;
+            box-shadow: var(--sh);
+            overflow: hidden;
+            animation: fadeUp .18s ease both;
+            transition: box-shadow .2s;
         }
-
+        .grp:hover {
+            box-shadow: var(--sh-lg);
+        }
         .grp-head {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 13px 14px;
+            padding: 14px 16px;
             cursor: pointer;
             user-select: none;
             -webkit-user-select: none;
-            transition: background .15s
+            transition: background .15s;
         }
-
         .grp-head:active {
-            background: rgba(0, 0, 0, .03)
+            background: rgba(0, 0, 0, .03);
         }
-
         .chev {
-            width: 16px;
-            height: 16px;
+            width: 18px;
+            height: 18px;
             stroke: var(--sub);
             fill: none;
-            stroke-width: 2;
+            stroke-width: 2.2;
             stroke-linecap: round;
             stroke-linejoin: round;
-            transition: transform .16s;
-            flex-shrink: 0
+            transition: transform .2s ease;
+            flex-shrink: 0;
         }
-
         .grp.open .chev {
-            transform: rotate(90deg)
+            transform: rotate(90deg);
         }
-
         .grp-name {
             flex: 1;
             min-width: 0;
             word-break: break-all;
             font-weight: 600;
-            font-size: 14px
+            font-size: 14px;
         }
-
         .grp-count {
             font-size: 11px;
+            font-weight: 500;
             color: var(--sub);
             background: var(--bg);
             border-radius: 999px;
-            padding: 2px 8px;
-            flex-shrink: 0
+            padding: 2px 10px;
+            flex-shrink: 0;
         }
-
         .grp-body {
             display: grid;
             grid-template-rows: 0fr;
-            transition: grid-template-rows .16s ease
+            transition: grid-template-rows .22s ease;
         }
-
         .grp.open .grp-body {
-            grid-template-rows: 1fr
+            grid-template-rows: 1fr;
         }
-
         .grp-inner {
-            overflow: hidden
+            overflow: hidden;
+            padding: 0 4px 4px;
         }
 
         .rule-row {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             padding: 10px 14px;
-            border-top: 1px solid var(--border)
+            border-top: 1px solid var(--border);
+            transition: background .12s;
         }
-
+        .rule-row:hover {
+            background: rgba(0, 0, 0, .015);
+        }
         .rule-name {
             flex: 1;
             min-width: 0;
             word-break: break-all;
-            font-size: 13px
+            font-size: 13px;
+            font-weight: 450;
         }
-
         .rule-sub {
             color: var(--sub);
-            font-size: 12px
+            font-size: 12px;
+            font-weight: 400;
         }
 
         .rule-add {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 4px;
-            margin: 10px 14px;
+            gap: 6px;
+            margin: 8px 14px 10px;
             padding: 9px 0;
-            border: 1px dashed var(--border);
-            border-radius: 10px;
+            border: 1.5px dashed var(--border);
+            border-radius: var(--radius-sm);
             color: var(--sub);
             font-size: 13px;
-            width: calc(100% - 28px)
+            font-weight: 500;
+            transition: all .15s;
+            width: calc(100% - 28px);
         }
-
         .rule-add:active {
-            opacity: .5
+            opacity: .5;
+            transform: scale(.97);
         }
-
+        .rule-add:hover {
+            border-color: var(--blue);
+            color: var(--blue);
+            background: var(--blue-light);
+        }
         .rule-add svg {
-            width: 14px;
-            height: 14px;
+            width: 16px;
+            height: 16px;
             stroke: currentColor;
             fill: none;
             stroke-width: 2;
-            stroke-linecap: round
+            stroke-linecap: round;
         }
 
         .icon-btn {
             padding: 6px;
             border-radius: 8px;
             color: var(--sub);
-            display: flex;
-            transition: transform .12s, background .12s
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform .12s, background .12s, color .15s;
+            flex-shrink: 0;
         }
-
+        .icon-btn:hover {
+            background: rgba(0, 0, 0, .05);
+        }
         .icon-btn.danger {
-            color: var(--red)
+            color: var(--sub);
         }
-
+        .icon-btn.danger:hover {
+            color: var(--red);
+            background: rgba(255, 59, 48, .08);
+        }
         .icon-btn:active {
             transform: scale(.85);
-            background: rgba(0, 0, 0, .06)
         }
-
         .icon-btn svg {
-            width: 16px;
-            height: 16px;
+            width: 17px;
+            height: 17px;
             stroke: currentColor;
             fill: none;
             stroke-width: 1.8;
             stroke-linecap: round;
-            stroke-linejoin: round
+            stroke-linejoin: round;
         }
 
+        /* ===== 子包样式 ===== */
+        .sub-group {
+            border-left: 2.5px solid rgba(91, 127, 255, .2);
+            margin: 4px 0 4px 10px;
+            padding-left: 12px;
+        }
+        .sub-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0 4px 4px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--sub);
+        }
+        .sub-label {
+            font-family: var(--mono);
+            font-weight: 500;
+            color: var(--fg);
+        }
+        .sub-badge {
+            background: var(--blue-light);
+            color: var(--blue);
+            font-size: 11px;
+            padding: 1px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+
+        /* ===== 空状态 ===== */
         .empty {
-            padding: 48px 20px;
+            padding: 56px 20px;
             text-align: center;
             color: var(--sub);
-            font-size: 13px;
-            line-height: 1.8
+            font-size: 14px;
+            line-height: 2;
+        }
+        .empty .empty-icon {
+            font-size: 40px;
+            display: block;
+            margin-bottom: 12px;
+            opacity: .5;
         }
 
+        /* ===== 分段控制器 ===== */
         .seg {
             display: flex;
-            background: rgba(118, 118, 128, .12);
-            border-radius: 10px;
-            padding: 2px;
-            gap: 2px
+            background: var(--bg);
+            border-radius: var(--radius-sm);
+            padding: 3px;
+            gap: 3px;
         }
-
         .seg button {
             flex: 1;
-            padding: 7px 0;
+            padding: 8px 0;
             border-radius: 8px;
             font-size: 13px;
-            transition: all .15s
+            font-weight: 500;
+            transition: all var(--transition);
+            color: var(--sub);
         }
-
         .seg button.on {
-            background: #fff;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
+            background: var(--card);
+            box-shadow: 0 1px 6px rgba(0, 0, 0, .10);
             font-weight: 600;
-            color: var(--blue)
+            color: var(--blue);
         }
-
-        .field {
-            display: flex;
-            gap: 8px;
-            align-items: center
-        }
-
-        .field input,
-        .modal input {
-            background: var(--bg);
-            border: 1px solid transparent;
-            border-radius: 10px;
-            padding: 9px 12px;
-            font-size: 14px;
-            outline: none;
-            font-family: inherit;
-            color: var(--fg);
-            transition: border-color .15s, background .15s
-        }
-
-        .field input {
-            flex: 1;
-            min-width: 0
-        }
-
-        .field .btn {
-            flex-shrink: 0
+        .seg button:active {
+            opacity: .6;
         }
 
         .hint {
             font-size: 12px;
             color: var(--sub);
-            margin-top: 8px;
-            line-height: 1.5;
-            word-break: break-all
+            margin-top: 10px;
+            line-height: 1.6;
+            word-break: break-all;
+        }
+        .hint.warn {
+            color: var(--orange);
         }
 
-        @keyframes fadeIn {
-            from {
-                opacity: 0
-            }
-
-            to {
-                opacity: 1
-            }
+        /* ===== 表单 ===== */
+        .field {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .field input,
+        .modal input {
+            background: var(--bg);
+            border: 1px solid transparent;
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            font-size: 14px;
+            transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
+            width: 100%;
+        }
+        .field input {
+            flex: 1;
+            min-width: 0;
+        }
+        .field input:focus,
+        .modal input:focus {
+            border-color: var(--blue);
+            background: #fff;
+            box-shadow: 0 0 0 3px rgba(91, 127, 255, .10);
+        }
+        .field .btn {
+            flex-shrink: 0;
         }
 
-        @keyframes popIn {
-            from {
-                opacity: 0;
-                transform: scale(.94) translateY(8px)
-            }
-
-            to {
-                opacity: 1;
-                transform: none
-            }
-        }
-
+        /* ===== 模态框 ===== */
         .modal-bg {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, .35);
+            background: rgba(0, 0, 0, .30);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
             display: flex;
             align-items: center;
             justify-content: center;
             z-index: 100;
-            animation: fadeIn .12s
+            animation: fadeIn .15s;
+            padding: 20px;
         }
-
         .modal {
             background: var(--card);
-            border-radius: 18px;
-            padding: 20px;
-            width: 90%;
-            max-width: 320px;
+            border-radius: 20px;
+            padding: 24px 22px;
+            width: 100%;
+            max-width: 380px;
             max-height: 88vh;
             overflow: auto;
-            animation: popIn .16s cubic-bezier(.2, 1.1, .4, 1)
+            animation: popIn .2s cubic-bezier(.2, 1.1, .4, 1);
+            box-shadow: var(--sh-lg);
         }
-
+        .modal::-webkit-scrollbar {
+            width: 3px;
+        }
+        .modal::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, .12);
+            border-radius: 8px;
+        }
         .modal h3 {
-            font-size: 16px;
-            margin-bottom: 14px;
-            text-align: center
+            font-size: 17px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            text-align: center;
         }
-
         .modal input {
             width: 100%;
-            margin-bottom: 10px
+            margin-bottom: 10px;
         }
-
         .modal input[readonly] {
             background: var(--card);
-            color: var(--sub)
+            color: var(--sub);
+            cursor: default;
         }
-
-        .field input:focus,
-        .modal input:focus {
-            border-color: var(--blue);
-            background: #fff
-        }
-
         .modal-actions {
             display: flex;
-            gap: 8px;
-            margin-top: 6px
+            gap: 10px;
+            margin-top: 14px;
         }
-
         .modal-actions button {
             flex: 1;
-            padding: 9px 0;
+            padding: 10px 0;
             border-radius: 999px;
-            font-size: 14px
+            font-size: 14px;
+            font-weight: 600;
+            transition: all .15s;
+        }
+        .modal-actions button:active {
+            transform: scale(.95);
         }
 
+        /* ===== 核心选择器 (弹窗内) ===== */
         .core-chips {
             display: flex;
             gap: 6px;
             margin-bottom: 10px;
-            flex-wrap: wrap
+            flex-wrap: wrap;
         }
-
         .core-chips button {
-            padding: 7px 12px;
+            padding: 6px 14px;
             border-radius: 999px;
             font-size: 12px;
-            background: rgba(118, 118, 128, .12);
-            transition: all .15s
+            font-weight: 500;
+            background: var(--bg);
+            color: var(--sub);
+            transition: all .15s;
+            border: 1.5px solid transparent;
         }
-
+        .core-chips button:active {
+            transform: scale(.93);
+        }
         .core-chips button.on {
             background: var(--blue);
             color: #fff;
             font-weight: 600;
-            transform: scale(1.05)
+            border-color: var(--blue);
+            box-shadow: 0 2px 8px rgba(91, 127, 255, .3);
+        }
+        .core-chips button[data-core="e-core"].on {
+            background: var(--green);
+            border-color: var(--green);
+            box-shadow: 0 2px 8px rgba(0, 184, 148, .3);
+        }
+        .core-chips button[data-core="p-core"].on {
+            background: var(--blue);
+            border-color: var(--blue);
+            box-shadow: 0 2px 8px rgba(91, 127, 255, .3);
+        }
+        .core-chips button[data-core="hp-core"].on {
+            background: var(--purple);
+            border-color: var(--purple);
+            box-shadow: 0 2px 8px rgba(108, 92, 231, .3);
+        }
+        .core-chips button[data-core="all-core"].on {
+            background: var(--gray);
+            border-color: var(--gray);
+            box-shadow: 0 2px 8px rgba(99, 110, 114, .3);
         }
 
+        /* ===== 树形行 (弹窗内) ===== */
+        .tree-row {
+            margin-bottom: 12px;
+        }
+        .tree-row.branch {
+            border-left: 2.5px solid rgba(91, 127, 255, .2);
+            padding-left: 12px;
+        }
+        .tr-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .tr-head input {
+            flex: 1;
+            min-width: 0;
+            margin-bottom: 0;
+        }
+        .tr-tag {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--fg);
+        }
+        .tr-sub {
+            font-size: 11px;
+            color: var(--sub);
+        }
+        .rr-custom {
+            margin-top: 4px;
+        }
+
+        /* ===== 建议下拉 ===== */
         .sg-wrap {
-            position: relative
+            position: relative;
         }
-
         .sg-box {
             position: absolute;
             left: 0;
             right: 0;
             top: calc(100% + 4px);
             background: var(--card);
-            border-radius: 10px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
-            max-height: 172px;
+            border-radius: var(--radius-sm);
+            box-shadow: var(--sh-lg);
+            max-height: 180px;
             overflow: auto;
-            touch-action: pan-y;
-            z-index: 10;
-            animation: fadeIn .1s
+            z-index: 20;
+            animation: fadeIn .1s;
+            border: 1px solid var(--border);
         }
-
+        .sg-box::-webkit-scrollbar {
+            width: 3px;
+        }
+        .sg-box::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, .1);
+            border-radius: 8px;
+        }
         .sg-item {
-            padding: 9px 12px;
+            padding: 10px 14px;
             font-size: 13px;
-            word-break: break-all
+            word-break: break-all;
+            cursor: pointer;
+            transition: background .1s;
         }
-
         .sg-item.hl,
-        .sg-item:active {
-            background: rgba(0, 122, 255, .08)
+        .sg-item:hover {
+            background: var(--blue-light);
         }
 
-        .tree-row {
-            margin-bottom: 12px
-        }
-
-        .tree-row.branch {
-            border-left: 2px solid rgba(0, 122, 255, .25);
-            padding-left: 10px
-        }
-
-        .tr-head {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin-bottom: 6px
-        }
-
-        .tr-head input {
-            flex: 1;
-            width: auto;
-            min-width: 0;
-            margin-bottom: 0
-        }
-
-        .tr-tag {
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--fg)
-        }
-
-        .tr-sub {
-            font-size: 11px;
-            color: var(--sub)
-        }
-
-        #mr-rows .core-chips {
-            margin-bottom: 6px
-        }
-
-        #mr-rows .rr-custom {
-            margin-bottom: 0
-        }
-
-        #mr-addrow {
-            width: 100%;
-            margin: 0 0 4px
-        }
-
-        #toast {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, .75);
-            color: #fff;
-            padding: 10px 20px;
-            border-radius: 12px;
-            font-size: 14px;
-            z-index: 200;
-            opacity: 0;
-            transition: opacity .15s;
-            pointer-events: none;
-            max-width: 80vw;
-            word-break: break-all
-        }
-
-        #toast.show {
-            opacity: 1
-        }
-
-        .entry {
-            display: flex;
-            width: 100%;
-            align-items: center;
-            gap: 8px;
-            padding: 11px 0;
-            font-size: 14px
-        }
-
-        .entry svg {
-            margin-left: auto;
-            width: 14px;
-            height: 14px;
-            stroke: var(--sub);
-            fill: none;
-            stroke-width: 2;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-            flex-shrink: 0
-        }
-
-        .entry:active {
-            opacity: .5
-        }
-
+        /* ===== 关于页 ===== */
         .page {
             position: absolute;
             inset: 0;
@@ -777,30 +956,29 @@
             display: flex;
             flex-direction: column;
             transform: translateX(100%);
-            transition: transform .18s ease;
-            pointer-events: none
+            transition: transform .22s cubic-bezier(.25, .46, .45, .94);
+            pointer-events: none;
         }
-
         .page.show {
             transform: none;
-            pointer-events: auto
+            pointer-events: auto;
         }
-
         .navbar {
             display: flex;
             align-items: center;
             justify-content: center;
             position: relative;
-            height: 44px;
+            height: var(--nav-h);
             flex-shrink: 0;
-            border-bottom: 1px solid var(--border)
+            background: rgba(255, 255, 255, .78);
+            backdrop-filter: blur(20px) saturate(1.6);
+            -webkit-backdrop-filter: blur(20px) saturate(1.6);
+            border-bottom: 1px solid var(--border);
         }
-
         .nav-title {
             font-size: 16px;
-            font-weight: 600
+            font-weight: 600;
         }
-
         .back {
             position: absolute;
             left: 6px;
@@ -811,9 +989,10 @@
             gap: 2px;
             color: var(--blue);
             font-size: 15px;
-            padding: 0 8px
+            padding: 0 10px;
+            font-weight: 500;
+            transition: opacity .15s;
         }
-
         .back svg {
             width: 22px;
             height: 22px;
@@ -821,263 +1000,311 @@
             fill: none;
             stroke-width: 2.2;
             stroke-linecap: round;
-            stroke-linejoin: round
+            stroke-linejoin: round;
         }
-
         .back:active {
-            opacity: .5
+            opacity: .5;
         }
-
         .page .panel {
             flex: 1;
-            overflow: auto
+            overflow: auto;
         }
 
         .hero {
             text-align: center;
-            padding: 24px 16px
+            padding: 28px 16px 20px;
         }
-
         .logo {
-            width: 72px;
-            height: 72px;
-            border-radius: 18px;
-            background: linear-gradient(135deg, #EFFFFE, #0ABBB5);
+            width: 76px;
+            height: 76px;
+            border-radius: 20px;
+            background: linear-gradient(135deg, #e8f8f3, #00b894);
             display: flex;
             align-items: center;
             justify-content: center;
-            margin: 0 auto 10px;
-            box-shadow: 0 8px 20px rgba(10, 187, 181, .3)
+            margin: 0 auto 12px;
+            box-shadow: 0 8px 28px rgba(0, 184, 148, .30);
         }
-
         .logo svg {
-            width: 40px;
-            height: 40px;
+            width: 38px;
+            height: 38px;
             stroke: #fff;
             fill: none;
             stroke-width: 1.8;
             stroke-linecap: round;
-            stroke-linejoin: round
+            stroke-linejoin: round;
         }
-
         .hero .name {
-            font-size: 20px;
-            font-weight: 700
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -.3px;
         }
-
         .hero .ver {
             font-size: 13px;
             color: var(--sub);
             margin-top: 2px;
-            font-family: var(--mono)
+            font-family: var(--mono);
         }
 
         .text {
             font-size: 13px;
             line-height: 1.8;
             color: #3a3a3c;
-            word-break: break-all
+            word-break: break-all;
         }
-
         .text ol {
-            padding-left: 18px;
+            padding-left: 20px;
             display: grid;
-            gap: 4px
+            gap: 4px;
+        }
+        .text ol li::marker {
+            color: var(--blue);
+            font-weight: 600;
         }
 
-        .sub-group {
-            border-left: 2px solid rgba(0, 122, 255, .2);
-            margin: 4px 0 4px 14px;
-            padding-left: 10px;
+        /* ===== Toast ===== */
+        #toast {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(28, 28, 30, .82);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 14px;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 200;
+            opacity: 0;
+            transition: opacity .2s ease;
+            pointer-events: none;
+            max-width: 84vw;
+            word-break: break-all;
+            text-align: center;
+            box-shadow: var(--sh-lg);
+        }
+        #toast.show {
+            opacity: 1;
         }
 
-        .sub-head {
+        /* ===== 入口按钮 (设置页) ===== */
+        .entry {
+            display: flex;
+            width: 100%;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 0;
+            font-size: 14px;
+            font-weight: 450;
+            transition: opacity .15s;
+            border-top: 1px solid var(--border);
+        }
+        .entry:first-child {
+            border-top: none;
+        }
+        .entry svg {
+            margin-left: auto;
+            width: 16px;
+            height: 16px;
+            stroke: var(--sub);
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            flex-shrink: 0;
+        }
+        .entry:active {
+            opacity: .5;
+        }
+
+        /* ===== 杂项 ===== */
+        .mt-1 {
+            margin-top: 8px;
+        }
+        .gap-1 {
+            gap: 6px;
+        }
+        .flex-center {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 6px 0 4px 6px;
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--sub);
         }
 
-        .sub-label {
-            font-family: var(--mono);
+        /* ===== 响应式微调 ===== */
+        @media(max-width:480px) {
+            .grid2 {
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+            .grid3 {
+                grid-template-columns: 1fr 1fr;
+            }
+            .card {
+                padding: 14px 16px;
+            }
+            .panel {
+                padding: 12px 12px 20px;
+            }
+            .modal {
+                padding: 20px 16px;
+                max-width: 96%;
+            }
+            .core-grid {
+                grid-template-columns: 1fr;
+            }
+            .field {
+                flex-wrap: wrap;
+            }
+            .field .btn {
+                width: 100%;
+                justify-content: center;
+            }
+            .bar {
+                flex-wrap: wrap;
+            }
+            .bar .btn {
+                width: 100%;
+                justify-content: center;
+            }
+            .sub-group {
+                margin-left: 4px;
+                padding-left: 8px;
+            }
         }
-
-        .sub-badge {
-            background: rgba(0, 122, 255, .13);
-            color: #0062cc;
-            font-size: 11px;
-            padding: 1px 6px;
-            border-radius: 4px;
-            margin-right: 4px;
-            font-weight: 600;
+        @media(min-width:600px) {
+            .core-grid {
+                grid-template-columns: 1fr 1fr;
+            }
         }
-    
-/* UI refinement: display-only, no backend/API behavior changed */
-:root{--radius-lg:18px;--radius-md:14px}
-.card,.panel,.grp,.sub-group,.modal{border-radius:var(--radius-lg)!important}
-.card{box-shadow:0 4px 18px rgba(0,0,0,.06)}
-.grp-head,.sub-head{min-height:48px}
-.core-chips{gap:8px!important}
-.core-chips button{border-radius:12px!important;padding:8px 13px!important;font-weight:600;transition:transform .15s ease,background .15s ease,box-shadow .15s ease}
-.core-chips button:active{transform:scale(.96)}
-.chip{border-radius:999px!important;padding:5px 10px!important;font-weight:600}
-.icon-btn{border-radius:10px!important}
-button{transition:transform .12s ease,opacity .12s ease}
-button:active{transform:scale(.98)}
-</style>
+    </style>
 </head>
 
 <body>
     <div class="app">
         <main class="main">
 
+            <!-- ===== 状态面板 ===== -->
             <section id="tab-status" class="panel">
                 <div class="card">
-                    <div class="card-title">运行状态</div>
+                    <div class="card-title">⚙️ 运行状态</div>
                     <div class="row"><span class="label">工作模式</span><span id="s-mode" class="badge proc">-</span></div>
-                    <div class="row"><span class="label">运行时长</span><span class="value" id="s-up">-</span></div>
-                    <div class="row"><span class="label">版本</span><span class="value" id="s-ver">-</span></div>
+                    <div class="row"><span class="label">运行时长</span><span class="value mono" id="s-up">-</span></div>
+                    <div class="row"><span class="label">版本</span><span class="value mono" id="s-ver">-</span></div>
                 </div>
+
                 <div class="card">
-                    <div class="card-title">规则</div>
+                    <div class="card-title">📋 规则</div>
                     <div class="grid2">
-                        <div class="stat">
-                            <div class="num" id="s-rules">0</div>
-                            <div class="lbl">规则数量</div>
-                        </div>
-                        <div class="stat">
-                            <div class="num" id="s-pkgs">0</div>
-                            <div class="lbl">覆盖应用</div>
-                        </div>
+                        <div class="stat"><div class="num" id="s-rules">0</div><div class="lbl">规则数量</div></div>
+                        <div class="stat"><div class="num" id="s-pkgs">0</div><div class="lbl">覆盖应用</div></div>
                     </div>
-                    <div class="hint" id="s-pf" hidden style="color:var(--orange)"></div>
+                    <div class="hint warn" id="s-pf" hidden style="color:var(--orange)"></div>
                 </div>
+
                 <div class="card">
-                    <div class="card-title">进程</div>
-                    <div class="grid2">
-                        <div class="stat">
-                            <div class="num" id="s-hit">0</div>
-                            <div class="lbl">命中应用</div>
-                        </div>
-                        <div class="stat">
-                            <div class="num" id="s-threads">0</div>
-                            <div class="lbl">绑定线程</div>
-                        </div>
-                        <div class="stat">
-                            <div class="num" id="s-procs">0</div>
-                            <div class="lbl">系统进程</div>
-                        </div>
-                        <div class="stat">
-                            <div class="num" id="s-cores">0</div>
-                            <div class="lbl">CPU 核心</div>
-                        </div>
+                    <div class="card-title">📊 进程</div>
+                    <div class="grid3">
+                        <div class="stat"><div class="num" id="s-hit">0</div><div class="lbl">命中应用</div></div>
+                        <div class="stat"><div class="num" id="s-threads">0</div><div class="lbl">绑定线程</div></div>
+                        <div class="stat"><div class="num" id="s-procs">0</div><div class="lbl">系统进程</div></div>
+                        <div class="stat"><div class="num" id="s-cores">0</div><div class="lbl">CPU 核心</div></div>
                     </div>
                 </div>
+
                 <div class="card" id="s-card-cores">
-                    <div class="card-title">核心分层</div>
-                    <div class="row"><span class="label">e-core 小核</span><span class="chip e" id="s-ecore">-</span>
+                    <div class="card-title">🧠 核心分层</div>
+                    <div class="core-grid">
+                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--green)"></span>小核</span><span class="core-val chip e sm" id="s-ecore">-</span></div>
+                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--blue)"></span>中核</span><span class="core-val chip p sm" id="s-pcore">-</span></div>
+                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--purple)"></span>大核</span><span class="core-val chip h sm" id="s-hcore">-</span></div>
+                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--gray)"></span>全部</span><span class="core-val chip c sm" id="s-all">-</span></div>
                     </div>
-                    <div class="row" id="s-row-pcore"><span class="label">p-core 中核</span><span class="chip p"
-                            id="s-pcore">-</span></div>
-                    <div class="row"><span class="label">hp-core 大核</span><span class="chip h" id="s-hcore">-</span>
-                    </div>
-                    <div class="row"><span class="label">全部核心</span><span class="chip c" id="s-all">-</span></div>
                 </div>
             </section>
 
+            <!-- ===== 规则面板 ===== -->
             <section id="tab-rules" class="panel" hidden>
                 <div class="bar">
-                    <input id="r-filter" placeholder="共 0 个应用">
+                    <input id="r-filter" placeholder="🔍 搜索应用包名…">
                     <button class="btn" id="r-add">＋ 添加</button>
                 </div>
                 <div id="r-list"></div>
             </section>
 
+            <!-- ===== 设置面板 ===== -->
             <section id="tab-settings" class="panel" hidden>
                 <div class="card">
-                    <div class="card-title">工作模式</div>
+                    <div class="card-title">🎯 工作模式</div>
                     <div class="seg" id="seg-mode">
                         <button data-mode="0">自动</button>
                         <button data-mode="1">eBPF</button>
                         <button data-mode="2">Proc</button>
                     </div>
                     <div class="hint" id="c-mode-active">当前生效: -</div>
-                    <div class="hint" id="c-ebpf-hint" style="color:var(--orange)" hidden>此设备内核不支持 eBPF，强制 eBPF 时将保持
-                        Proc 轮询</div>
+                    <div class="hint warn" id="c-ebpf-hint" hidden>⚠️ 此设备内核不支持 eBPF，强制 eBPF 时将保持 Proc 轮询</div>
                 </div>
+
                 <div class="card">
-                    <div class="card-title">扫描参数</div>
-                    <div class="field"><input id="c-interval" type="number" min="1" max="3600"><button class="btn"
-                            id="c-interval-save">保存</button></div>
+                    <div class="card-title">⏱️ 扫描参数</div>
+                    <div class="field"><input id="c-interval" type="number" min="1" max="3600"><button class="btn" id="c-interval-save">保存</button></div>
                     <div class="hint">检查间隔（秒），影响 /proc 扫描与配置轮询频率</div>
                 </div>
+
                 <div class="card">
-                    <div class="card-title">cpuset</div>
+                    <div class="card-title">📁 cpuset</div>
                     <div class="field"><input id="c-cpuset"><button class="btn" id="c-cpuset-save">保存</button></div>
-                    <div class="hint">BASE_CPUSET 目录名（当前<span id="c-cpuset-on">未知</span>），修改后规则将重建亲和性目录并重新加载</div>
+                    <div class="hint">BASE_CPUSET 目录名（当前 <span id="c-cpuset-on">未知</span>），修改后规则将重建亲和性目录并重新加载</div>
                 </div>
+
                 <div class="card">
-                    <div class="card-title">规则配置文件</div>
+                    <div class="card-title">📄 规则配置文件</div>
                     <div class="field"><input id="c-file"><button class="btn" id="c-file-save">保存</button></div>
                     <div class="hint">修改后立即迁移监听并加载新文件，原文件保留</div>
                 </div>
-                <div class="card">
-                    <div class="card-title">关于</div>
-                    <button class="entry" id="c-about">关于 AppOpt<svg viewBox="0 0 24 24">
-                            <path d="M9 6l6 6-6 6" />
-                        </svg></button>
-                </div>
 
+                <div class="card">
+                    <div class="card-title">ℹ️ 关于</div>
+                    <button class="entry" id="c-about">关于 AppOpt <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+                </div>
             </section>
 
         </main>
+
+        <!-- ===== 底部标签栏 ===== -->
         <nav class="tabbar">
-            <button class="tab active" data-tab="status"><svg viewBox="0 0 24 24">
-                    <path d="M4 16a8 8 0 0 1 16 0" />
-                    <path d="M12 16L16 12" />
-                    <circle cx="12" cy="16" r="1.2" fill="currentColor" stroke="none" />
-                    <path d="M6 20h12" />
-                </svg>状态</button>
-            <button class="tab" data-tab="rules"><svg viewBox="0 0 24 24">
-                    <path d="M8 6h13M8 12h13M8 18h13" />
-                    <circle cx="4" cy="6" r="1" fill="currentColor" stroke="none" />
-                    <circle cx="4" cy="12" r="1" fill="currentColor" stroke="none" />
-                    <circle cx="4" cy="18" r="1" fill="currentColor" stroke="none" />
-                </svg>规则</button>
-            <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24">
-                    <path d="M5 21V9M12 21V3M19 21v-8" />
-                    <circle cx="5" cy="6" r="2" />
-                    <circle cx="12" cy="9" r="2" />
-                    <circle cx="19" cy="10" r="2" />
-                </svg>设置</button>
+            <button class="tab active" data-tab="status">
+                <svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 0 1 16 0"/><path d="M12 16L16 12"/><circle cx="12" cy="16" r="1.2" fill="currentColor" stroke="none"/><path d="M6 20h12"/></svg>
+                状态
+            </button>
+            <button class="tab" data-tab="rules">
+                <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+                规则
+            </button>
+            <button class="tab" data-tab="settings">
+                <svg viewBox="0 0 24 24"><path d="M5 21V9M12 21V3M19 21v-8"/><circle cx="5" cy="6" r="2"/><circle cx="12" cy="9" r="2"/><circle cx="19" cy="10" r="2"/></svg>
+                设置
+            </button>
         </nav>
 
+        <!-- ===== 关于页 ===== -->
         <section id="page-about" class="page">
             <div class="navbar">
-                <button class="back" id="about-back"><svg viewBox="0 0 24 24">
-                        <path d="M15 6l-6 6 6 6" />
-                    </svg>设置</button>
+                <button class="back" id="about-back"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>设置</button>
                 <span class="nav-title">关于</span>
             </div>
             <div class="panel">
-                <div class="card hero">
-                    <div class="logo"><svg viewBox="0 0 24 24">
-                            <path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" />
-                            <rect x="7" y="7" width="10" height="10" rx="2" />
-                        </svg></div>
+                <div class="card hero" style="animation-delay:.05s">
+                    <div class="logo"><svg viewBox="0 0 24 24"><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2"/><rect x="7" y="7" width="10" height="10" rx="2"/></svg></div>
                     <div class="name">AppOpt</div>
                     <div class="ver" id="a-ver">v?</div>
                 </div>
-                <div class="card">
-                    <div class="card-title">简介</div>
-                    <p class="text">AppOpt 是一款 Android 应用 CPU 亲和性管理工具。基于规则配置文件，将指定应用的进程与线程绑定到合适的 CPU
-                        核心（小核省电、大核高性能），配置保存后即时热加载，无需重启应用。</p>
+                <div class="card" style="animation-delay:.08s">
+                    <div class="card-title">📖 简介</div>
+                    <p class="text">AppOpt 是一款 Android 应用 CPU 亲和性管理工具。基于规则配置文件，将指定应用的进程与线程绑定到合适的 CPU 核心（小核省电、大核高性能），配置保存后即时热加载，无需重启应用。</p>
                 </div>
-                <div class="card">
-                    <div class="card-title">使用说明</div>
+                <div class="card" style="animation-delay:.11s">
+                    <div class="card-title">📌 使用说明</div>
                     <div class="text">
                         <ol>
                             <li>规则页点击「添加」，输入应用包名，可同时配置包级默认（可选）与多条线程规则后一次保存</li>
@@ -1087,23 +1314,21 @@ button:active{transform:scale(.98)}
                         </ol>
                     </div>
                 </div>
-                <div class="card">
-                    <div class="card-title">作者</div>
+                <div class="card" style="animation-delay:.14s">
+                    <div class="card-title">👤 作者</div>
                     <div class="row"><span class="label">作者</span><span class="value">Suto</span></div>
-                    <div class="row"><span class="label">主页</span><span class="value mono">http://appopt.suto.top</span>
-                    </div>
+                    <div class="row"><span class="label">主页</span><span class="value mono">http://appopt.suto.top</span></div>
                 </div>
             </div>
         </section>
 
     </div>
 
+    <!-- ===== 规则编辑弹窗 ===== -->
     <div id="modal-rule" class="modal-bg" hidden>
         <div class="modal">
             <h3 id="mr-title">添加应用</h3>
-            <div class="sg-wrap"><input id="mr-pkg" placeholder="输入应用包名">
-                <div class="sg-box" id="sg-pkg" hidden></div>
-            </div>
+            <div class="sg-wrap"><input id="mr-pkg" placeholder="输入应用包名"><div class="sg-box" id="sg-pkg" hidden></div></div>
             <div id="mr-rows"></div>
             <button class="rule-add" id="mr-addrow" hidden>＋ 线程规则</button>
             <div class="modal-actions">
@@ -1113,46 +1338,110 @@ button:active{transform:scale(.98)}
         </div>
     </div>
 
+    <!-- ===== 确认弹窗 ===== -->
     <div id="modal-confirm" class="modal-bg" hidden>
         <div class="modal">
             <h3 id="mc-title">删除规则</h3>
-            <p class="hint" id="mc-msg" style="text-align:center;font-size:13px;color:var(--fg)"></p>
+            <p class="hint" id="mc-msg" style="text-align:center;font-size:14px;color:var(--fg);font-weight:500"></p>
             <div class="modal-actions">
                 <button class="btn-outline" id="mc-cancel">取消</button>
-                <button class="btn" id="mc-ok" style="background:var(--red)">删除</button>
+                <button class="btn btn-danger" id="mc-ok">删除</button>
             </div>
         </div>
     </div>
 
+    <!-- ===== Toast ===== -->
     <div id="toast"></div>
+
     <script>
+        // ============================================================
+        //  工具函数
+        // ============================================================
         const $ = id => document.getElementById(id);
         const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        function fmtUp(s) { s = +s || 0; const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d > 0 ? d + '天' + h + '小时' : h > 0 ? h + '小时' + m + '分' : m > 0 ? m + '分' : '刚刚' }
+
+        function fmtUp(s) {
+            s = +s || 0;
+            const d = Math.floor(s / 86400),
+                h = Math.floor(s % 86400 / 3600),
+                m = Math.floor(s % 3600 / 60);
+            return d > 0 ? d + '天' + h + '小时' : h > 0 ? h + '小时' + m + '分' : m > 0 ? m + '分' : '刚刚';
+        }
+
         const modeLabel = m => m === 'ebpf' ? 'eBPF 事件驱动' : 'Proc 轮询';
+
+        // ============================================================
+        //  API
+        // ============================================================
         async function api(path, body) {
-            const opts = body !== undefined ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {};
+            const opts = body !== undefined ? {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            } : {};
             const r = await fetch(path, opts);
             const d = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(d.err || ('HTTP ' + r.status));
             return d;
         }
-        function toast(m) { const t = $('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), 1600) }
 
-        let activeTab = 'status', statTimer = null;
-        document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
-            const t = b.dataset.tab;
-            if (t === activeTab) return;
-            activeTab = t;
-            document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
-            ['status', 'rules', 'settings'].forEach(n => $('tab-' + n).hidden = n !== t);
-            if (t === 'status') startStat(); else stopStat();
-            if (t === 'rules') loadRules();
-            if (t === 'settings') loadCfg();
+        function toast(m) {
+            const t = $('toast');
+            t.textContent = m;
+            t.classList.add('show');
+            clearTimeout(t._tm);
+            t._tm = setTimeout(() => t.classList.remove('show'), 1600);
+        }
+
+        // ============================================================
+        //  核心类型映射 (英文 → 中文)
+        // ============================================================
+        const CORE_NAMES = {
+            'e-core': '小核',
+            'p-core': '中核',
+            'hp-core': '大核',
+            'all-core': '全部'
+        };
+        const CORE_KEYS = ['e-core', 'p-core', 'hp-core'];
+        const CORE_ALL = ['e-core', 'p-core', 'hp-core'];
+
+        function coreDisplay(spec) {
+            if (spec === 'all-core') return '全部';
+            if (CORE_KEYS.includes(spec)) return CORE_NAMES[spec] || spec;
+            return spec;
+        }
+
+        // ============================================================
+        //  状态页
+        // ============================================================
+        let activeTab = 'status',
+            statTimer = null;
+
+        document.querySelectorAll('.tab').forEach(b => {
+            b.onclick = () => {
+                const t = b.dataset.tab;
+                if (t === activeTab) return;
+                activeTab = t;
+                document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
+                ['status', 'rules', 'settings'].forEach(n => $('tab-' + n).hidden = n !== t);
+                if (t === 'status') startStat();
+                else stopStat();
+                if (t === 'rules') loadRules();
+                if (t === 'settings') loadCfg();
+            };
         });
 
-        function startStat() { stopStat(); refreshStat(); statTimer = setInterval(refreshStat, 3000) }
-        function stopStat() { if (statTimer) { clearInterval(statTimer); statTimer = null } }
+        function startStat() { stopStat();
+            refreshStat();
+            statTimer = setInterval(refreshStat, 3000); }
+
+        function stopStat() { if (statTimer) { clearInterval(statTimer);
+                statTimer = null } }
+
+        let topoCores = null;
+
+        function topoOf(d) { return { e: d.e_core || '', p: d.p_core || '', hp: d.hp_core || '' }; }
+
         async function refreshStat() {
             if (document.hidden) return;
             try {
@@ -1171,22 +1460,50 @@ button:active{transform:scale(.98)}
                 $('s-threads').textContent = d.threads;
                 $('s-procs').textContent = d.total_procs;
                 $('s-cores').textContent = d.cores;
-                $('s-ecore').textContent = d.e_core || '无';
-                $('s-pcore').textContent = d.p_core || '无';
-                $('s-hcore').textContent = d.hp_core || '无';
-                $('s-all').textContent = d.all_core || '-';
+                // 核心分层 — 显示中文
+                const e = d.e_core || '无',
+                    p = d.p_core || '无',
+                    hp = d.hp_core || '无',
+                    all = d.all_core || '-';
+                $('s-ecore').textContent = e;
+                $('s-pcore').textContent = p;
+                $('s-hcore').textContent = hp;
+                $('s-all').textContent = all;
                 topoCores = topoOf(d);
                 const vis = semanticVisible();
                 $('s-card-cores').hidden = !vis.length;
-                $('s-row-pcore').hidden = !vis.includes('p-core');
-            } catch (e) { }
+            } catch (e) { /* 静默 */ }
         }
 
+        function semanticVisible() {
+            if (!topoCores) return CORE_KEYS;
+            const t = topoCores,
+                multi = t.e && t.hp && t.e !== t.hp;
+            return multi ? CORE_KEYS : [];
+        }
+
+        // ============================================================
+        //  规则页
+        // ============================================================
         let rulesData = [];
-        function chipCls(s) { return s === 'e-core' ? 'e' : s === 'p-core' ? 'p' : s === 'hp-core' ? 'h' : 'c' }
-        function chipHtml(s) { return `<span class="chip ${chipCls(s)}">${esc(s)}</span>` }
-        const ICO_EDIT = '<svg viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5z"/></svg>';
-        const ICO_TRASH = '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg>';
+
+        function chipCls(s) {
+            if (s === 'e-core') return 'e';
+            if (s === 'p-core') return 'p';
+            if (s === 'hp-core') return 'h';
+            if (s === 'all-core') return 'c';
+            return 'c';
+        }
+
+        function chipHtml(s) {
+            const label = coreDisplay(s);
+            return `<span class="chip ${chipCls(s)} sm">${esc(label)}</span>`;
+        }
+
+        const ICO_EDIT =
+            '<svg viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5z"/></svg>';
+        const ICO_TRASH =
+            '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg>';
 
         async function loadRules() {
             fetchTopo();
@@ -1194,88 +1511,83 @@ button:active{transform:scale(.98)}
                 const d = await api('/api/rules');
                 rulesData = d.rules || [];
                 renderRules();
-            } catch (e) { toast(e.message) }
+            } catch (e) { toast(e.message); }
         }
 
         function grpInner(g, gi) {
             let html = `
-<div class="grp-head">
-<svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-<span class="grp-name">${esc(g.pkg)}</span>
-<span class="grp-count">${(g.items ? g.items.length : 0) + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
-<button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
-<button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
-</div>
-<div class="grp-body"><div class="grp-inner">`;
+        <div class="grp-head">
+          <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          <span class="grp-name">${esc(g.pkg)}</span>
+          <span class="grp-count">${(g.items ? g.items.length : 0) + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
+          <button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
+          <button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
+        </div>
+        <div class="grp-body"><div class="grp-inner">`;
 
-            // 主包规则
             if (g.items) {
                 for (const it of g.items) {
                     const isPkgRule = !it.thread;
                     const displayName = isPkgRule ? '<span class="rule-sub">包级默认</span>' : esc(it.thread);
                     html += `
-<div class="rule-row">
-<span class="rule-name">${displayName}</span>
-${chipHtml(it.spec)}
-<button class="icon-btn" data-edit="main:${gi}:${it.thread || ''}" title="编辑">${ICO_EDIT}</button>
-<button class="icon-btn danger" data-del="main:${gi}:${it.thread || ''}" title="删除">${ICO_TRASH}</button>
-</div>`;
+            <div class="rule-row">
+              <span class="rule-name">${displayName}</span>
+              ${chipHtml(it.spec)}
+              <button class="icon-btn" data-edit="main:${gi}:${it.thread || ''}" title="编辑">${ICO_EDIT}</button>
+              <button class="icon-btn danger" data-del="main:${gi}:${it.thread || ''}" title="删除">${ICO_TRASH}</button>
+            </div>`;
                 }
             }
 
-            // 子包分组
             if (g.subs) {
                 for (const [sub, data] of Object.entries(g.subs)) {
-                    // 提取子包的包级规则（thread 为空）和线程规则
                     const pkgRule = data.items.find(it => !it.thread);
                     const subDisplay = sub.startsWith(':') ? sub : ':' + sub;
                     const threadRules = data.items.filter(it => it.thread);
                     const total = (pkgRule ? 1 : 0) + threadRules.length;
                     html += `
-<div class="sub-group">
-<div class="sub-head">
-<span class="sub-label">${esc(subDisplay)}</span>
-<span class="grp-count">${total}</span>
-<button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子包包级规则">${ICO_EDIT}</button>
-<button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子包">${ICO_TRASH}</button>
-</div >
-                        <div class="sub-inner">`;
-                    // 包级规则
+            <div class="sub-group">
+              <div class="sub-head">
+                <span class="sub-label">${esc(subDisplay)}</span>
+                <span class="grp-count">${total}</span>
+                <button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子包包级规则">${ICO_EDIT}</button>
+                <button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子包">${ICO_TRASH}</button>
+              </div>
+              <div class="sub-inner">`;
                     if (pkgRule) {
                         html += `
-<div class="rule-row">
-<span class="rule-name"><span class="rule-sub">包级默认</span></span>
-${chipHtml(pkgRule.spec)}
-<button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
-<button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
-</div>`;
+                <div class="rule-row">
+                  <span class="rule-name"><span class="rule-sub">包级默认</span></span>
+                  ${chipHtml(pkgRule.spec)}
+                  <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
+                  <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
+                </div>`;
                     } else {
-                        // 如果没有包级规则，显示一个占位，方便添加
                         html += `
-<div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">
-无包级规则，可编辑子包添加
-</div>`;
+                <div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">
+                  无包级规则，可编辑子包添加
+                </div>`;
                     }
-                    // 线程规则
                     for (const it of threadRules) {
                         html += `
-<div class="rule-row">
-<span class="rule-name">${esc(it.thread)}</span>
-${chipHtml(it.spec)}
-<button class="icon-btn" data-edit="sub:${gi}:${sub}:${it.thread}" title="编辑线程规则">${ICO_EDIT}</button>
-<button class="icon-btn danger" data-del="sub:${gi}:${sub}:${it.thread}" title="删除线程规则">${ICO_TRASH}</button>
-</div>`;
+                <div class="rule-row">
+                  <span class="rule-name">${esc(it.thread)}</span>
+                  ${chipHtml(it.spec)}
+                  <button class="icon-btn" data-edit="sub:${gi}:${sub}:${it.thread}" title="编辑线程规则">${ICO_EDIT}</button>
+                  <button class="icon-btn danger" data-del="sub:${gi}:${sub}:${it.thread}" title="删除线程规则">${ICO_TRASH}</button>
+                </div>`;
                     }
                     html += `
-                            <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>添加子包线程规则</button>
-                        </div></div > `;
+                <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包线程规则</button>
+              </div>
+            </div>`;
                 }
             }
 
             html += `
-                            <button class="rule-add" data-addthread="${gi}"> <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>添加线程规则</ >
-                                <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>添加子包</button>
-</div ></div > `;
+            <button class="rule-add" data-addthread="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加线程规则</button>
+            <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包</button>
+          </div></div>`;
             return html;
         }
 
@@ -1290,32 +1602,38 @@ ${chipHtml(it.spec)}
             let ref = box.firstChild;
             rulesData.forEach((g, gi) => {
                 let el = live.get(g.pkg);
-                if (!el) { el = document.createElement('div'); el.className = 'grp'; el.dataset.pkg = g.pkg }
+                if (!el) { el = document.createElement('div');
+                    el.className = 'grp';
+                    el.dataset.pkg = g.pkg; }
                 el.innerHTML = grpInner(g, gi);
                 el.hidden = !shown.has(gi);
                 if (el !== ref) box.insertBefore(el, ref);
                 ref = el.nextSibling;
             });
-            live.forEach((el, p) => { if (!pkgs.has(p)) el.remove() });
+            live.forEach((el, p) => { if (!pkgs.has(p)) el.remove(); });
             let tip = box.querySelector('.empty');
             if (!idx.length) {
-                if (!tip) { tip = document.createElement('div'); tip.className = 'empty'; box.appendChild(tip) }
-                tip.innerHTML = f ? '无匹配应用' : '暂无规则<br>点击右上角「添加」创建第一条规则';
+                if (!tip) { tip = document.createElement('div');
+                    tip.className = 'empty';
+                    box.appendChild(tip); }
+                tip.innerHTML = f ? '无匹配应用' : '<span class="empty-icon">📭</span>暂无规则<br>点击右上角「添加」创建第一条规则';
             } else tip?.remove();
         }
 
         $('r-filter').addEventListener('input', renderRules);
 
-        // 事件处理
+        // ============================================================
+        //  规则列表事件代理
+        // ============================================================
         $('r-list').addEventListener('click', e => {
             const ea = e.target.closest('[data-editapp]');
-            if (ea) { openRuleModal('edit-app', +ea.dataset.editapp); return }
+            if (ea) { openRuleModal('edit-app', +ea.dataset.editapp); return; }
             const dp = e.target.closest('[data-delpkg]');
-            if (dp) { delPkg(+dp.dataset.delpkg); return }
+            if (dp) { delPkg(+dp.dataset.delpkg); return; }
             const at = e.target.closest('[data-addthread]');
-            if (at) { openRuleModal('add-thread', +at.dataset.addthread); return }
+            if (at) { openRuleModal('add-thread', +at.dataset.addthread); return; }
             const as = e.target.closest('[data-addsub]');
-            if (as) { openRuleModal('add-sub', +as.dataset.addsub); return }
+            if (as) { openRuleModal('add-sub', +as.dataset.addsub); return; }
             const ast = e.target.closest('[data-addsubthread]');
             if (ast) {
                 const [gi, sub] = ast.dataset.addsubthread.split(':');
@@ -1323,67 +1641,50 @@ ${chipHtml(it.spec)}
                 return;
             }
             const head = e.target.closest('.grp-head');
-            if (head) { head.parentElement.classList.toggle('open'); return }
+            if (head) { head.parentElement.classList.toggle('open'); return; }
 
-            // 编辑规则
             const eb = e.target.closest('[data-edit]');
             if (eb) {
                 const parts = eb.dataset.edit.split(':');
                 const type = parts[0];
                 if (type === 'main') {
-                    const gi = +parts[1];
-                    const thread = parts[2] || '';
-                    if (thread === '') {
-                        // 主包包级规则
-                        openRuleModal('edit-pkg', gi);
-                    } else {
-                        // 主包线程规则
-                        openRuleModal('edit-thread', gi, '', thread);
-                    }
+                    const gi = +parts[1],
+                        thread = parts[2] || '';
+                    if (thread === '') openRuleModal('edit-pkg', gi);
+                    else openRuleModal('edit-thread', gi, '', thread);
                 } else if (type === 'sub') {
-                    const gi = +parts[1];
-                    const sub = parts[2];
-                    const thread = parts[3] || '';
-                    if (thread === '') {
-                        // 子包包级规则
-                        openRuleModal('edit-sub', gi, sub);
-                    } else {
-                        // 子包线程规则
-                        openRuleModal('edit-sub-thread', gi, sub, thread);
-                    }
+                    const gi = +parts[1],
+                        sub = parts[2],
+                        thread = parts[3] || '';
+                    if (thread === '') openRuleModal('edit-sub', gi, sub);
+                    else openRuleModal('edit-sub-thread', gi, sub, thread);
                 }
                 return;
             }
 
-            // 删除规则
             const db = e.target.closest('[data-del]');
             if (db) {
                 const parts = db.dataset.del.split(':');
                 const type = parts[0];
                 if (type === 'main') {
-                    const gi = +parts[1];
-                    const thread = parts[2] || '';
+                    const gi = +parts[1],
+                        thread = parts[2] || '';
                     const g = rulesData[gi];
                     const item = g.items.find(it => it.thread === thread);
-                    if (item) {
-                        confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: thread || '' });
-                    }
+                    if (item) confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: thread ||
+                            '' });
                 } else if (type === 'sub') {
-                    const gi = +parts[1];
-                    const sub = parts[2];
-                    const thread = parts[3] || '';
+                    const gi = +parts[1],
+                        sub = parts[2],
+                        thread = parts[3] || '';
                     const g = rulesData[gi];
                     const fullPkg = g.pkg + ':' + sub;
-                    if (thread) {
-                        confirmDel(`子包 :${sub} 的线程 ${thread}`, { pkg: fullPkg, thread: thread });
-                    } else {
-                        confirmDel(`子包 :${sub} 的包级规则`, { pkg: fullPkg, thread: '' });
-                    }
+                    if (thread) confirmDel(`子包 :${sub} 的线程 ${thread}`, { pkg: fullPkg, thread: thread });
+                    else confirmDel(`子包 :${sub} 的包级规则`, { pkg: fullPkg, thread: '' });
                 }
                 return;
             }
 
-            // 编辑子包（包级规则）
             const esb = e.target.closest('[data-editsub]');
             if (esb) {
                 const [gi, sub] = esb.dataset.editsub.split(':');
@@ -1391,7 +1692,6 @@ ${chipHtml(it.spec)}
                 return;
             }
 
-            // 删除整个子包
             const dsb = e.target.closest('[data-delsub]');
             if (dsb) {
                 const [gi, sub] = dsb.dataset.delsub.split(':');
@@ -1401,18 +1701,14 @@ ${chipHtml(it.spec)}
             }
         });
 
-        const CORE_KEYS = ['e-core', 'p-core', 'hp-core'];
-        let topoCores = null;
-        const topoOf = d => ({ e: d.e_core || '', p: d.p_core || '', hp: d.hp_core || '' });
+        // ============================================================
+        //  规则编辑弹窗
+        // ============================================================
         async function fetchTopo() {
-            if (!topoCores) try { const d = await api('/api/status'); topoCores = topoOf(d) } catch (e) { }
+            if (!topoCores) try { const d = await api('/api/status');
+                topoCores = topoOf(d); } catch (e) {}
         }
-        function semanticVisible() {
-            if (!topoCores) return CORE_KEYS;
-            const t = topoCores, multi = t.e && t.hp && t.e !== t.hp;
-            if (multi) return CORE_KEYS;
-            return [];
-        }
+
         function parseSpec(spec) {
             if (!spec || !spec.trim()) return { sem: [], all: false, custom: false, customVal: '' };
             const vis = semanticVisible();
@@ -1424,13 +1720,22 @@ ${chipHtml(it.spec)}
         }
 
         const mkRow = o => ({ thread: '', sem: [], all: false, custom: false, customVal: '', ...o });
+
         function specOf(r) {
             if (r.custom) return r.customVal.trim();
             if (r.all) return 'all-core';
             return r.sem.join(',');
         }
-        const CHIP_HTML = [['e-core', 'e-core 小核'], ['p-core', 'p-core 中核'], ['hp-core', 'hp-core 大核'], ['all-core', 'all-core 全部'], ['自定义', '自定义']]
-            .map(([c, t]) => `<button data-core="${c}" title="${t}">${c}</button>`).join('');
+
+        // 核心选择按钮 (中文)
+        const CHIP_BTNS = [
+            ['e-core', '🟢 小核'],
+            ['p-core', '🔵 中核'],
+            ['hp-core', '🟣 大核'],
+            ['all-core', '⚪ 全部'],
+            ['自定义', '✏️ 自定义']
+        ].map(([c, t]) => `<button data-core="${c}" title="${t}">${t}</button>`).join('');
+
         function applyRowTopo(el) {
             const vis = semanticVisible();
             el.querySelectorAll('.core-chips button').forEach(b => {
@@ -1438,31 +1743,40 @@ ${chipHtml(it.spec)}
                 b.hidden = c === '自定义' || c === 'all-core' ? !vis.length : !vis.includes(c);
             });
         }
+
         function updateRowChips(el, r) {
-            el.querySelectorAll('.core-chips button').forEach(b => b.classList.toggle('on', b.dataset.core === '自定义' ? r.custom : b.dataset.core === 'all-core' ? r.all : (!r.custom && !r.all && r.sem.includes(b.dataset.core))));
+            el.querySelectorAll('.core-chips button').forEach(b => {
+                const c = b.dataset.core;
+                const on = c === '自定义' ? r.custom :
+                    c === 'all-core' ? r.all :
+                    (!r.custom && !r.all && r.sem.includes(c));
+                b.classList.toggle('on', on);
+            });
             el.querySelector('.rr-custom').hidden = !r.custom;
         }
+
         let mrRows = [];
 
         function renderRows() {
-            const box = $('mr-rows'), tree = isTree();
+            const box = $('mr-rows'),
+                tree = isTree();
             box.innerHTML = mrRows.map((r, i) => {
                 if (r.pkgRow === true) {
                     return `<div class="tree-row" data-ri="${i}">
-                <div class="tr-head"><span class="tr-tag">包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
-                <div class="core-chips">${CHIP_HTML}</div>
+                <div class="tr-head"><span class="tr-tag">📦 包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
+                <div class="core-chips">${CHIP_BTNS}</div>
                 <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
-            </div>`;
+              </div>`;
                 } else {
                     return `<div class="tree-row branch" data-ri="${i}">
                 <div class="tr-head sg-wrap">
-                    <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
-                    <div class="sg-box" hidden></div>
-                    ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
+                  <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
+                  <div class="sg-box" hidden></div>
+                  ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
                 </div>
-                <div class="core-chips">${CHIP_HTML}</div>
+                <div class="core-chips">${CHIP_BTNS}</div>
                 <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
-            </div>`;
+              </div>`;
                 }
             }).join('');
 
@@ -1483,28 +1797,41 @@ ${chipHtml(it.spec)}
 
         $('mr-rows').addEventListener('click', e => {
             const del = e.target.closest('.rr-del');
-            if (del) { mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1); renderRows(); return }
+            if (del) { mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1);
+                renderRows(); return; }
             const b = e.target.closest('.core-chips button');
             if (!b) return;
-            const el = b.closest('[data-ri]'), r = mrRows[+el.dataset.ri], c = b.dataset.core;
-            if (c === '自定义') { r.custom = !r.custom; r.all = false }
-            else if (c === 'all-core') { r.all = !r.all; r.custom = false; if (!r.all) r.sem = [] }
-            else {
+            const el = b.closest('[data-ri]'),
+                r = mrRows[+el.dataset.ri],
+                c = b.dataset.core;
+            if (c === '自定义') { r.custom = !r.custom;
+                r.all = false; } else if (c === 'all-core') { r.all = !r.all;
+                r.custom = false; if (!r.all) r.sem = []; } else {
                 const base = r.custom || r.all ? [] : r.sem;
                 r.sem = base.includes(c) ? base.filter(x => x !== c) : [...base, c];
-                r.custom = false; r.all = false;
+                r.custom = false;
+                r.all = false;
             }
             updateRowChips(el, r);
         });
+
         $('mr-rows').addEventListener('input', e => {
             const r = mrRows[+e.target.closest('[data-ri]')?.dataset.ri];
             if (!r) return;
             if (e.target.classList.contains('rr-thread')) r.thread = e.target.value.trim();
             if (e.target.classList.contains('rr-custom')) r.customVal = e.target.value;
         });
-        $('mr-addrow').onclick = () => { mrRows.push(mkRow({})); renderRows(); const m = $('mr-addrow').closest('.modal'); m.scrollTop = m.scrollHeight };
 
-        let mrMode = 'add-pkg', mrOldThread = '', mrOldPkg = '', mrOldThreads = new Set(), mrHadPkgRule = false;
+        $('mr-addrow').onclick = () => { mrRows.push(mkRow({}));
+            renderRows(); const m = $('mr-addrow').closest('.modal');
+            m.scrollTop = m.scrollHeight; };
+
+        let mrMode = 'add-pkg',
+            mrOldThread = '',
+            mrOldPkg = '',
+            mrOldThreads = new Set(),
+            mrHadPkgRule = false;
+
         const isTree = () => mrMode === 'add-pkg' || mrMode === 'edit-app';
 
         async function openRuleModal(mode, gi, sub, thread) {
@@ -1516,16 +1843,13 @@ ${chipHtml(it.spec)}
             pkgInput.readOnly = !tree;
             $('mr-addrow').hidden = !tree;
 
-            console.log('openRuleModal called:', { mode, gi, sub, thread });
-
             if (mode === 'add-pkg') {
-                $('mr-title').textContent = '添加应用';
+                $('mr-title').textContent = '➕ 添加应用';
                 pkgInput.value = '';
                 pkgInput.readOnly = false;
                 mrRows = [mkRow({ pkgRow: true })];
             } else if (mode === 'edit-app') {
-                // 编辑整个应用（包含包级和所有线程）
-                $('mr-title').textContent = '编辑应用';
+                $('mr-title').textContent = '✏️ 编辑应用';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -1535,24 +1859,21 @@ ${chipHtml(it.spec)}
                 mrHadPkgRule = !!pkgItem;
                 mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
                 for (const it of g.items) {
-                    if (it.thread) {
-                        mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
-                    }
+                    if (it.thread) mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
                 }
             } else if (mode === 'edit-pkg') {
-                // 主包包级规则编辑
-                $('mr-title').textContent = '包级默认规则';
+                $('mr-title').textContent = '📦 包级默认规则';
                 pkgInput.value = rulesData[gi].pkg;
                 pkgInput.readOnly = true;
                 const item = rulesData[gi].items.find(it => !it.thread);
                 mrRows = [mkRow({ pkgRow: true, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-thread') {
-                $('mr-title').textContent = '添加线程规则';
+                $('mr-title').textContent = '🧵 添加线程规则';
                 pkgInput.value = rulesData[gi].pkg;
                 pkgInput.readOnly = true;
                 mrRows = [mkRow({})];
             } else if (mode === 'edit-thread') {
-                $('mr-title').textContent = '编辑线程规则';
+                $('mr-title').textContent = '🧵 编辑线程规则';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -1561,9 +1882,8 @@ ${chipHtml(it.spec)}
                 const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
-                console.log('edit-thread row:', row);
             } else if (mode === 'add-sub') {
-                $('mr-title').textContent = '添加子包';
+                $('mr-title').textContent = '📂 添加子包';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -1571,7 +1891,7 @@ ${chipHtml(it.spec)}
                 mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
                 toast('请输入 :子包名，如 :push，并选择 CPU');
             } else if (mode === 'edit-sub') {
-                $('mr-title').textContent = '编辑子包包级规则';
+                $('mr-title').textContent = '📂 编辑子包包级规则';
                 const g = rulesData[gi];
                 const fullPkg = g.pkg + ':' + sub;
                 pkgInput.value = fullPkg;
@@ -1581,13 +1901,13 @@ ${chipHtml(it.spec)}
                 const item = subData ? subData.items.find(it => !it.thread) : null;
                 mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub-thread') {
-                $('mr-title').textContent = '添加子包线程规则';
+                $('mr-title').textContent = '🧵 添加子包线程规则';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
                 mrRows = [mkRow({})];
             } else if (mode === 'edit-sub-thread') {
-                $('mr-title').textContent = '编辑子包线程规则';
+                $('mr-title').textContent = '🧵 编辑子包线程规则';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
@@ -1597,27 +1917,19 @@ ${chipHtml(it.spec)}
                 const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
-                console.log('edit-sub-thread row:', row);
             }
 
             renderRows();
-
-            // 对于编辑线程的模式，额外确保输入框值
             if (mode === 'edit-thread' || mode === 'edit-sub-thread') {
                 const input = document.querySelector('#mr-rows .rr-thread');
-                if (input && thread) {
-                    input.value = thread;
-                    if (mrRows.length > 0) {
-                        mrRows[0].thread = thread;
-                    }
-                }
+                if (input && thread) { input.value = thread; if (mrRows.length) mrRows[0].thread = thread; }
             }
-
             $('modal-rule').hidden = false;
         }
 
         $('r-add').onclick = () => openRuleModal('add-pkg');
         $('mr-cancel').onclick = () => $('modal-rule').hidden = true;
+
         let mrSaving = false;
 
         $('mr-save').onclick = async () => {
@@ -1627,7 +1939,7 @@ ${chipHtml(it.spec)}
             const jobs = [];
             for (const r of mrRows) {
                 const spec = specOf(r);
-                if (r.pkgRow) { if (spec) jobs.push({ thread: '', cpus: spec }); continue }
+                if (r.pkgRow) { if (spec) jobs.push({ thread: '', cpus: spec }); continue; }
                 if (!r.thread && !spec) continue;
                 if (!r.thread) return toast('请输入线程名');
                 if (!spec) return toast(r.custom ? '请输入自定义 CPU 范围，如 0-3' : '请选择 CPU 核心');
@@ -1636,12 +1948,9 @@ ${chipHtml(it.spec)}
             if (!jobs.length) return toast('请至少配置一条规则');
             mrSaving = true;
             try {
-                // === 子包操作 ===
                 if (mrMode === 'add-sub') {
                     let subInput = jobs[0].thread.trim();
-                    if (!subInput.startsWith(':')) {
-                        subInput = ':' + subInput;
-                    }
+                    if (!subInput.startsWith(':')) subInput = ':' + subInput;
                     const subName = subInput.substring(1).trim();
                     if (!subName) return toast('请输入子包名');
                     const fullPkg = pkg + ':' + subName;
@@ -1652,10 +1961,8 @@ ${chipHtml(it.spec)}
                     mrSaving = false;
                     return;
                 }
-
                 if (mrMode === 'edit-sub') {
-                    // 编辑子包包级规则
-                    const fullPkg = pkg; // 已经是完整包名
+                    const fullPkg = pkg;
                     await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus });
                     toast('子包已更新');
                     loadRules();
@@ -1663,9 +1970,8 @@ ${chipHtml(it.spec)}
                     mrSaving = false;
                     return;
                 }
-
                 if (mrMode === 'add-sub-thread') {
-                    const fullPkg = pkg; // 包含子包名
+                    const fullPkg = pkg;
                     for (const j of jobs) {
                         const threadName = j.thread.trim();
                         if (!threadName) return toast('请输入线程名');
@@ -1677,13 +1983,11 @@ ${chipHtml(it.spec)}
                     mrSaving = false;
                     return;
                 }
-
                 if (mrMode === 'edit-sub-thread') {
                     const fullPkg = pkg;
                     for (const j of jobs) {
                         const threadName = j.thread.trim();
                         if (!threadName) return toast('请输入线程名');
-                        // 如果线程名变了，先删除旧的
                         if (mrOldThread && mrOldThread !== threadName) {
                             await api('/api/rule/del', { pkg: fullPkg, thread: mrOldThread });
                         }
@@ -1696,7 +2000,6 @@ ${chipHtml(it.spec)}
                     return;
                 }
 
-                // === 主包操作 ===
                 if (mrMode === 'edit-app') {
                     if (pkg !== mrOldPkg) await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
                     const cur = new Set(jobs.map(j => j.thread));
@@ -1708,24 +2011,33 @@ ${chipHtml(it.spec)}
 
                 for (let i = 0; i < jobs.length; i++) {
                     const j = jobs[i];
-                    // 跳过子包行（子包已单独处理）
                     if (j.thread.startsWith(':')) continue;
-                    try { await api('/api/rule', { pkg, thread: j.thread, cpus: j.cpus }) }
-                    catch (e) { return toast(`第${i + 1}条（${j.thread || '包级'}）失败：${e.message}`) }
+                    try { await api('/api/rule', { pkg, thread: j.thread, cpus: j.cpus }); } catch (e) {
+                        return toast(`第${i + 1}条（${j.thread || '包级'}）失败：${e.message}`);
+                    }
                 }
                 $('modal-rule').hidden = true;
-                toast('已保存');
+                toast('✅ 已保存');
                 loadRules();
-            } catch (e) { toast(e.message) }
-            finally { mrSaving = false }
+            } catch (e) { toast(e.message); } finally { mrSaving = false; }
         };
 
+        // ============================================================
+        //  建议下拉
+        // ============================================================
         function suggest_bind(input, box, opts = {}) {
-            let seq = 0, hl = -1, items = [], tm = null;
-            const hide = () => { seq++; box.dataset.closed = '1'; box.hidden = true; hl = -1; };
+            let seq = 0,
+                hl = -1,
+                items = [],
+                tm = null;
+            const hide = () => { seq++;
+                box.dataset.closed = '1';
+                box.hidden = true;
+                hl = -1; };
             const render = () => {
                 if (!items.length) { hide(); return; }
-                box.innerHTML = items.map((it, i) => `<div class="sg-item${i === hl ? ' hl' : ''}" data-i="${i}">${esc(it)}</div>`).join('');
+                box.innerHTML = items.map((it, i) =>
+                    `<div class="sg-item${i === hl ? ' hl' : ''}" data-i="${i}">${esc(it)}</div>`).join('');
                 box.hidden = false;
                 if (hl >= 0) box.children[hl]?.scrollIntoView({ block: 'nearest' });
             };
@@ -1739,18 +2051,24 @@ ${chipHtml(it.spec)}
                 try {
                     const d = await api('/api/suggest', body);
                     if (cur !== seq || box.dataset.closed) return;
-                    items = d.list; hl = -1; render();
-                } catch (e) { }
+                    items = d.list;
+                    hl = -1;
+                    render();
+                } catch (e) {}
             };
-            input.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(fetch_list, 250); });
-            const pick = v => { input.value = v; opts.onpick?.(v); hide(); };
+            input.addEventListener('input', () => { clearTimeout(tm);
+                tm = setTimeout(fetch_list, 250); });
+            const pick = v => { input.value = v;
+                opts.onpick?.(v);
+                hide(); };
             input.addEventListener('keydown', e => {
                 if (box.hidden || !items.length) return;
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                    e.preventDefault(); hl = (hl + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; render();
-                } else if (e.key === 'Enter' && hl >= 0) {
-                    e.preventDefault(); pick(items[hl]);
-                } else if (e.key === 'Escape') hide();
+                    e.preventDefault();
+                    hl = (hl + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+                    render();
+                } else if (e.key === 'Enter' && hl >= 0) { e.preventDefault();
+                    pick(items[hl]); } else if (e.key === 'Escape') hide();
             });
             box.addEventListener('click', e => {
                 const it = e.target.closest('.sg-item');
@@ -1760,7 +2078,8 @@ ${chipHtml(it.spec)}
                 if (document.activeElement !== input && !box.hidden) hide();
             }, 150));
         }
-        const sgClose = b => { b.hidden = true; b.dataset.closed = '1'; };
+        const sgClose = b => { b.hidden = true;
+            b.dataset.closed = '1'; };
         const closeThreadSuggest = () => document.querySelectorAll('#mr-rows .sg-box:not([hidden])').forEach(sgClose);
         suggest_bind($('mr-pkg'), $('sg-pkg'), { onpick: closeThreadSuggest });
         $('mr-pkg').addEventListener('input', closeThreadSuggest);
@@ -1769,56 +2088,78 @@ ${chipHtml(it.spec)}
                 document.querySelectorAll('.sg-box:not([hidden])').forEach(sgClose);
         });
 
+        // ============================================================
+        //  确认删除
+        // ============================================================
         let confirmCb = null;
+
         function confirmDel(msg, body) {
             $('mc-msg').textContent = msg;
             confirmCb = async () => {
-                try { await api('/api/rule/del', body); toast('已删除'); loadRules() }
-                catch (e) { toast(e.message) }
+                try { await api('/api/rule/del', body);
+                    toast('已删除');
+                    loadRules(); } catch (e) { toast(e.message); }
             };
             $('modal-confirm').hidden = false;
         }
-        function delRule(gi, ii) {
-            const g = rulesData[gi], it = g.items[ii];
-            confirmDel((it.thread ? '线程 ' + it.thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: it.thread || '' });
-        }
+
         function delPkg(gi) {
             const g = rulesData[gi];
             confirmDel(`删除 ${g.pkg} 的全部 ${g.items.length} 条规则`, { pkg: g.pkg, all: true });
         }
-        $('mc-cancel').onclick = () => $('modal-confirm').hidden = true;
-        $('mc-ok').onclick = () => { $('modal-confirm').hidden = true; confirmCb && confirmCb() };
 
+        $('mc-cancel').onclick = () => $('modal-confirm').hidden = true;
+        $('mc-ok').onclick = () => { $('modal-confirm').hidden = true;
+            confirmCb && confirmCb(); };
+
+        // ============================================================
+        //  设置页
+        // ============================================================
         async function loadCfg() {
             try {
                 const d = await api('/api/config');
-                document.querySelectorAll('#seg-mode button').forEach(b => b.classList.toggle('on', +b.dataset.mode === d.mode));
+                document.querySelectorAll('#seg-mode button').forEach(b => b.classList.toggle('on', +b.dataset.mode === d
+                .mode));
                 $('c-mode-active').textContent = '当前生效: ' + modeLabel(d.mode_active);
                 $('c-ebpf-hint').hidden = d.ebpf_available;
                 $('c-interval').value = d.interval;
                 $('c-cpuset').value = d.cpuset_name;
                 $('c-file').value = d.config_file;
                 $('c-cpuset-on').textContent = d.cpuset_enabled ? '已启用' : '不可用';
-            } catch (e) { toast(e.message) }
+            } catch (e) { toast(e.message); }
         }
-        document.querySelectorAll('#seg-mode button').forEach(b => b.onclick = async () => {
-            try { await api('/api/config', { mode: +b.dataset.mode }); toast('已切换'); loadCfg() }
-            catch (e) { toast(e.message) }
+
+        document.querySelectorAll('#seg-mode button').forEach(b => {
+            b.onclick = async () => {
+                try { await api('/api/config', { mode: +b.dataset.mode });
+                    toast('已切换');
+                    loadCfg(); } catch (e) { toast(e.message); }
+            };
         });
+
         async function saveField(body) {
-            try { await api('/api/config', body); toast('已保存'); loadCfg() }
-            catch (e) { toast(e.message) }
+            try { await api('/api/config', body);
+                toast('已保存');
+                loadCfg(); } catch (e) { toast(e.message); }
         }
+
         $('c-interval-save').onclick = () => saveField({ interval: Math.max(1, +$('c-interval').value || 0) });
         $('c-cpuset-save').onclick = () => saveField({ cpuset_name: $('c-cpuset').value.trim() });
         $('c-file-save').onclick = () => saveField({ config_file: $('c-file').value.trim() });
 
+        // ============================================================
+        //  关于页
+        // ============================================================
         $('c-about').onclick = async () => {
             $('page-about').classList.add('show');
-            try { const d = await api('/api/status'); $('a-ver').textContent = 'v' + d.version } catch (e) { }
+            try { const d = await api('/api/status');
+                $('a-ver').textContent = 'v' + d.version; } catch (e) {}
         };
         $('about-back').onclick = () => $('page-about').classList.remove('show');
 
+        // ============================================================
+        //  启动
+        // ============================================================
         startStat();
     </script>
 </body>
