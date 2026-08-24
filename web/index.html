@@ -1162,7 +1162,7 @@
 </head>
 
 <body>
-    <!-- ==================== HTML 结构（与之前完全一致） ==================== -->
+    <!-- ==================== HTML 结构 ==================== -->
     <div class="app">
         <main class="main">
 
@@ -1333,18 +1333,818 @@
 
     <div id="toast"></div>
 
-    <!-- ==================== JavaScript（与之前完全一致，无需改动） ==================== -->
+    <!-- ============================================================
+         完整 JavaScript（对接您已有的后端 API）
+         ============================================================ -->
     <script>
-        // 此处为之前完整的 JavaScript 代码，为节省篇幅不再重复，但实际使用时必须保留。
-        // 为了完整性，建议您将之前原版的所有 JavaScript 代码复制到此处。
-        // 由于本回答已包含完整 HTML，但 JS 部分因篇幅省略，实际部署时请从上一个回答中提取完整的 <script> 内容。
-        // 或者您可以直接用这个 HTML 替换，并将原 JS 粘贴到本 <script> 标签内。
-        // 为方便您，我已将原 JS 完整附在下方（请继续往下看）。
+        // ============================================================
+        //  工具函数
+        // ============================================================
+        const $ = id => document.getElementById(id);
+        const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+        function fmtUp(s) {
+            s = +s || 0;
+            const d = Math.floor(s / 86400),
+                h = Math.floor(s % 86400 / 3600),
+                m = Math.floor(s % 3600 / 60);
+            return d > 0 ? d + '天' + h + '小时' : h > 0 ? h + '小时' + m + '分' : m > 0 ? m + '分' : '刚刚';
+        }
+
+        const modeLabel = m => m === 'ebpf' ? 'eBPF 事件驱动' : 'Proc 轮询';
+
+        // ============================================================
+        //  API
+        // ============================================================
+        async function api(path, body) {
+            const opts = body !== undefined ? {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            } : {};
+            const r = await fetch(path, opts);
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.err || ('HTTP ' + r.status));
+            return d;
+        }
+
+        function toast(m) {
+            const t = $('toast');
+            t.textContent = m;
+            t.classList.add('show');
+            clearTimeout(t._tm);
+            t._tm = setTimeout(() => t.classList.remove('show'), 1600);
+        }
+
+        // ============================================================
+        //  核心类型映射 (英文 → 中文)
+        // ============================================================
+        const CORE_NAMES = {
+            'e-core': '小核',
+            'p-core': '中核',
+            'hp-core': '大核',
+            'all-core': '全部'
+        };
+        const CORE_KEYS = ['e-core', 'p-core', 'hp-core'];
+        const CORE_ALL = ['e-core', 'p-core', 'hp-core'];
+
+        function coreDisplay(spec) {
+            if (spec === 'all-core') return '全部';
+            if (CORE_KEYS.includes(spec)) return CORE_NAMES[spec] || spec;
+            return spec;
+        }
+
+        // ============================================================
+        //  状态页
+        // ============================================================
+        let activeTab = 'status',
+            statTimer = null;
+
+        document.querySelectorAll('.tab').forEach(b => {
+            b.onclick = () => {
+                const t = b.dataset.tab;
+                if (t === activeTab) return;
+                activeTab = t;
+                document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
+                ['status', 'rules', 'settings'].forEach(n => $('tab-' + n).hidden = n !== t);
+                if (t === 'status') startStat();
+                else stopStat();
+                if (t === 'rules') loadRules();
+                if (t === 'settings') loadCfg();
+            };
+        });
+
+        function startStat() { stopStat();
+            refreshStat();
+            statTimer = setInterval(refreshStat, 3000); }
+
+        function stopStat() { if (statTimer) { clearInterval(statTimer);
+                statTimer = null } }
+
+        let topoCores = null;
+
+        function topoOf(d) { return { e: d.e_core || '', p: d.p_core || '', hp: d.hp_core || '' }; }
+
+        async function refreshStat() {
+            if (document.hidden) return;
+            try {
+                const d = await api('/api/status');
+                const mb = $('s-mode');
+                mb.textContent = modeLabel(d.mode);
+                mb.className = 'badge ' + (d.mode === 'ebpf' ? 'ebpf' : 'proc');
+                $('s-up').textContent = fmtUp(d.uptime);
+                $('s-ver').textContent = 'v' + (d.version || '?');
+                $('s-rules').textContent = d.rules;
+                $('s-pkgs').textContent = d.pkgs;
+                const pf = +d.parse_fail || 0;
+                $('s-pf').hidden = !pf;
+                $('s-pf').textContent = pf ? pf + ' 行规则因格式无效被跳过，请检查配置文件' : '';
+                $('s-hit').textContent = d.hit_pkgs;
+                $('s-threads').textContent = d.threads;
+                $('s-procs').textContent = d.total_procs;
+                $('s-cores').textContent = d.cores;
+                // 核心分层 — 显示中文
+                const e = d.e_core || '无',
+                    p = d.p_core || '无',
+                    hp = d.hp_core || '无',
+                    all = d.all_core || '-';
+                $('s-ecore').textContent = e;
+                $('s-pcore').textContent = p;
+                $('s-hcore').textContent = hp;
+                $('s-all').textContent = all;
+                topoCores = topoOf(d);
+                const vis = semanticVisible();
+                $('s-card-cores').hidden = !vis.length;
+            } catch (e) { /* 静默 */ }
+        }
+
+        function semanticVisible() {
+            if (!topoCores) return CORE_KEYS;
+            const t = topoCores,
+                multi = t.e && t.hp && t.e !== t.hp;
+            return multi ? CORE_KEYS : [];
+        }
+
+        // ============================================================
+        //  规则页
+        // ============================================================
+        let rulesData = [];
+
+        function chipCls(s) {
+            if (s === 'e-core') return 'e';
+            if (s === 'p-core') return 'p';
+            if (s === 'hp-core') return 'h';
+            if (s === 'all-core') return 'c';
+            return 'c';
+        }
+
+        function chipHtml(s) {
+            const label = coreDisplay(s);
+            return `<span class="chip ${chipCls(s)} sm">${esc(label)}</span>`;
+        }
+
+        const ICO_EDIT =
+            '<svg viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5z"/></svg>';
+        const ICO_TRASH =
+            '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg>';
+
+        async function loadRules() {
+            fetchTopo();
+            try {
+                const d = await api('/api/rules');
+                rulesData = d.rules || [];
+                renderRules();
+            } catch (e) { toast(e.message); }
+        }
+
+        function grpInner(g, gi) {
+            let html = `
+        <div class="grp-head">
+          <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          <span class="grp-name">${esc(g.pkg)}</span>
+          <span class="grp-count">${(g.items ? g.items.length : 0) + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
+          <button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
+          <button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
+        </div>
+        <div class="grp-body"><div class="grp-inner">`;
+
+            if (g.items) {
+                for (const it of g.items) {
+                    const isPkgRule = !it.thread;
+                    const displayName = isPkgRule ? '<span class="rule-sub">包级默认</span>' : esc(it.thread);
+                    html += `
+            <div class="rule-row">
+              <span class="rule-name">${displayName}</span>
+              ${chipHtml(it.spec)}
+              <button class="icon-btn" data-edit="main:${gi}:${it.thread || ''}" title="编辑">${ICO_EDIT}</button>
+              <button class="icon-btn danger" data-del="main:${gi}:${it.thread || ''}" title="删除">${ICO_TRASH}</button>
+            </div>`;
+                }
+            }
+
+            if (g.subs) {
+                for (const [sub, data] of Object.entries(g.subs)) {
+                    const pkgRule = data.items.find(it => !it.thread);
+                    const subDisplay = sub.startsWith(':') ? sub : ':' + sub;
+                    const threadRules = data.items.filter(it => it.thread);
+                    const total = (pkgRule ? 1 : 0) + threadRules.length;
+                    html += `
+            <div class="sub-group">
+              <div class="sub-head">
+                <span class="sub-label">${esc(subDisplay)}</span>
+                <span class="grp-count">${total}</span>
+                <button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子包包级规则">${ICO_EDIT}</button>
+                <button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子包">${ICO_TRASH}</button>
+              </div>
+              <div class="sub-inner">`;
+                    if (pkgRule) {
+                        html += `
+                <div class="rule-row">
+                  <span class="rule-name"><span class="rule-sub">包级默认</span></span>
+                  ${chipHtml(pkgRule.spec)}
+                  <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
+                  <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
+                </div>`;
+                    } else {
+                        html += `
+                <div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">
+                  无包级规则，可编辑子包添加
+                </div>`;
+                    }
+                    for (const it of threadRules) {
+                        html += `
+                <div class="rule-row">
+                  <span class="rule-name">${esc(it.thread)}</span>
+                  ${chipHtml(it.spec)}
+                  <button class="icon-btn" data-edit="sub:${gi}:${sub}:${it.thread}" title="编辑线程规则">${ICO_EDIT}</button>
+                  <button class="icon-btn danger" data-del="sub:${gi}:${sub}:${it.thread}" title="删除线程规则">${ICO_TRASH}</button>
+                </div>`;
+                    }
+                    html += `
+                <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包线程规则</button>
+              </div>
+            </div>`;
+                }
+            }
+
+            html += `
+            <button class="rule-add" data-addthread="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加线程规则</button>
+            <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包</button>
+          </div></div>`;
+            return html;
+        }
+
+        function renderRules() {
+            const f = $('r-filter').value.trim().toLowerCase();
+            const idx = rulesData.map((g, gi) => gi).filter(gi => !f || rulesData[gi].pkg.toLowerCase().includes(f));
+            $('r-filter').placeholder = f ? `匹配 ${idx.length}/${rulesData.length} 个应用` : `共 ${rulesData.length} 个应用`;
+            const box = $('r-list');
+            const shown = new Set(idx);
+            const live = new Map([...box.querySelectorAll('.grp')].map(el => [el.dataset.pkg, el]));
+            const pkgs = new Set(rulesData.map(g => g.pkg));
+            let ref = box.firstChild;
+            rulesData.forEach((g, gi) => {
+                let el = live.get(g.pkg);
+                if (!el) { el = document.createElement('div');
+                    el.className = 'grp';
+                    el.dataset.pkg = g.pkg; }
+                el.innerHTML = grpInner(g, gi);
+                el.hidden = !shown.has(gi);
+                if (el !== ref) box.insertBefore(el, ref);
+                ref = el.nextSibling;
+            });
+            live.forEach((el, p) => { if (!pkgs.has(p)) el.remove(); });
+            let tip = box.querySelector('.empty');
+            if (!idx.length) {
+                if (!tip) { tip = document.createElement('div');
+                    tip.className = 'empty';
+                    box.appendChild(tip); }
+                tip.innerHTML = f ? '无匹配应用' : '<span class="empty-icon">📭</span>暂无规则<br>点击右上角「添加」创建第一条规则';
+            } else tip?.remove();
+        }
+
+        $('r-filter').addEventListener('input', renderRules);
+
+        // ============================================================
+        //  规则列表事件代理
+        // ============================================================
+        $('r-list').addEventListener('click', e => {
+            const ea = e.target.closest('[data-editapp]');
+            if (ea) { openRuleModal('edit-app', +ea.dataset.editapp); return; }
+            const dp = e.target.closest('[data-delpkg]');
+            if (dp) { delPkg(+dp.dataset.delpkg); return; }
+            const at = e.target.closest('[data-addthread]');
+            if (at) { openRuleModal('add-thread', +at.dataset.addthread); return; }
+            const as = e.target.closest('[data-addsub]');
+            if (as) { openRuleModal('add-sub', +as.dataset.addsub); return; }
+            const ast = e.target.closest('[data-addsubthread]');
+            if (ast) {
+                const [gi, sub] = ast.dataset.addsubthread.split(':');
+                openRuleModal('add-sub-thread', +gi, sub);
+                return;
+            }
+            const head = e.target.closest('.grp-head');
+            if (head) { head.parentElement.classList.toggle('open'); return; }
+
+            const eb = e.target.closest('[data-edit]');
+            if (eb) {
+                const parts = eb.dataset.edit.split(':');
+                const type = parts[0];
+                if (type === 'main') {
+                    const gi = +parts[1],
+                        thread = parts[2] || '';
+                    if (thread === '') openRuleModal('edit-pkg', gi);
+                    else openRuleModal('edit-thread', gi, '', thread);
+                } else if (type === 'sub') {
+                    const gi = +parts[1],
+                        sub = parts[2],
+                        thread = parts[3] || '';
+                    if (thread === '') openRuleModal('edit-sub', gi, sub);
+                    else openRuleModal('edit-sub-thread', gi, sub, thread);
+                }
+                return;
+            }
+
+            const db = e.target.closest('[data-del]');
+            if (db) {
+                const parts = db.dataset.del.split(':');
+                const type = parts[0];
+                if (type === 'main') {
+                    const gi = +parts[1],
+                        thread = parts[2] || '';
+                    const g = rulesData[gi];
+                    const item = g.items.find(it => it.thread === thread);
+                    if (item) confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: thread ||
+                            '' });
+                } else if (type === 'sub') {
+                    const gi = +parts[1],
+                        sub = parts[2],
+                        thread = parts[3] || '';
+                    const g = rulesData[gi];
+                    const fullPkg = g.pkg + ':' + sub;
+                    if (thread) confirmDel(`子包 :${sub} 的线程 ${thread}`, { pkg: fullPkg, thread: thread });
+                    else confirmDel(`子包 :${sub} 的包级规则`, { pkg: fullPkg, thread: '' });
+                }
+                return;
+            }
+
+            const esb = e.target.closest('[data-editsub]');
+            if (esb) {
+                const [gi, sub] = esb.dataset.editsub.split(':');
+                openRuleModal('edit-sub', +gi, sub);
+                return;
+            }
+
+            const dsb = e.target.closest('[data-delsub]');
+            if (dsb) {
+                const [gi, sub] = dsb.dataset.delsub.split(':');
+                const g = rulesData[gi];
+                confirmDel(`删除子包 :${sub} 的全部规则`, { pkg: g.pkg + ':' + sub, all: true });
+                return;
+            }
+        });
+
+        // ============================================================
+        //  规则编辑弹窗
+        // ============================================================
+        async function fetchTopo() {
+            if (!topoCores) try { const d = await api('/api/status');
+                topoCores = topoOf(d); } catch (e) {}
+        }
+
+        function parseSpec(spec) {
+            if (!spec || !spec.trim()) return { sem: [], all: false, custom: false, customVal: '' };
+            const vis = semanticVisible();
+            const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
+            const sem = parts.filter(p => CORE_KEYS.includes(p) && vis.includes(p));
+            if (spec === 'all-core') return { sem: vis, all: true };
+            if (parts.length && sem.length === parts.length) return { sem };
+            return { custom: true, customVal: spec };
+        }
+
+        const mkRow = o => ({ thread: '', sem: [], all: false, custom: false, customVal: '', ...o });
+
+        function specOf(r) {
+            if (r.custom) return r.customVal.trim();
+            if (r.all) return 'all-core';
+            return r.sem.join(',');
+        }
+
+        // 核心选择按钮 (中文)
+        const CHIP_BTNS = [
+            ['e-core', '🟢 小核'],
+            ['p-core', '🔵 中核'],
+            ['hp-core', '🟣 大核'],
+            ['all-core', '⚪ 全部'],
+            ['自定义', '✏️ 自定义']
+        ].map(([c, t]) => `<button data-core="${c}" title="${t}">${t}</button>`).join('');
+
+        function applyRowTopo(el) {
+            const vis = semanticVisible();
+            el.querySelectorAll('.core-chips button').forEach(b => {
+                const c = b.dataset.core;
+                b.hidden = c === '自定义' || c === 'all-core' ? !vis.length : !vis.includes(c);
+            });
+        }
+
+        function updateRowChips(el, r) {
+            el.querySelectorAll('.core-chips button').forEach(b => {
+                const c = b.dataset.core;
+                const on = c === '自定义' ? r.custom :
+                    c === 'all-core' ? r.all :
+                    (!r.custom && !r.all && r.sem.includes(c));
+                b.classList.toggle('on', on);
+            });
+            el.querySelector('.rr-custom').hidden = !r.custom;
+        }
+
+        let mrRows = [];
+
+        function renderRows() {
+            const box = $('mr-rows'),
+                tree = isTree();
+            box.innerHTML = mrRows.map((r, i) => {
+                if (r.pkgRow === true) {
+                    return `<div class="tree-row" data-ri="${i}">
+                <div class="tr-head"><span class="tr-tag">📦 包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
+                <div class="core-chips">${CHIP_BTNS}</div>
+                <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
+              </div>`;
+                } else {
+                    return `<div class="tree-row branch" data-ri="${i}">
+                <div class="tr-head sg-wrap">
+                  <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
+                  <div class="sg-box" hidden></div>
+                  ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
+                </div>
+                <div class="core-chips">${CHIP_BTNS}</div>
+                <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
+              </div>`;
+                }
+            }).join('');
+
+            mrRows.forEach((r, i) => {
+                const el = box.children[i];
+                if (!el) return;
+                applyRowTopo(el);
+                updateRowChips(el, r);
+                if (r.pkgRow !== true) {
+                    const input = el.querySelector('.rr-thread');
+                    const sgBox = el.querySelector('.sg-box');
+                    if (input && sgBox) {
+                        suggest_bind(input, sgBox, { thread: true, onpick: v => r.thread = v.trim() });
+                    }
+                }
+            });
+        }
+
+        $('mr-rows').addEventListener('click', e => {
+            const del = e.target.closest('.rr-del');
+            if (del) { mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1);
+                renderRows(); return; }
+            const b = e.target.closest('.core-chips button');
+            if (!b) return;
+            const el = b.closest('[data-ri]'),
+                r = mrRows[+el.dataset.ri],
+                c = b.dataset.core;
+            if (c === '自定义') { r.custom = !r.custom;
+                r.all = false; } else if (c === 'all-core') { r.all = !r.all;
+                r.custom = false; if (!r.all) r.sem = []; } else {
+                const base = r.custom || r.all ? [] : r.sem;
+                r.sem = base.includes(c) ? base.filter(x => x !== c) : [...base, c];
+                r.custom = false;
+                r.all = false;
+            }
+            updateRowChips(el, r);
+        });
+
+        $('mr-rows').addEventListener('input', e => {
+            const r = mrRows[+e.target.closest('[data-ri]')?.dataset.ri];
+            if (!r) return;
+            if (e.target.classList.contains('rr-thread')) r.thread = e.target.value.trim();
+            if (e.target.classList.contains('rr-custom')) r.customVal = e.target.value;
+        });
+
+        $('mr-addrow').onclick = () => { mrRows.push(mkRow({}));
+            renderRows(); const m = $('mr-addrow').closest('.modal');
+            m.scrollTop = m.scrollHeight; };
+
+        let mrMode = 'add-pkg',
+            mrOldThread = '',
+            mrOldPkg = '',
+            mrOldThreads = new Set(),
+            mrHadPkgRule = false;
+
+        const isTree = () => mrMode === 'add-pkg' || mrMode === 'edit-app';
+
+        async function openRuleModal(mode, gi, sub, thread) {
+            await fetchTopo();
+            mrMode = mode;
+            mrOldThread = '';
+            const pkgInput = $('mr-pkg');
+            const tree = isTree();
+            pkgInput.readOnly = !tree;
+            $('mr-addrow').hidden = !tree;
+
+            if (mode === 'add-pkg') {
+                $('mr-title').textContent = '➕ 添加应用';
+                pkgInput.value = '';
+                pkgInput.readOnly = false;
+                mrRows = [mkRow({ pkgRow: true })];
+            } else if (mode === 'edit-app') {
+                $('mr-title').textContent = '✏️ 编辑应用';
+                const g = rulesData[gi];
+                pkgInput.value = g.pkg;
+                pkgInput.readOnly = true;
+                mrOldPkg = g.pkg;
+                mrOldThreads = new Set(g.items.filter(it => it.thread).map(it => it.thread));
+                const pkgItem = g.items.find(it => !it.thread);
+                mrHadPkgRule = !!pkgItem;
+                mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
+                for (const it of g.items) {
+                    if (it.thread) mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
+                }
+            } else if (mode === 'edit-pkg') {
+                $('mr-title').textContent = '📦 包级默认规则';
+                pkgInput.value = rulesData[gi].pkg;
+                pkgInput.readOnly = true;
+                const item = rulesData[gi].items.find(it => !it.thread);
+                mrRows = [mkRow({ pkgRow: true, ...(item ? parseSpec(item.spec) : {}) })];
+            } else if (mode === 'add-thread') {
+                $('mr-title').textContent = '🧵 添加线程规则';
+                pkgInput.value = rulesData[gi].pkg;
+                pkgInput.readOnly = true;
+                mrRows = [mkRow({})];
+            } else if (mode === 'edit-thread') {
+                $('mr-title').textContent = '🧵 编辑线程规则';
+                const g = rulesData[gi];
+                pkgInput.value = g.pkg;
+                pkgInput.readOnly = true;
+                const item = g.items.find(it => it.thread === thread);
+                mrOldThread = thread;
+                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+                row.thread = thread;
+                mrRows = [row];
+            } else if (mode === 'add-sub') {
+                $('mr-title').textContent = '📂 添加子包';
+                const g = rulesData[gi];
+                pkgInput.value = g.pkg;
+                pkgInput.readOnly = true;
+                $('mr-addrow').hidden = true;
+                mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
+                toast('请输入 :子包名，如 :push，并选择 CPU');
+            } else if (mode === 'edit-sub') {
+                $('mr-title').textContent = '📂 编辑子包包级规则';
+                const g = rulesData[gi];
+                const fullPkg = g.pkg + ':' + sub;
+                pkgInput.value = fullPkg;
+                pkgInput.readOnly = true;
+                $('mr-addrow').hidden = true;
+                const subData = g.subs && g.subs[sub];
+                const item = subData ? subData.items.find(it => !it.thread) : null;
+                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
+            } else if (mode === 'add-sub-thread') {
+                $('mr-title').textContent = '🧵 添加子包线程规则';
+                const g = rulesData[gi];
+                pkgInput.value = g.pkg + ':' + sub;
+                pkgInput.readOnly = true;
+                mrRows = [mkRow({})];
+            } else if (mode === 'edit-sub-thread') {
+                $('mr-title').textContent = '🧵 编辑子包线程规则';
+                const g = rulesData[gi];
+                pkgInput.value = g.pkg + ':' + sub;
+                pkgInput.readOnly = true;
+                const subData = g.subs && g.subs[sub];
+                const item = subData ? subData.items.find(it => it.thread === thread) : null;
+                mrOldThread = thread;
+                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+                row.thread = thread;
+                mrRows = [row];
+            }
+
+            renderRows();
+            if (mode === 'edit-thread' || mode === 'edit-sub-thread') {
+                const input = document.querySelector('#mr-rows .rr-thread');
+                if (input && thread) { input.value = thread; if (mrRows.length) mrRows[0].thread = thread; }
+            }
+            $('modal-rule').hidden = false;
+        }
+
+        $('r-add').onclick = () => openRuleModal('add-pkg');
+        $('mr-cancel').onclick = () => $('modal-rule').hidden = true;
+
+        let mrSaving = false;
+
+        $('mr-save').onclick = async () => {
+            if (mrSaving) return;
+            const pkg = $('mr-pkg').value.trim();
+            if (!$('mr-pkg').readOnly && !pkg) return toast('请输入应用包名');
+            const jobs = [];
+            for (const r of mrRows) {
+                const spec = specOf(r);
+                if (r.pkgRow) { if (spec) jobs.push({ thread: '', cpus: spec }); continue; }
+                if (!r.thread && !spec) continue;
+                if (!r.thread) return toast('请输入线程名');
+                if (!spec) return toast(r.custom ? '请输入自定义 CPU 范围，如 0-3' : '请选择 CPU 核心');
+                jobs.push({ thread: r.thread, cpus: spec });
+            }
+            if (!jobs.length) return toast('请至少配置一条规则');
+            mrSaving = true;
+            try {
+                if (mrMode === 'add-sub') {
+                    let subInput = jobs[0].thread.trim();
+                    if (!subInput.startsWith(':')) subInput = ':' + subInput;
+                    const subName = subInput.substring(1).trim();
+                    if (!subName) return toast('请输入子包名');
+                    const fullPkg = pkg + ':' + subName;
+                    await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus });
+                    toast('子包已添加');
+                    loadRules();
+                    $('modal-rule').hidden = true;
+                    mrSaving = false;
+                    return;
+                }
+                if (mrMode === 'edit-sub') {
+                    const fullPkg = pkg;
+                    await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus });
+                    toast('子包已更新');
+                    loadRules();
+                    $('modal-rule').hidden = true;
+                    mrSaving = false;
+                    return;
+                }
+                if (mrMode === 'add-sub-thread') {
+                    const fullPkg = pkg;
+                    for (const j of jobs) {
+                        const threadName = j.thread.trim();
+                        if (!threadName) return toast('请输入线程名');
+                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus });
+                    }
+                    toast('子包线程规则已添加');
+                    loadRules();
+                    $('modal-rule').hidden = true;
+                    mrSaving = false;
+                    return;
+                }
+                if (mrMode === 'edit-sub-thread') {
+                    const fullPkg = pkg;
+                    for (const j of jobs) {
+                        const threadName = j.thread.trim();
+                        if (!threadName) return toast('请输入线程名');
+                        if (mrOldThread && mrOldThread !== threadName) {
+                            await api('/api/rule/del', { pkg: fullPkg, thread: mrOldThread });
+                        }
+                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus });
+                    }
+                    toast('子包线程规则已更新');
+                    loadRules();
+                    $('modal-rule').hidden = true;
+                    mrSaving = false;
+                    return;
+                }
+
+                if (mrMode === 'edit-app') {
+                    if (pkg !== mrOldPkg) await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
+                    const cur = new Set(jobs.map(j => j.thread));
+                    for (const th of mrOldThreads) if (!cur.has(th)) await api('/api/rule/del', { pkg, thread: th });
+                    if (mrHadPkgRule && !cur.has('')) await api('/api/rule/del', { pkg, thread: '' });
+                }
+                if (mrMode === 'edit-thread' && mrOldThread !== jobs[0].thread)
+                    await api('/api/rule/del', { pkg, thread: mrOldThread });
+
+                for (let i = 0; i < jobs.length; i++) {
+                    const j = jobs[i];
+                    if (j.thread.startsWith(':')) continue;
+                    try { await api('/api/rule', { pkg, thread: j.thread, cpus: j.cpus }); } catch (e) {
+                        return toast(`第${i + 1}条（${j.thread || '包级'}）失败：${e.message}`);
+                    }
+                }
+                $('modal-rule').hidden = true;
+                toast('✅ 已保存');
+                loadRules();
+            } catch (e) { toast(e.message); } finally { mrSaving = false; }
+        };
+
+        // ============================================================
+        //  建议下拉
+        // ============================================================
+        function suggest_bind(input, box, opts = {}) {
+            let seq = 0,
+                hl = -1,
+                items = [],
+                tm = null;
+            const hide = () => { seq++;
+                box.dataset.closed = '1';
+                box.hidden = true;
+                hl = -1; };
+            const render = () => {
+                if (!items.length) { hide(); return; }
+                box.innerHTML = items.map((it, i) =>
+                    `<div class="sg-item${i === hl ? ' hl' : ''}" data-i="${i}">${esc(it)}</div>`).join('');
+                box.hidden = false;
+                if (hl >= 0) box.children[hl]?.scrollIntoView({ block: 'nearest' });
+            };
+            const fetch_list = async () => {
+                const q = input.value.trim();
+                const pkg = opts.thread ? $('mr-pkg').value.trim() : '';
+                if (!q || (opts.thread && !pkg)) { hide(); return; }
+                const cur = ++seq;
+                box.dataset.closed = '';
+                const body = opts.thread ? { pkg, q } : { q };
+                try {
+                    const d = await api('/api/suggest', body);
+                    if (cur !== seq || box.dataset.closed) return;
+                    items = d.list;
+                    hl = -1;
+                    render();
+                } catch (e) {}
+            };
+            input.addEventListener('input', () => { clearTimeout(tm);
+                tm = setTimeout(fetch_list, 250); });
+            const pick = v => { input.value = v;
+                opts.onpick?.(v);
+                hide(); };
+            input.addEventListener('keydown', e => {
+                if (box.hidden || !items.length) return;
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    hl = (hl + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+                    render();
+                } else if (e.key === 'Enter' && hl >= 0) { e.preventDefault();
+                    pick(items[hl]); } else if (e.key === 'Escape') hide();
+            });
+            box.addEventListener('click', e => {
+                const it = e.target.closest('.sg-item');
+                if (it) pick(items[+it.dataset.i]);
+            });
+            input.addEventListener('blur', () => setTimeout(() => {
+                if (document.activeElement !== input && !box.hidden) hide();
+            }, 150));
+        }
+        const sgClose = b => { b.hidden = true;
+            b.dataset.closed = '1'; };
+        const closeThreadSuggest = () => document.querySelectorAll('#mr-rows .sg-box:not([hidden])').forEach(sgClose);
+        suggest_bind($('mr-pkg'), $('sg-pkg'), { onpick: closeThreadSuggest });
+        $('mr-pkg').addEventListener('input', closeThreadSuggest);
+        document.addEventListener('pointerdown', e => {
+            if (!e.target.closest('.sg-wrap'))
+                document.querySelectorAll('.sg-box:not([hidden])').forEach(sgClose);
+        });
+
+        // ============================================================
+        //  确认删除
+        // ============================================================
+        let confirmCb = null;
+
+        function confirmDel(msg, body) {
+            $('mc-msg').textContent = msg;
+            confirmCb = async () => {
+                try { await api('/api/rule/del', body);
+                    toast('已删除');
+                    loadRules(); } catch (e) { toast(e.message); }
+            };
+            $('modal-confirm').hidden = false;
+        }
+
+        function delPkg(gi) {
+            const g = rulesData[gi];
+            confirmDel(`删除 ${g.pkg} 的全部 ${g.items.length} 条规则`, { pkg: g.pkg, all: true });
+        }
+
+        $('mc-cancel').onclick = () => $('modal-confirm').hidden = true;
+        $('mc-ok').onclick = () => { $('modal-confirm').hidden = true;
+            confirmCb && confirmCb(); };
+
+        // ============================================================
+        //  设置页
+        // ============================================================
+        async function loadCfg() {
+            try {
+                const d = await api('/api/config');
+                document.querySelectorAll('#seg-mode button').forEach(b => b.classList.toggle('on', +b.dataset.mode === d
+                .mode));
+                $('c-mode-active').textContent = '当前生效: ' + modeLabel(d.mode_active);
+                $('c-ebpf-hint').hidden = d.ebpf_available;
+                $('c-interval').value = d.interval;
+                $('c-cpuset').value = d.cpuset_name;
+                $('c-file').value = d.config_file;
+                $('c-cpuset-on').textContent = d.cpuset_enabled ? '已启用' : '不可用';
+            } catch (e) { toast(e.message); }
+        }
+
+        document.querySelectorAll('#seg-mode button').forEach(b => {
+            b.onclick = async () => {
+                try { await api('/api/config', { mode: +b.dataset.mode });
+                    toast('已切换');
+                    loadCfg(); } catch (e) { toast(e.message); }
+            };
+        });
+
+        async function saveField(body) {
+            try { await api('/api/config', body);
+                toast('已保存');
+                loadCfg(); } catch (e) { toast(e.message); }
+        }
+
+        $('c-interval-save').onclick = () => saveField({ interval: Math.max(1, +$('c-interval').value || 0) });
+        $('c-cpuset-save').onclick = () => saveField({ cpuset_name: $('c-cpuset').value.trim() });
+        $('c-file-save').onclick = () => saveField({ config_file: $('c-file').value.trim() });
+
+        // ============================================================
+        //  关于页
+        // ============================================================
+        $('c-about').onclick = async () => {
+            $('page-about').classList.add('show');
+            try { const d = await api('/api/status');
+                $('a-ver').textContent = 'v' + d.version; } catch (e) {}
+        };
+        $('about-back').onclick = () => $('page-about').classList.remove('show');
+
+        // ============================================================
+        //  启动
+        // ============================================================
+        startStat();
     </script>
-    <!-- 注意：由于回答长度限制，完整 JS 在此处被截断，您必须从上一个回答或您的原文件复制完整的 JavaScript 代码。 -->
-    <!-- 但为了这个回答能直接运行，我会在下方提供完整的 JS（如果长度允许） -->
-    <!-- 实际上，之前的回答中已经给出了完整的 HTML + JS，您可以直接使用那个文件，只需要把 <style> 部分替换为上面的样式即可。 -->
-    <!-- 为简化，请直接使用上一个回答中的完整 HTML，仅替换 <style> 部分。 -->
 </body>
 
 </html>
