@@ -8,7 +8,7 @@
     <title>AppOpt</title>
     <style>
         /* ============================================================
-           主题变量：浅色 / 深色
+           主题变量：浅色 / 深色（通过 body.dark / body.light 控制）
            ============================================================ */
         * {
             box-sizing: border-box;
@@ -19,8 +19,8 @@
             display: none !important;
         }
 
+        /* 默认深色（fallback） */
         :root {
-            /* 默认深色 */
             --bg: #0f172a;
             --glass-bg: rgba(30, 41, 59, 0.55);
             --glass-border: rgba(255, 255, 255, 0.06);
@@ -48,6 +48,8 @@
             --seg-bg: rgba(255, 255, 255, 0.04);
             --modal-overlay: rgba(15, 23, 42, 0.65);
             --chip-bg: var(--glass-bg);
+            --radius: 16px;
+            --radius-sm: 10px;
         }
 
         /* 浅色主题 */
@@ -80,13 +82,11 @@
             --modal-overlay: rgba(15, 23, 42, 0.3);
             --chip-bg: var(--glass-bg);
         }
-        body.light .tabbar {
-            background: rgba(255, 255, 255, 0.75);
-            border-top-color: rgba(0, 0, 0, 0.06);
-        }
+
+        body.light .tabbar,
         body.light .navbar {
             background: rgba(255, 255, 255, 0.75);
-            border-bottom-color: rgba(0, 0, 0, 0.06);
+            border-color: rgba(0, 0, 0, 0.06);
         }
         body.light .card:hover {
             background: rgba(255, 255, 255, 0.8);
@@ -110,7 +110,7 @@
             border-color: rgba(0, 0, 0, 0.06);
         }
 
-        /* ===== 基础样式 ===== */
+        /* 基础样式 */
         body {
             font-family: system-ui, -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
             background: var(--bg);
@@ -136,7 +136,7 @@
             color: var(--fg);
             background: var(--input-bg);
             border: 1px solid var(--border);
-            border-radius: var(--radius-sm, 10px);
+            border-radius: var(--radius-sm);
             padding: 10px 14px;
             font-size: 14px;
             transition: border-color .2s, background .2s, box-shadow .2s;
@@ -186,13 +186,13 @@
             border-radius: 8px;
         }
 
-        /* ===== 卡片 ===== */
+        /* 卡片 */
         .card {
             background: var(--glass-bg);
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             border: 1px solid var(--glass-border);
-            border-radius: 16px;
+            border-radius: var(--radius);
             margin-bottom: 14px;
             box-shadow: var(--sh);
             animation: fadeUp .18s ease both;
@@ -220,7 +220,7 @@
             background: var(--border);
         }
 
-        /* ===== 行 ===== */
+        /* 行 */
         .row {
             display: flex;
             justify-content: space-between;
@@ -250,7 +250,7 @@
             font-size: 13px;
         }
 
-        /* ===== 徽章 ===== */
+        /* 徽章 */
         .badge {
             padding: 3px 12px;
             border-radius: 999px;
@@ -269,7 +269,7 @@
             color: var(--blue);
         }
 
-        /* ===== 统计 ===== */
+        /* 统计 */
         .grid2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -282,7 +282,7 @@
         }
         .stat {
             background: var(--stat-bg);
-            border-radius: 10px;
+            border-radius: var(--radius-sm);
             padding: 14px 8px;
             text-align: center;
             transition: background .2s;
@@ -303,7 +303,7 @@
             font-weight: 450;
         }
 
-        /* ===== Chip（核心标签） ===== */
+        /* Chip（核心标签） */
         .chip {
             display: inline-flex;
             align-items: center;
@@ -361,7 +361,7 @@
             gap: 4px;
         }
 
-        /* ===== 核心分层 ===== */
+        /* 核心分层 */
         .core-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -395,7 +395,7 @@
             color: var(--sub);
         }
 
-        /* ===== 标签栏 ===== */
+        /* 标签栏 */
         .tabbar {
             display: flex;
             height: 60px;
@@ -479,7 +479,7 @@
             }
         }
 
-        /* ===== 顶部栏 ===== */
+        /* 顶部栏 */
         .bar {
             display: flex;
             align-items: center;
@@ -492,7 +492,7 @@
             min-width: 0;
             background: var(--input-bg);
             border: 1px solid var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius-sm);
             padding: 10px 14px;
             font-size: 13px;
             color: var(--fg);
@@ -544,13 +544,13 @@
             box-shadow: 0 2px 12px rgba(239, 68, 68, 0.3);
         }
 
-        /* ===== 规则分组 ===== */
+        /* 规则分组 */
         .grp {
             background: var(--glass-bg);
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             border: 1px solid var(--glass-border);
-            border-radius: 16px;
+            border-radius: var(--radius);
             margin-bottom: 12px;
             box-shadow: var(--sh);
             overflow: hidden;
@@ -649,7 +649,7 @@
             margin: 8px 14px 10px;
             padding: 9px 0;
             border: 1.5px dashed var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius-sm);
             color: var(--sub);
             font-size: 13px;
             font-weight: 500;
@@ -732,11 +732,11 @@
             opacity: .5;
         }
 
-        /* ===== 分段控制器 ===== */
+        /* 分段控制器 */
         .seg {
             display: flex;
             background: var(--seg-bg);
-            border-radius: 10px;
+            border-radius: var(--radius-sm);
             padding: 3px;
             gap: 3px;
         }
@@ -772,7 +772,7 @@
             color: var(--orange);
         }
 
-        /* ===== 模态框 ===== */
+        /* 模态框 */
         .modal-bg {
             position: fixed;
             inset: 0;
@@ -791,7 +791,7 @@
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             border: 1px solid var(--glass-border);
-            border-radius: 16px;
+            border-radius: var(--radius);
             padding: 24px 22px;
             width: 100%;
             max-width: 380px;
@@ -799,17 +799,18 @@
             overflow: auto;
             animation: popIn .2s cubic-bezier(.2, 1.1, .4, 1);
             box-shadow: var(--sh-lg);
+            text-align: center; /* 让内部元素默认居中 */
         }
         .modal h3 {
             font-size: 17px;
             font-weight: 700;
             margin-bottom: 16px;
-            text-align: center;
         }
         .modal input {
+            text-align: left; /* 输入框左对齐 */
             background: var(--input-bg);
             border: 1px solid var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius-sm);
             padding: 10px 14px;
             font-size: 14px;
             width: 100%;
@@ -819,10 +820,14 @@
             border-color: var(--blue);
             background: var(--input-focus);
         }
+        .modal .sg-wrap {
+            text-align: left; /* 建议下拉框左对齐 */
+        }
         .modal-actions {
             display: flex;
             gap: 10px;
             margin-top: 14px;
+            justify-content: center;
         }
         .modal-actions button {
             flex: 1;
@@ -831,17 +836,19 @@
             font-size: 14px;
             font-weight: 600;
             transition: all .15s;
+            max-width: 120px;
         }
         .modal-actions button:active {
             transform: scale(.95);
         }
 
-        /* ===== 核心选择器 ===== */
+        /* 核心选择器 — 居中 */
         .core-chips {
             display: flex;
             gap: 6px;
             margin-bottom: 10px;
             flex-wrap: wrap;
+            justify-content: center;  /* 居中 */
         }
         .core-chips button {
             padding: 6px 14px;
@@ -884,9 +891,10 @@
             box-shadow: 0 2px 12px rgba(148, 163, 184, 0.3);
         }
 
-        /* ===== 树形行 ===== */
+        /* 树形行（弹窗内） */
         .tree-row {
             margin-bottom: 12px;
+            text-align: left;
         }
         .tree-row.branch {
             border-left: 2.5px solid rgba(99, 102, 241, 0.25);
@@ -915,9 +923,10 @@
             margin-top: 4px;
         }
 
-        /* ===== 建议下拉 ===== */
+        /* 建议下拉 */
         .sg-wrap {
             position: relative;
+            text-align: left;
         }
         .sg-box {
             position: absolute;
@@ -928,7 +937,7 @@
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             border: 1px solid var(--glass-border);
-            border-radius: 10px;
+            border-radius: var(--radius-sm);
             box-shadow: var(--sh-lg);
             max-height: 180px;
             overflow: auto;
@@ -948,7 +957,7 @@
             color: var(--fg);
         }
 
-        /* ===== 关于页 ===== */
+        /* 关于页 */
         .page {
             position: absolute;
             inset: 0;
@@ -1016,7 +1025,7 @@
         .logo {
             width: 76px;
             height: 76px;
-            border-radius: 16px;
+            border-radius: var(--radius);
             background: linear-gradient(135deg, rgba(16, 185, 129, 0.3), rgba(99, 102, 241, 0.3));
             display: flex;
             align-items: center;
@@ -1053,6 +1062,7 @@
             color: var(--fg);
             opacity: .85;
             word-break: break-all;
+            text-align: left;
         }
         .text ol {
             padding-left: 20px;
@@ -1064,7 +1074,7 @@
             font-weight: 600;
         }
 
-        /* ===== Toast ===== */
+        /* Toast */
         #toast {
             position: fixed;
             top: 50%;
@@ -1076,7 +1086,7 @@
             border: 1px solid var(--glass-border);
             color: var(--fg);
             padding: 12px 24px;
-            border-radius: 16px;
+            border-radius: var(--radius);
             font-size: 14px;
             font-weight: 500;
             z-index: 200;
@@ -1102,6 +1112,7 @@
             font-weight: 450;
             transition: opacity .15s;
             border-top: 1px solid var(--border);
+            text-align: left;
         }
         .entry:first-child {
             border-top: none;
@@ -1121,33 +1132,33 @@
             opacity: .5;
         }
 
-        /* ===== 主题切换按钮 ===== */
-        .theme-toggle {
+        /* 主题切换按钮 (设置页) */
+        .theme-selector {
             display: flex;
-            align-items: center;
             gap: 8px;
-            padding: 6px 12px;
+            justify-content: center;
+        }
+        .theme-selector button {
+            padding: 6px 16px;
             border-radius: 999px;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
             font-size: 13px;
             font-weight: 500;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
             transition: all .2s;
+            color: var(--sub);
         }
-        .theme-toggle:active {
+        .theme-selector button.on {
+            background: var(--blue);
+            color: #fff;
+            border-color: var(--blue);
+            box-shadow: 0 2px 12px var(--btn-shadow);
+        }
+        .theme-selector button:active {
             transform: scale(.94);
         }
-        .theme-toggle svg {
-            width: 18px;
-            height: 18px;
-            stroke: currentColor;
-            fill: none;
-            stroke-width: 2;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-        }
 
-        /* ===== 动画 ===== */
+        /* 动画 */
         @keyframes fadeUp {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: none; }
@@ -1161,7 +1172,7 @@
             to { opacity: 1; transform: none; }
         }
 
-        /* ===== 响应式 ===== */
+        /* 响应式 */
         @media(max-width:480px) {
             .grid2 { grid-template-columns: 1fr 1fr; gap: 8px; }
             .grid3 { grid-template-columns: 1fr 1fr; }
@@ -1236,11 +1247,10 @@
             <section id="tab-settings" class="panel" hidden>
                 <div class="card">
                     <div class="card-title">🎨 主题</div>
-                    <div style="display:flex;gap:10px;">
-                        <button class="btn-outline theme-toggle" id="theme-toggle">
-                            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-                            <span id="theme-label">深色</span>
-                        </button>
+                    <div class="theme-selector" id="theme-selector">
+                        <button data-theme="auto">自动</button>
+                        <button data-theme="dark">深色</button>
+                        <button data-theme="light">浅色</button>
                     </div>
                 </div>
 
@@ -1499,13 +1509,11 @@
             return 'c';
         }
 
-        // 生成单个chip HTML
         function chipHtml(s) {
             const label = coreDisplay(s);
             return `<span class="chip ${chipCls(s)} sm">${esc(label)}</span>`;
         }
 
-        // 根据spec字符串生成一组chip
         function chipGroupHtml(spec) {
             if (!spec) return '';
             const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
@@ -1636,7 +1644,7 @@
         $('r-filter').addEventListener('input', renderRules);
 
         // ============================================================
-        //  规则列表事件（与之前相同，略作保持）
+        //  规则列表事件
         // ============================================================
         $('r-list').addEventListener('click', e => {
             const ea = e.target.closest('[data-editapp]');
@@ -1715,7 +1723,7 @@
         });
 
         // ============================================================
-        //  规则编辑弹窗（与之前完全一致，略）
+        //  规则编辑弹窗
         // ============================================================
         async function fetchTopo() {
             if (!topoCores) try { const d = await api('/api/status');
@@ -2160,6 +2168,75 @@
         $('c-file-save').onclick = () => saveField({ config_file: $('c-file').value.trim() });
 
         // ============================================================
+        //  主题管理（自动适应 + 手动切换）
+        // ============================================================
+        const themeSelector = document.getElementById('theme-selector');
+        const themeBtns = themeSelector.querySelectorAll('button');
+
+        // 获取当前系统主题
+        function getSystemTheme() {
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+
+        // 应用主题
+        function applyTheme(theme) {
+            const isDark = theme === 'dark';
+            document.body.classList.toggle('light', !isDark);
+            document.body.classList.toggle('dark', isDark);
+            const meta = document.getElementById('theme-color');
+            if (meta) meta.content = isDark ? '#0f172a' : '#f1f5f9';
+            // 更新按钮高亮
+            themeBtns.forEach(btn => {
+                btn.classList.toggle('on', btn.dataset.theme === theme);
+            });
+            localStorage.setItem('theme', theme);
+        }
+
+        // 获取当前应使用的主题（考虑auto）
+        function resolveTheme(mode) {
+            if (mode === 'auto') return getSystemTheme();
+            return mode; // 'dark' 或 'light'
+        }
+
+        // 初始化主题
+        function initTheme() {
+            const saved = localStorage.getItem('theme') || 'auto';
+            // 确保按钮选中状态
+            themeBtns.forEach(btn => {
+                btn.classList.toggle('on', btn.dataset.theme === saved);
+            });
+            const effective = resolveTheme(saved);
+            applyTheme(effective);
+            // 保存模式（非effective，而是saved）
+            localStorage.setItem('theme', saved);
+            // 监听系统主题变化
+            const media = window.matchMedia('(prefers-color-scheme: dark)');
+            media.addEventListener('change', () => {
+                const currentMode = localStorage.getItem('theme') || 'auto';
+                if (currentMode === 'auto') {
+                    const newEffective = resolveTheme('auto');
+                    applyTheme(newEffective);
+                }
+            });
+        }
+
+        // 主题切换点击事件
+        themeBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.theme;
+                const effective = resolveTheme(mode);
+                applyTheme(effective);
+                // 存储模式
+                localStorage.setItem('theme', mode);
+                // 更新高亮
+                themeBtns.forEach(b => b.classList.toggle('on', b === btn));
+            });
+        });
+
+        // 初始化主题
+        initTheme();
+
+        // ============================================================
         //  关于页
         // ============================================================
         $('c-about').onclick = async () => {
@@ -2168,27 +2245,6 @@
                 $('a-ver').textContent = 'v' + d.version; } catch (e) {}
         };
         $('about-back').onclick = () => $('page-about').classList.remove('show');
-
-        // ============================================================
-        //  主题切换
-        // ============================================================
-        function setTheme(theme) {
-            const isDark = theme === 'dark';
-            document.body.classList.toggle('light', !isDark);
-            document.getElementById('theme-label').textContent = isDark ? '深色' : '浅色';
-            localStorage.setItem('theme', theme);
-            const meta = document.getElementById('theme-color');
-            if (meta) meta.content = isDark ? '#0f172a' : '#f1f5f9';
-        }
-
-        const savedTheme = localStorage.getItem('theme') || 'dark';
-        setTheme(savedTheme);
-
-        document.getElementById('theme-toggle').addEventListener('click', () => {
-            const current = document.body.classList.contains('light') ? 'light' : 'dark';
-            const next = current === 'dark' ? 'light' : 'dark';
-            setTheme(next);
-        });
 
         // ============================================================
         //  启动
