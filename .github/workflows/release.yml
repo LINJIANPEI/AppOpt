@@ -24,6 +24,7 @@ jobs:
           filters: |
             app:
               - 'AppOpt/**'
+              - 'web/**'
             ebpf:
               - 'AppOpt-ebpf/**'
 
