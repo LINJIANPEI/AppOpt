@@ -5,6 +5,7 @@ on:
     paths:
       - "AppOpt/**"
       - "AppOpt-ebpf/**"
+      - "web/**"
   workflow_dispatch: # 手动触发时默认全部重新编译
 
 permissions:
