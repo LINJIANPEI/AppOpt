@@ -8,6 +8,7 @@ use crate::config::{
     strip_comment,
 };
 
+#[derive(Debug)]
 pub enum RuleEdit {
     Ok,
     NotFound,
