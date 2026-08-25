@@ -1826,7 +1826,7 @@ pub fn normalize_package_block(
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 第一步：删除所有顶格的、以 "pkg:" 开头的独立子包块
+    // 第一步：删除所有顶格的、以 "pkg:" 开头的独立子包块（旧格式）
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
@@ -1834,55 +1834,63 @@ pub fn normalize_package_block(
         if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
             let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
             if let Some((start, end)) = find_package_range(lines, pkg_name) {
-                lines.drain(start..=end);
-                continue;
+                if start <= end && end < lines.len() {
+                    lines.drain(start..=end);
+                    continue;
+                }
             }
         }
         i += 1;
     }
 
-    // 第二步：收集主包的所有行索引（包括嵌套子包）
-    let mut indices = collect_all_lines(lines, pkg);
-    let insert_pos = if indices.is_empty() {
-        lines.len()
-    } else {
-        *indices.iter().min().unwrap()
+    // 第二步：查找主包范围
+    let (start, end) = match find_package_range(lines, pkg) {
+        Some((s, e)) if s <= e && e < lines.len() => (s, e),
+        Some(_) => {
+            eprintln!("警告: 主包 {} 范围无效，跳过规范化", pkg);
+            return false;
+        }
+        None => {
+            // 主包不存在，直接插入新块
+            let new_block = build_package_block(pkg, cfg);
+            if new_block.is_empty() {
+                return false;
+            }
+            // 在文件末尾插入
+            if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
+                lines.push(String::new());
+            }
+            lines.extend(new_block);
+            lines.push(String::new());
+            return true;
+        }
     };
 
-    // 第三步：删除旧的主包行（包括其嵌套子包）
-    if !indices.is_empty() {
-        indices.sort_unstable();
-        indices.dedup();
-        for idx in indices.into_iter().rev() {
-            lines.remove(idx);
-        }
-    }
-
-    // 第四步：生成新块
+    // 第三步：生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
+        // 没有规则，删除主包范围
+        lines.drain(start..=end);
         return true;
     }
 
-    // 第五步：在合适位置插入新块
-    let mut pos = if insert_pos == lines.len() {
-        lines.len()
-    } else {
-        insert_pos
-    };
-
-    // 插入前确保有空行分隔
-    if pos > 0 && !lines[pos - 1].trim().is_empty() {
-        lines.insert(pos, String::new());
-        pos += 1;
-    }
-
-    // 保存新块长度，以便后续插入空行
+    // 第四步：替换旧块为新块
     let block_len = new_block.len();
-    lines.splice(pos..pos, new_block);
+    // 确保 start 和 end 有效
+    if start > end || end >= lines.len() {
+        eprintln!(
+            "警告: 主包 {} 范围无效 (start={}, end={}, len={})，跳过替换",
+            pkg,
+            start,
+            end,
+            lines.len()
+        );
+        return false;
+    }
+    lines.splice(start..=end, new_block);
 
-    // 确保块后有空行
-    let block_end = pos + block_len;
+    // 确保块后有空行（如果后面还有其他内容且非空行）
+    let block_end = start + block_len;
     if block_end < lines.len() && !lines[block_end].trim().is_empty() {
         lines.insert(block_end, String::new());
     } else if block_end == lines.len() {
