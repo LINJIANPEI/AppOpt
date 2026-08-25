@@ -984,9 +984,8 @@ pub fn rule_upsert(
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
-                // 子包操作后，使用 normalize_package_block 合并所有独立子包块
-                // 但 normalize_package_block 需要 cfg，我们传入 cfg
-                normalize_package_block(&mut lines, main_pkg, cfg);
+                // 子包操作后，可能还有独立的子包块，调用规范化合并
+                // normalize_package_block(&mut lines, main_pkg, cfg); // 如果不需要合并可注释
                 return file_write(config_path, &lines);
             }
             return result;
@@ -994,13 +993,10 @@ pub fn rule_upsert(
         return RuleEdit::Ok;
     }
 
-    // ---- 主包处理 ----
+    // ---- 主包处理：删除所有旧块，记录第一个块的位置 ----
     // 1. 构建新规则列表（基于当前 cfg 并应用本次修改）
     let mut new_rules = cfg.rules.clone();
-
-    // 1.1 应用本次修改
     if thread.is_empty() {
-        // 包级规则
         new_rules.retain(|r| !(r.pkg == pkg && r.thread.is_empty()));
         if !cpus.is_empty() {
             let cpuset_dir = crate::cpuset::ensure_cpuset_dir(
@@ -1018,7 +1014,6 @@ pub fn rule_upsert(
             new_rules.push(new_rule);
         }
     } else {
-        // 线程规则
         new_rules.retain(|r| !(r.pkg == pkg && r.thread == thread));
         if !cpus.is_empty() {
             let new_rule = crate::config::AffinityRule {
@@ -1033,34 +1028,6 @@ pub fn rule_upsert(
         }
     }
 
-    // 1.2 对该包的所有规则去重（按 (thread, spec) 去重，保留最后一个）
-    // 先收集该包的所有规则（包括主包和子包）
-    let pkg_prefix = format!("{}:", pkg);
-    let mut rules_to_dedup = Vec::new();
-    let mut other_rules = Vec::new();
-    for rule in new_rules {
-        if rule.pkg == pkg || rule.pkg.starts_with(&pkg_prefix) {
-            rules_to_dedup.push(rule);
-        } else {
-            other_rules.push(rule);
-        }
-    }
-    // 按 (thread, spec) 去重（保留最后一个）
-    let mut seen = HashSet::new();
-    let mut deduped = Vec::new();
-    for rule in rules_to_dedup.into_iter().rev() {
-        let key = (rule.thread.clone(), rule.spec.clone());
-        if !seen.contains(&key) {
-            seen.insert(key);
-            deduped.push(rule);
-        }
-    }
-    deduped.reverse();
-    // 合并回 new_rules
-    new_rules = other_rules;
-    new_rules.extend(deduped);
-
-    // 重建 HashSet
     use std::collections::HashSet;
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
@@ -1075,51 +1042,84 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // 2. 删除所有顶格的、以 pkg 开头（或 pkg:）的独立块（包括重复块和子包独立块）
-    let mut changed = true;
-    while changed {
-        changed = false;
-        let mut i = 0;
-        while i < lines.len() {
-            let trimmed = lines[i].trim();
-            let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-            let is_pkg_line = is_top_level
-                && (trimmed.starts_with(pkg)
-                    && (trimmed.len() == pkg.len()
-                        || trimmed[pkg.len()..].starts_with('=')
-                        || trimmed[pkg.len()..].starts_with('{')
-                        || trimmed[pkg.len()..].starts_with(' '))
-                    || trimmed.starts_with(&format!("{}:", pkg)));
-            if is_pkg_line {
-                let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
-                if let Some((start, end)) = find_package_range(&lines, pkg_name) {
-                    lines.drain(start..=end);
-                    changed = true;
-                    break;
+    // 2. 收集所有需要删除的块的范围，并记录第一个块的位置
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut first_start = None;
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        let is_pkg_line = is_top_level
+            && (trimmed.starts_with(pkg)
+                && (trimmed.len() == pkg.len()
+                    || trimmed[pkg.len()..].starts_with('=')
+                    || trimmed[pkg.len()..].starts_with('{')
+                    || trimmed[pkg.len()..].starts_with(' '))
+                || trimmed.starts_with(&format!("{}:", pkg)));
+        if is_pkg_line {
+            let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
+            if let Some((start, end)) = find_package_range(&lines, pkg_name) {
+                if first_start.is_none() {
+                    first_start = Some(start);
                 }
+                ranges.push((start, end));
+                i = end + 1; // 跳到块结束之后
+                continue;
             }
-            i += 1;
         }
+        i += 1;
     }
 
-    // 3. 生成新块
-    let new_block = build_package_block(pkg, &new_cfg);
-    if new_block.is_empty() {
+    // 3. 如果没有找到任何块，且新块不为空，则在文件末尾插入
+    if ranges.is_empty() {
+        let new_block = build_package_block(pkg, &new_cfg);
+        if new_block.is_empty() {
+            clean_empty_lines(&mut lines);
+            return file_write(config_path, &lines);
+        }
+        if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
+            lines.push(String::new());
+        }
+        lines.extend(new_block);
+        lines.push(String::new());
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
 
-    // 4. 在文件末尾插入新块（因为已经删除了所有旧块）
-    if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
-        lines.push(String::new());
-    }
-    lines.extend(new_block);
-    lines.push(String::new());
+    // 4. 按结束位置从大到小排序，方便删除（从后往前删）
+    ranges.sort_by_key(|(_, end)| *end);
+    ranges.reverse();
 
-    // 5. 清理多余空行
+    // 5. 删除所有块
+    for (start, end) in ranges {
+        lines.drain(start..=end);
+    }
+
+    // 6. 生成新块
+    let new_block = build_package_block(pkg, &new_cfg);
+    if new_block.is_empty() {
+        // 没有规则，直接返回
+        clean_empty_lines(&mut lines);
+        return file_write(config_path, &lines);
+    }
+
+    // 7. 在第一个旧块的位置插入新块
+    let insert_pos = first_start.unwrap_or(lines.len());
+    let mut pos = insert_pos;
+    // 如果插入位置之前有连续的空行或注释，我们保持插入点，但我们需要保留这些行，所以插入到它们之后？
+    // 但更自然的做法是直接插入到该位置（可能在注释后面）。
+    // 为了保留注释，我们插入到该位置，而不是在它后面。
+    // 但确保插入后块与注释之间有合适的空行？可以简单插入。
+
+    // 插入前，检查插入位置前是否有注释，如果有，保留一个空行间隔？
+    // 我们直接插入，保留用户原来的格式。
+    lines.splice(pos..pos, new_block);
+
+    // 8. 清理多余空行
     clean_empty_lines(&mut lines);
     file_write(config_path, &lines)
 }
+
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
