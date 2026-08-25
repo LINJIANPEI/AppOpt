@@ -590,6 +590,7 @@ fn write_sub_pkg_block(
     }
     if let Some(idx) = standalone_idx {
         lines.remove(idx);
+        t = target_scan(lines, pkg);
     }
 
     // === 删除整个子包（delete_all = true） ===
