@@ -355,6 +355,7 @@ fn pkg_shape_ok(pkg: &str) -> bool {
 }
 
 fn rule_api(req: &Request) -> (u16, String) {
+    // 使用 catch_unwind 捕获 rule_upsert 可能发生的 panic
     let result = std::panic::catch_unwind(|| {
         eprintln!("[rule_api] 收到请求");
 
@@ -391,7 +392,7 @@ fn rule_api(req: &Request) -> (u16, String) {
         if cpus.is_empty()
             || cpus.len() >= 64
             || !spec_like(cpus)
-            || parse_cpu_spec(cpus, &cfg.topo).count() == 0
+            || crate::cpuset::parse_cpu_spec(cpus, &cfg.topo).count() == 0
         {
             eprintln!("[rule_api] CPU 规格无效");
             return err_json(400, "无效的 CPU 规格");
@@ -418,7 +419,7 @@ fn rule_api(req: &Request) -> (u16, String) {
             }
             RuleEdit::Malformed => {
                 eprintln!("[rule_api] 格式错误");
-                err_json(409, "配置文件存在未闭合块，请修复后重试")
+                err_json(409, "配置文件存在未闭合块或无效CPU规格，请修复后重试")
             }
             RuleEdit::IoErr => {
                 eprintln!("[rule_api] 写入失败");
@@ -427,6 +428,7 @@ fn rule_api(req: &Request) -> (u16, String) {
         }
     });
 
+    // 处理 panic 情况
     match result {
         Ok(res) => res,
         Err(e) => {
