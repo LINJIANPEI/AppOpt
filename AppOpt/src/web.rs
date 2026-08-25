@@ -386,10 +386,11 @@ fn rule_api(req: &Request) -> (u16, String) {
 
         let file = lock_ignore_poison(&CONFIG_FILE).clone();
         match rule_upsert(&file, pkg, thread, cpus, &cfg) {
-            RuleEdit::Ok => {
-                config_reload_now();
-                (200, json!({ "ok": true }).to_string())
-            }
+     
+    RuleEdit::Ok => {
+        config_reload_now();
+        (200, json!({ "ok": true }).to_string())
+    }
             RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
             _ => err_json(500, "配置文件写入失败"),
         }
