@@ -20,7 +20,6 @@ use crate::ebpf_mode::ebpf_probe;
 use crate::rule_edit::{
     RuleEdit, normalize_package_block, rule_delete, rule_delete_pkg, rule_rename, rule_upsert,
 };
-// 确保已经存在，若没有则添加
 use crate::{EBPF_GAVE_UP, MAX_PKG_LEN, MAX_THREAD_LEN, lock_ignore_poison};
 
 pub const WEB_PORT: u16 = 8889;
@@ -138,7 +137,7 @@ fn request_read(reader: &mut BufReader<TcpStream>) -> Option<Request> {
             "content-type" => ctype = v.to_ascii_lowercase(),
             "content-length" => len = v.parse().unwrap_or(usize::MAX),
             "connection" => conn = v.to_ascii_lowercase(),
-            "transfer-encoding" => return None, // 拒绝 chunked
+            "transfer-encoding" => return None,
             _ => {}
         }
     }
@@ -291,6 +290,7 @@ fn status_json() -> String {
     .to_string()
 }
 
+/// 修改后的 rules_json：支持返回分组注释
 fn rules_json() -> String {
     let Some(cfg) = current_cfg() else {
         return json!({ "rules": [] }).to_string();
@@ -300,7 +300,6 @@ fn rules_json() -> String {
     let mut groups: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
     for r in &cfg.rules {
-        // 提取主包名和子包名
         let parts: Vec<&str> = r.pkg.split(':').collect();
         let main_pkg = parts[0];
         let is_sub = parts.len() > 1;
@@ -315,11 +314,11 @@ fn rules_json() -> String {
                 "pkg": main_pkg,
                 "items": [],
                 "subs": {},
+                "comment": "", // 占位
             })
         });
 
         if is_sub {
-            // 子包规则：放入 subs
             let subs = entry["subs"].as_object_mut().unwrap();
             let sub_entry = subs
                 .entry(sub_suffix.clone())
@@ -328,15 +327,45 @@ fn rules_json() -> String {
                 "thread": r.thread.clone(),
                 "spec": r.spec.clone(),
                 "full_pkg": r.pkg.clone(),
+                "comment": r.comment.clone(),
             }));
         } else {
-            // 主包规则：放入 items
             entry["items"].as_array_mut().unwrap().push(json!({
                 "thread": r.thread.clone(),
                 "spec": r.spec.clone(),
                 "full_pkg": r.pkg.clone(),
+                "comment": r.comment.clone(),
             }));
         }
+    }
+
+    // 为每个分组提取注释（优先取包级规则的注释）
+    for (_, entry) in groups.iter_mut() {
+        let items = entry["items"].as_array().unwrap();
+        let mut group_comment = String::new();
+        // 优先取包级规则（thread 为空）的注释
+        for item in items {
+            if item["thread"].as_str().unwrap_or("") == "" {
+                if let Some(c) = item["comment"].as_str() {
+                    if !c.is_empty() {
+                        group_comment = c.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        // 若没有包级注释，取第一个非空注释
+        if group_comment.is_empty() {
+            for item in items {
+                if let Some(c) = item["comment"].as_str() {
+                    if !c.is_empty() {
+                        group_comment = c.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        entry["comment"] = json!(group_comment);
     }
 
     let rules_array: Vec<serde_json::Value> = groups.into_values().collect();
@@ -462,7 +491,6 @@ fn rule_del_api(req: &Request) -> (u16, String) {
 
 fn rule_rename_api(req: &Request) -> (u16, String) {
     let result = std::panic::catch_unwind(|| {
-        // ----- 原有逻辑开始 -----
         let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
             return err_json(400, "请求体不是合法 JSON");
         };
@@ -493,7 +521,6 @@ fn rule_rename_api(req: &Request) -> (u16, String) {
                         Ok(content) => content.lines().map(String::from).collect(),
                         Err(_) => Vec::new(),
                     };
-                    // 重命名后，新包名是 new
                     let main_pkg = new.split(':').next().unwrap_or(new);
                     if normalize_package_block(&mut lines, main_pkg, &cfg) {
                         let tmp = format!("{}.tmp", file);
@@ -512,7 +539,6 @@ fn rule_rename_api(req: &Request) -> (u16, String) {
             RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
             RuleEdit::IoErr => err_json(500, "配置文件写入失败"),
         }
-        // ----- 原有逻辑结束 -----
     });
 
     match result {
@@ -534,15 +560,11 @@ fn suggest_api(req: &Request) -> (u16, String) {
         return err_json(400, "q 过长");
     }
     let list: Vec<String> = match v["pkg"].as_str().map(str::trim).filter(|p| !p.is_empty()) {
-        None => {
-            // 无 pkg 参数：返回包名列表
-            suggest_pkgs(q).into_iter().map(|(n, _)| n).collect()
-        }
+        None => suggest_pkgs(q).into_iter().map(|(n, _)| n).collect(),
         Some(pkg) => {
             if !token_ok(pkg, MAX_PKG_LEN) {
                 return err_json(400, "名称含有非法字符");
             }
-            // 如果 q 以 ':' 开头，表示搜索子包名
             if q.starts_with(':') {
                 let sub_q = q.trim_start_matches(':').trim();
                 let cfg = current_cfg();
@@ -552,9 +574,7 @@ fn suggest_api(req: &Request) -> (u16, String) {
                         c.rules
                             .iter()
                             .filter_map(|r| {
-                                // 只取以 pkg 开头且不等于 pkg 的包（即子包）
                                 if r.pkg.starts_with(pkg) && r.pkg != pkg {
-                                    // 提取子包后缀（如 ":sub"）
                                     r.pkg.strip_prefix(pkg).and_then(|s| s.strip_prefix(':'))
                                 } else {
                                     None
@@ -566,7 +586,6 @@ fn suggest_api(req: &Request) -> (u16, String) {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                // 根据 sub_q 过滤
                 if sub_q.is_empty() {
                     sub_names
                 } else {
@@ -577,7 +596,6 @@ fn suggest_api(req: &Request) -> (u16, String) {
                         .collect()
                 }
             } else {
-                // 普通线程名建议
                 suggest_threads(pkg, q)
                     .into_iter()
                     .map(|(n, _)| n)
@@ -704,7 +722,6 @@ fn config_set_api(req: &Request) -> (u16, String) {
 
     if let Some(m) = mode {
         MODE_FORCE.store(m as u8, Ordering::Relaxed);
-        // 用户主动切回 eBPF 方向时清除放弃标记允许重试
         if m != 2 {
             EBPF_GAVE_UP.store(false, Ordering::Relaxed);
         }
