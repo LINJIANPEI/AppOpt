@@ -977,12 +977,34 @@ pub fn rule_upsert(
         .map(String::from)
         .collect();
 
+    // ---- 辅助函数：校验 CPU 规格是否有效 ----
+    fn validate_cpus(
+        cpus: &str,
+        topo: &crate::cpuset::CpuTopology,
+    ) -> Option<crate::cpuset::CpuSet> {
+        if cpus.is_empty() {
+            return None; // 空字符串表示删除规则，允许
+        }
+        let set = crate::cpuset::parse_cpu_spec(cpus, topo);
+        if set.count() == 0 {
+            eprintln!("[rule_upsert] 无效的 CPU 规格: {}", cpus);
+            None
+        } else {
+            Some(set)
+        }
+    }
+
     // ---- 子包处理 ----
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
             let main_pkg = parts[0];
             let sub = parts[1];
+            // 注意：write_sub_pkg_block 内部也需要增加校验，我们稍后修改它
+            // 这里先调用，但也要检查传入的 cpus 是否有效（如果不为空）
+            if !cpus.is_empty() && validate_cpus(cpus, &cfg.topo).is_none() {
+                return RuleEdit::Malformed;
+            }
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
@@ -994,39 +1016,63 @@ pub fn rule_upsert(
     }
 
     // ---- 主包处理 ----
-    // 1. 构建新规则列表
-    let mut new_rules = cfg.rules.clone();
+    // 1. 构建新规则列表（先收集有效规则）
+    let mut new_rules = Vec::new();
+    // 处理包级规则（thread 为空）
     if thread.is_empty() {
-        new_rules.retain(|r| !(r.pkg == pkg && r.thread.is_empty()));
+        // 保留其他包的规则
+        for r in &cfg.rules {
+            if r.pkg != pkg || !r.thread.is_empty() {
+                new_rules.push(r.clone());
+            }
+        }
+        // 如果 cpus 非空，则添加或更新包级规则
         if !cpus.is_empty() {
-            let cpuset_dir = crate::cpuset::ensure_cpuset_dir(
-                &crate::cpuset::parse_cpu_spec(cpus, &cfg.topo),
-                &cfg.topo,
-            );
-            let new_rule = crate::config::AffinityRule {
-                pkg: pkg.to_string(),
-                thread: String::new(),
-                thread_pattern: std::ffi::CString::new("").unwrap_or_default(),
-                cpuset_dir,
-                cpus: crate::cpuset::parse_cpu_spec(cpus, &cfg.topo),
-                spec: cpus.to_string(),
-            };
-            new_rules.push(new_rule);
+            if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
+                let cpuset_dir = crate::cpuset::ensure_cpuset_dir(&cpuset, &cfg.topo);
+                let new_rule = crate::config::AffinityRule {
+                    pkg: pkg.to_string(),
+                    thread: String::new(),
+                    thread_pattern: std::ffi::CString::new("").unwrap_or_default(),
+                    cpuset_dir,
+                    cpus: cpuset,
+                    spec: cpus.to_string(),
+                };
+                new_rules.push(new_rule);
+            } else {
+                // 规格无效，直接返回错误
+                return RuleEdit::Malformed;
+            }
         }
     } else {
-        new_rules.retain(|r| !(r.pkg == pkg && r.thread == thread));
+        // 线程规则
+        // 保留其他规则（包括该包的其他线程，但不包括相同线程名的）
+        for r in &cfg.rules {
+            if r.pkg == pkg && r.thread == thread {
+                continue; // 移除旧的同名线程
+            }
+            new_rules.push(r.clone());
+        }
+        // 如果 cpus 非空，则添加或更新线程规则
         if !cpus.is_empty() {
-            let new_rule = crate::config::AffinityRule {
-                pkg: pkg.to_string(),
-                thread: thread.to_string(),
-                thread_pattern: std::ffi::CString::new(thread).unwrap_or_default(),
-                cpuset_dir: String::new(),
-                cpus: crate::cpuset::parse_cpu_spec(cpus, &cfg.topo),
-                spec: cpus.to_string(),
-            };
-            new_rules.push(new_rule);
+            if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
+                let new_rule = crate::config::AffinityRule {
+                    pkg: pkg.to_string(),
+                    thread: thread.to_string(),
+                    thread_pattern: std::ffi::CString::new(thread).unwrap_or_default(),
+                    cpuset_dir: String::new(),
+                    cpus: cpuset,
+                    spec: cpus.to_string(),
+                };
+                new_rules.push(new_rule);
+            } else {
+                return RuleEdit::Malformed;
+            }
         }
     }
+
+    // 如果 new_rules 中没有任何属于该包的规则（即所有规则都被删除或无效），则返回 Ok
+    // 但若用户意图是删除，则不应报错；这里我们允许空规则，但最终新块会为空，会被后续逻辑处理。
 
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
@@ -1035,13 +1081,13 @@ pub fn rule_upsert(
         .map(|r| r.pkg.clone())
         .collect();
     let new_cfg = crate::config::AppConfig {
-        rules: new_rules,
+        rules: new_rules.clone(),
         pkgs,
         has_thread_rules,
         topo: cfg.topo.clone(),
     };
 
-    // 2. 收集所有需要删除的块的范围，并记录第一个块的位置
+    // 2. 查找所有旧块
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut first_start = None;
     let mut i = 0;
@@ -1056,9 +1102,9 @@ pub fn rule_upsert(
                     || trimmed[pkg.len()..].starts_with(' '))
                 || trimmed.starts_with(&format!("{}:", pkg)));
         if is_pkg_line {
-            let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
-            if let Some((start, end)) = find_package_range(&lines, pkg_name) {
-                // 边界检查
+            if let Some((start, end)) =
+                find_package_range(&lines, trimmed.split('=').next().unwrap_or(trimmed).trim())
+            {
                 if start <= end && end < lines.len() {
                     if first_start.is_none() {
                         first_start = Some(start);
@@ -1072,10 +1118,11 @@ pub fn rule_upsert(
         i += 1;
     }
 
-    // 3. 如果没有找到任何块，且新块不为空，则在文件末尾插入
+    // 3. 如果没有旧块，则在末尾插入新块
     if ranges.is_empty() {
         let new_block = build_package_block(pkg, &new_cfg);
         if new_block.is_empty() {
+            // 没有规则，则删除可能残留的空块（但这里没有旧块，无需操作）
             clean_empty_lines(&mut lines);
             return file_write(config_path, &lines);
         }
@@ -1088,25 +1135,24 @@ pub fn rule_upsert(
         return file_write(config_path, &lines);
     }
 
-    // 4. 按结束位置从大到小排序，方便删除（从后往前删）
+    // 4. 删除所有旧块（从后往前）
     ranges.sort_by_key(|(_, end)| *end);
     ranges.reverse();
-
-    // 5. 删除所有块（增强边界）
     for (start, end) in ranges {
         if start <= end && end < lines.len() {
             lines.drain(start..=end);
         }
     }
 
-    // 6. 生成新块
+    // 5. 生成新块
     let new_block = build_package_block(pkg, &new_cfg);
     if new_block.is_empty() {
+        // 没有规则，但可能仍有其他包块，直接保存
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
 
-    // 7. 在第一个旧块的位置插入新块
+    // 6. 插入新块
     let insert_pos = first_start.unwrap_or(lines.len());
     let pos = if insert_pos > lines.len() {
         lines.len()
@@ -1115,7 +1161,7 @@ pub fn rule_upsert(
     };
     lines.splice(pos..pos, new_block);
 
-    // 8. 清理多余空行
+    // 7. 清理空行
     clean_empty_lines(&mut lines);
     file_write(config_path, &lines)
 }
