@@ -1462,6 +1462,21 @@
                 grid-template-columns: 1fr 1fr;
             }
         }
+
+        .grp-name-static {
+            display: block;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            color: #94a3b8;
+            font-size: 12px;
+            opacity: 0.8;
+            font-weight: 400;
+            padding: 0 10px;
+            border-radius: 12px;
+            background: rgba(148, 163, 184, 0.15);
+        }
     </style>
 </head>
 
@@ -1880,9 +1895,7 @@
             const commentHtml = g.comment ? `<span class="grp-comment">${esc(g.comment)}</span>` : '';
             const pkgText = esc(g.pkg);
             const isLong = g.pkg.length > 12;
-            const pkgHtml = isLong
-                ? `<marquee behavior="scroll" direction="left" scrollamount="3">${pkgText}</marquee>`
-                : `<span class="static">${pkgText}</span>`;
+            const pkgHtml = `<span class="grp-name-static" title="${esc(g.pkg)}">${esc(g.pkg)}</span>`;
 
             let html = `
         <div class="grp-head">
@@ -2000,8 +2013,19 @@
                 }
                 tip.innerHTML = f ? '无匹配应用' : '<span class="empty-icon">📭</span>暂无规则<br>点击右上角「添加」创建第一条规则';
             } else tip?.remove();
+            setTimeout(checkOverflow, 50); // 延迟确保 DOM 渲染完成
         }
-
+        function checkOverflow() {
+            document.querySelectorAll('.grp-name-static').forEach(el => {
+                if (el.scrollWidth > el.clientWidth) {
+                    const text = el.textContent;
+                    el.innerHTML = `<marquee behavior="scroll" direction="left" scrollamount="3">${text}</marquee>`;
+                    el.style.background = 'rgba(148,163,184,0.15)';
+                    el.style.padding = '0 10px';
+                    el.style.borderRadius = '12px';
+                }
+            });
+        }
         $('r-filter').addEventListener('input', renderRules);
 
         // ============================================================
