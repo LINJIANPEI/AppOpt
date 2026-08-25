@@ -1,4 +1,3 @@
-use crate::cpuset::parse_cpu_spec;
 use serde_json::{Value, json};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
