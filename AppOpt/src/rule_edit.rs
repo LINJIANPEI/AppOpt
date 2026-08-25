@@ -1049,6 +1049,7 @@ pub fn rule_upsert(
                 cpuset_dir,
                 cpus: cpuset,
                 spec: cpus.to_string(),
+                comment: String::new(), // 添加这行
             };
             new_rules.push(new_rule);
             eprintln!("[rule_upsert] 新规则已加入，总数={}", new_rules.len());

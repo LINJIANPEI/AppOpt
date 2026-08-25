@@ -269,7 +269,6 @@ fn add_rule(
     true
 }
 
-/// 加载配置文件，返回 None 表示未变化或解析失败
 pub fn load_config(
     config_file: &str,
     topo: &CpuTopology,
@@ -296,14 +295,12 @@ pub fn load_config(
     let mut in_block = false;
     let mut pkg_stack: Vec<String> = Vec::new();
     let mut in_sub_block = false;
-
-    // ★ 新增：暂存独立注释行内容
     let mut pending_comment: Option<String> = None;
 
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // ---- 处理独立注释行 ----
+        // 处理独立注释行
         if trimmed.starts_with('#') || trimmed.starts_with("//") {
             let comment = if let Some(rest) = trimmed.strip_prefix('#') {
                 rest.trim()
@@ -318,51 +315,22 @@ pub fn load_config(
             continue;
         }
 
-        // ---- 非注释行：分离行尾注释 ----
+        // 非注释行：分离行尾注释
         let (rule_part, line_comment) = split_comment(line);
         let p = rule_part.trim();
 
-        // 决定最终使用的注释：行尾注释优先，否则取暂存的独立注释
-        let final_comment = if !line_comment.is_empty() {
-            // 如果有行尾注释，则使用它，并清空暂存
+        // 获取注释（统一为 String）
+        let comment = if !line_comment.is_empty() {
             pending_comment.take();
-            line_comment
-        } else if let Some(ref c) = pending_comment {
-            // 没有行尾注释，但有暂存独立注释
-            c.as_str()
+            line_comment.to_string()
+        } else if let Some(c) = pending_comment.take() {
+            c
         } else {
-            ""
+            String::new()
         };
-        // 注意：此时我们消费了 pending_comment，但如果是规则行，消费掉；如果不是规则行（如 `}`），我们后面会清空。
-        // 但为了保险，在规则行真正添加规则时才消费，此处先不取，等到实际添加时再取。
-        // 更好的方式：在规则行真正添加时才 take，但我们需要保留 pending_comment 直到被消费或清空。
-        // 因此我们将 final_comment 的获取延迟到每个分支中。
-        // 重构：在每个需要添加规则的分支中，通过一个函数获取当前注释并消费。
-
-        // 定义一个闭包来获取注释
-        let take_comment = || -> &str {
-            if !line_comment.is_empty() {
-                pending_comment.take();
-                line_comment
-            } else if let Some(c) = pending_comment.take() {
-                // 使用 Box::leak 或返回字符串引用，但为了简单，我们返回字符串切片，但生命周期问题。
-                // 由于我们只在分支内使用，可以将注释临时存储为 String。
-                // 为了更安全，我们使用一个内部变量。
-                // 我们将在每个分支中手动处理。
-                // 改用直接处理。
-                ""
-            } else {
-                ""
-            }
-        };
-
-        // 但由于 borrow 问题，我们在每个分支中单独处理。
-        // 下面重构：在每个添加规则的分支中，我们显式地获取注释。
 
         if in_block {
             if close_like(p) {
-                // 块结束，清空暂存注释（避免误关联）
-                pending_comment.take();
                 if in_sub_block {
                     if let Some(parent) = pkg_stack.pop() {
                         cur_pkg = parent;
@@ -375,7 +343,7 @@ pub fn load_config(
                 continue;
             }
 
-            // 处理块内的子包包级规则 :子包 = CPU
+            // 子包包级规则
             if !in_sub_block && p.starts_with(':') && p.contains('=') {
                 if let Some(eq_pos) = p.rfind('=') {
                     let sub = p[1..eq_pos].trim();
@@ -384,15 +352,6 @@ pub fn load_config(
                     let has_open = raw_cpus.contains('{') || raw_cpus.ends_with('{');
                     if !sub.is_empty() && !cpus.is_empty() {
                         let full_pkg = format!("{}:{}", cur_pkg, sub);
-                        // 获取注释
-                        let comment = if !line_comment.is_empty() {
-                            pending_comment.take();
-                            line_comment
-                        } else if let Some(c) = pending_comment.take() {
-                            c
-                        } else {
-                            String::new()
-                        };
                         if !add_rule(&mut rules, topo, &full_pkg, "", cpus, &comment) {
                             fail_cnt += 1;
                         }
@@ -410,7 +369,7 @@ pub fn load_config(
                 }
             }
 
-            // 块内子包块开始 :子包 {
+            // 子包块开始
             if p.starts_with(':') && p.ends_with('{') {
                 let sub = p[1..p.len() - 1].trim();
                 if !sub.is_empty() {
@@ -418,7 +377,6 @@ pub fn load_config(
                     pkg_stack.push(cur_pkg.clone());
                     cur_pkg = full_pkg;
                     in_sub_block = true;
-                    // 注意：块开始本身不产生规则，但可能之前有注释，我们不清空，让后续规则消费
                     continue;
                 }
             }
@@ -426,22 +384,12 @@ pub fn load_config(
             // 线程规则
             match split_rule_line(p) {
                 Some((thread, cpus, closed)) => {
-                    let comment = if !line_comment.is_empty() {
-                        pending_comment.take();
-                        line_comment
-                    } else if let Some(c) = pending_comment.take() {
-                        c
-                    } else {
-                        String::new()
-                    };
                     if !add_rule(&mut rules, topo, &cur_pkg, thread, cpus, &comment) {
                         fail_cnt += 1;
                     }
                     if closed {
                         in_block = false;
                         cur_pkg.clear();
-                        // 块关闭，清空注释
-                        pending_comment.take();
                     }
                 }
                 None => {
@@ -449,7 +397,6 @@ pub fn load_config(
                     if p.contains('}') {
                         in_block = false;
                         cur_pkg.clear();
-                        pending_comment.take();
                     }
                 }
             }
@@ -460,14 +407,6 @@ pub fn load_config(
         match parse_outer(p) {
             OuterLine::SubPkgRule { sub, cpus, open } => {
                 let full_pkg = format!("{}:{}", cur_pkg, sub);
-                let comment = if !line_comment.is_empty() {
-                    pending_comment.take();
-                    line_comment
-                } else if let Some(c) = pending_comment.take() {
-                    c
-                } else {
-                    String::new()
-                };
                 if !add_rule(&mut rules, topo, &full_pkg, "", cpus, &comment) {
                     fail_cnt += 1;
                 }
@@ -484,7 +423,6 @@ pub fn load_config(
                 cur_pkg = full_pkg;
                 in_sub_block = true;
                 in_block = true;
-                // 块开始不产生规则，注释保留给后续规则
             }
             OuterLine::Single {
                 pkg,
@@ -496,14 +434,6 @@ pub fn load_config(
                     fail_cnt += 1;
                 }
                 pending_pkg.clear();
-                let comment = if !line_comment.is_empty() {
-                    pending_comment.take();
-                    line_comment
-                } else if let Some(c) = pending_comment.take() {
-                    c
-                } else {
-                    String::new()
-                };
                 if !add_rule(&mut rules, topo, pkg, thread, cpus, &comment) {
                     fail_cnt += 1;
                 }
@@ -516,14 +446,6 @@ pub fn load_config(
                 if !pending_pkg.is_empty() {
                     fail_cnt += 1;
                 }
-                let comment = if !line_comment.is_empty() {
-                    pending_comment.take();
-                    line_comment
-                } else if let Some(c) = pending_comment.take() {
-                    c
-                } else {
-                    String::new()
-                };
                 if !add_rule(&mut rules, topo, pkg, "", cpus, &comment) {
                     fail_cnt += 1;
                 }
@@ -549,25 +471,20 @@ pub fn load_config(
                 cur_pkg = owner;
                 pending_pkg.clear();
                 in_block = true;
-                // 块开始不产生规则，注释保留给后续规则
             }
             OuterLine::Pending { pkg } => {
                 if !pending_pkg.is_empty() {
                     fail_cnt += 1;
                 }
                 pending_pkg = pkg.to_string();
-                // 暂存注释可能关联到后面的规则，不清空
             }
             OuterLine::Junk => {
                 fail_cnt += 1;
                 pending_pkg.clear();
-                // 垃圾行，清空注释避免误关联
-                pending_comment.take();
             }
         }
     }
 
-    // 文件结束，清空暂存注释
     pending_comment.take();
 
     if in_block || !pending_pkg.is_empty() {
@@ -597,7 +514,6 @@ pub fn load_config(
         topo: topo.clone(),
     })
 }
-
 // 以下是原有的 config_loader、inotify 相关函数，保持不变
 pub fn config_loader() {
     let name = CString::new("ConfigLoader").unwrap();
