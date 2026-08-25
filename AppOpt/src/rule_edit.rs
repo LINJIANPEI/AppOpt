@@ -980,7 +980,6 @@ pub fn rule_upsert(
         .collect();
     eprintln!("[rule_upsert] 读取文件，行数={}", lines.len());
 
-    // 辅助：校验 CPU 规格
     fn validate_cpus(
         cpus: &str,
         topo: &crate::cpuset::CpuTopology,
@@ -997,7 +996,6 @@ pub fn rule_upsert(
         }
     }
 
-    // ---- 子包处理 ----
     if pkg.contains(':') {
         eprintln!("[rule_upsert] 进入子包分支");
         let parts: Vec<&str> = pkg.split(':').collect();
@@ -1018,19 +1016,17 @@ pub fn rule_upsert(
         return RuleEdit::Ok;
     }
 
-    // ---- 主包处理 ----
     eprintln!("[rule_upsert] 进入主包分支");
     let mut new_rules = Vec::new();
-    // 保留其他包规则，并移除本包的同名旧规则
     for r in &cfg.rules {
         if r.pkg == pkg {
             if thread.is_empty() {
                 if r.thread.is_empty() {
-                    continue; // 跳过旧的包级规则
+                    continue;
                 }
             } else {
                 if r.thread == thread {
-                    continue; // 跳过旧的同名线程
+                    continue;
                 }
             }
         }
@@ -1038,7 +1034,6 @@ pub fn rule_upsert(
     }
     eprintln!("[rule_upsert] 保留 {} 条旧规则", new_rules.len());
 
-    // 添加新规则
     if !cpus.is_empty() {
         eprintln!("[rule_upsert] 准备添加新规则，cpus={}", cpus);
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
@@ -1058,12 +1053,10 @@ pub fn rule_upsert(
             new_rules.push(new_rule);
             eprintln!("[rule_upsert] 新规则已加入，总数={}", new_rules.len());
         } else {
-            eprintln!("[rule_upsert] CPU 规格无效，返回 Malformed");
             return RuleEdit::Malformed;
         }
     }
 
-    // 重新构建新配置
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
@@ -1077,12 +1070,11 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // ---- 查找旧块（带保护） ----
     eprintln!("[rule_upsert] 开始查找旧块");
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut first_start = None;
     let mut i = 0;
-    let max_iter = lines.len() * 2 + 100; // 安全保护
+    let max_iter = lines.len() * 2 + 100;
     while i < lines.len() && i < max_iter {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
@@ -1114,20 +1106,14 @@ pub fn rule_upsert(
         }
     }
     if i >= max_iter {
-        eprintln!("[rule_upsert] 警告: 查找循环达到最大迭代次数，提前结束");
+        eprintln!("[rule_upsert] 警告: 查找循环达到最大迭代次数");
     }
-    eprintln!(
-        "[rule_upsert] 找到 {} 个旧块，first_start={:?}",
-        ranges.len(),
-        first_start
-    );
+    eprintln!("[rule_upsert] 找到 {} 个旧块", ranges.len());
 
-    // ---- 生成新块 ----
     eprintln!("[rule_upsert] 开始生成新块");
     let new_block = build_package_block(pkg, &new_cfg);
     eprintln!("[rule_upsert] 新块行数={}", new_block.len());
 
-    // ---- 无旧块直接插入 ----
     if ranges.is_empty() {
         eprintln!("[rule_upsert] 无旧块，直接插入");
         if new_block.is_empty() {
@@ -1143,7 +1129,6 @@ pub fn rule_upsert(
         return file_write(config_path, &lines);
     }
 
-    // ---- 删除旧块 ----
     eprintln!("[rule_upsert] 删除旧块...");
     ranges.sort_by_key(|(_, end)| *end);
     ranges.reverse();
@@ -1158,7 +1143,6 @@ pub fn rule_upsert(
         }
     }
 
-    // ---- 插入新块 ----
     if !new_block.is_empty() {
         let insert_pos = first_start.unwrap_or(lines.len());
         let pos = if insert_pos > lines.len() {
@@ -1466,7 +1450,6 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
     while i < lines.len() {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        // 匹配顶格的包行：可以是 pkg, pkg=..., pkg {...}, pkg:...
         let is_pkg_line = is_top_level
             && (trimmed == pkg
                 || trimmed.starts_with(&format!("{} ", pkg))
@@ -1487,18 +1470,17 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
                     return Some((i, j));
                 }
                 j += 1;
-                // 安全限制，防止无限循环
                 if j - i > 10000 {
                     break;
                 }
             }
-            // 未找到闭合，返回单行
             return Some((i, i));
         }
         i += 1;
     }
     None
 }
+
 /// 根据 AppConfig 中的规则生成规范化的主包块（包含子包嵌套）
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
     use std::collections::{BTreeMap, HashSet};

@@ -1,3 +1,5 @@
+use crate::cpuset::parse_cpu_spec;
+use serde_json::{Value, json};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -7,8 +9,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread;
 use std::time::Duration;
-
-use serde_json::{Value, json};
 
 use crate::apply_affinity::{read_cmdline, task_tids};
 use crate::cache::ProcCache;
@@ -357,16 +357,13 @@ fn pkg_shape_ok(pkg: &str) -> bool {
 fn rule_api(req: &Request) -> (u16, String) {
     let result = std::panic::catch_unwind(|| {
         eprintln!("[rule_api] 收到请求");
-
         let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
-            eprintln!("[rule_api] JSON 解析失败");
             return err_json(400, "请求体不是合法 JSON");
         };
         let (Some(pkg), Some(cpus)) = (
             v["pkg"].as_str().map(str::trim),
             v["cpus"].as_str().map(str::trim),
         ) else {
-            eprintln!("[rule_api] 缺少 pkg 或 cpus");
             return err_json(400, "缺少 pkg 或 cpus 字段");
         };
         let thread = v["thread"].as_str().map(str::trim).unwrap_or("");
@@ -376,16 +373,13 @@ fn rule_api(req: &Request) -> (u16, String) {
         );
 
         let Some(cfg) = current_cfg() else {
-            eprintln!("[rule_api] 配置未就绪");
             return err_json(500, "配置未就绪");
         };
         if !token_ok(pkg, MAX_PKG_LEN) || (!thread.is_empty() && !token_ok(thread, MAX_THREAD_LEN))
         {
-            eprintln!("[rule_api] 名称非法");
             return err_json(400, "名称含有非法字符");
         }
         if thread.is_empty() && !pkg_shape_ok(pkg) {
-            eprintln!("[rule_api] 包名形状非法");
             return err_json(400, "包名含 { 且以 } 结尾时不支持包级规则，可改用线程规则");
         }
         if cpus.is_empty()
@@ -393,7 +387,6 @@ fn rule_api(req: &Request) -> (u16, String) {
             || !spec_like(cpus)
             || parse_cpu_spec(cpus, &cfg.topo).count() == 0
         {
-            eprintln!("[rule_api] CPU 规格无效");
             return err_json(400, "无效的 CPU 规格");
         }
 
@@ -405,25 +398,12 @@ fn rule_api(req: &Request) -> (u16, String) {
         match result {
             RuleEdit::Ok => {
                 config_reload_now();
-                eprintln!("[rule_api] 保存成功");
                 (200, json!({ "ok": true }).to_string())
             }
-            RuleEdit::NotFound => {
-                eprintln!("[rule_api] 规则不存在");
-                err_json(404, "规则不存在")
-            }
-            RuleEdit::Conflict => {
-                eprintln!("[rule_api] 冲突");
-                err_json(409, "状态冲突")
-            }
-            RuleEdit::Malformed => {
-                eprintln!("[rule_api] 格式错误");
-                err_json(409, "配置文件存在未闭合块或无效CPU规格，请修复后重试")
-            }
-            RuleEdit::IoErr => {
-                eprintln!("[rule_api] 写入失败");
-                err_json(500, "配置文件写入失败")
-            }
+            RuleEdit::NotFound => err_json(404, "规则不存在"),
+            RuleEdit::Conflict => err_json(409, "状态冲突"),
+            RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块或无效CPU规格，请修复后重试"),
+            RuleEdit::IoErr => err_json(500, "配置文件写入失败"),
         }
     });
 
