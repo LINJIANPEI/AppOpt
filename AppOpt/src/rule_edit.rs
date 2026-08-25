@@ -967,6 +967,7 @@ pub fn rule_upsert(
     pkg: &str,
     thread: &str,
     cpus: &str,
+    comment: &str,
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
     use std::collections::HashSet;
@@ -1005,6 +1006,11 @@ pub fn rule_upsert(
             if !cpus.is_empty() && validate_cpus(cpus, &cfg.topo).is_none() {
                 return RuleEdit::Malformed;
             }
+            // 子包操作：调用 write_sub_pkg_block（原有逻辑，不涉及 comment 传递，因为只更新规则，comment 保存在主包级规则中）
+            // 但此处我们仅处理包级和线程的 upsert，子包操作在下方统一处理，但为了兼容，我们先保留原有调用，但需要传递 comment？
+            // 实际上 write_sub_pkg_block 不直接操作 AffinityRule，它只写配置文件，所以 comment 应该通过 rule_api 传递到主包级规则中。
+            // 但是子包块中的包级规则也可能有 comment，目前仅支持主包组 comment，所以这里忽略子包的 comment。
+            // 为了简化，我们在子包处理中不处理 comment，因为子包 comment 是独立的（但前端未提供，所以传空）
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             eprintln!("[rule_upsert] 子包处理结果: {:?}", result);
             if let RuleEdit::Ok = result {
@@ -1042,6 +1048,7 @@ pub fn rule_upsert(
             } else {
                 String::new()
             };
+            // ★ 构造新规则时保存 comment
             let new_rule = crate::config::AffinityRule {
                 pkg: pkg.to_string(),
                 thread: thread.to_string(),
@@ -1049,7 +1056,7 @@ pub fn rule_upsert(
                 cpuset_dir,
                 cpus: cpuset,
                 spec: cpus.to_string(),
-                comment: String::new(), // 添加这行
+                comment: comment.to_string(), // 新增
             };
             new_rules.push(new_rule);
             eprintln!("[rule_upsert] 新规则已加入，总数={}", new_rules.len());
@@ -1078,7 +1085,6 @@ pub fn rule_upsert(
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        // 判断是否为顶格的包行（以 pkg 开头，后面跟着 =、{、空格或冒号）
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
         let is_pkg_line = is_top_level
             && (trimmed == pkg
@@ -1089,7 +1095,6 @@ pub fn rule_upsert(
 
         if is_pkg_line {
             let start = i;
-            // 检查该行是否包含 '{'（即是否为块）
             let has_brace = trimmed.contains('{');
             if has_brace {
                 let mut depth = 0;
@@ -1102,7 +1107,6 @@ pub fn rule_upsert(
                     }
                     depth += t.matches('{').count() - t.matches('}').count();
                     if depth == 0 && j > i {
-                        // 找到闭合
                         ranges.push((start, j));
                         if first_start.is_none() {
                             first_start = Some(start);
@@ -1112,13 +1116,11 @@ pub fn rule_upsert(
                     }
                     j += 1;
                     if j - i > 10000 {
-                        // 安全保护
                         eprintln!("[rule_upsert] 警告: 查找闭合时达到最大深度");
                         break;
                     }
                 }
                 if i == start {
-                    // 未找到闭合，当作单行
                     ranges.push((start, start));
                     if first_start.is_none() {
                         first_start = Some(start);
@@ -1126,7 +1128,6 @@ pub fn rule_upsert(
                     i = start + 1;
                 }
             } else {
-                // 单行规则，无块
                 ranges.push((start, start));
                 if first_start.is_none() {
                     first_start = Some(start);

@@ -395,9 +395,10 @@ fn rule_api(req: &Request) -> (u16, String) {
             return err_json(400, "缺少 pkg 或 cpus 字段");
         };
         let thread = v["thread"].as_str().map(str::trim).unwrap_or("");
+        let comment = v["comment"].as_str().map(str::trim).unwrap_or(""); // 新增
         eprintln!(
-            "[rule_api] pkg='{}', thread='{}', cpus='{}'",
-            pkg, thread, cpus
+            "[rule_api] pkg='{}', thread='{}', cpus='{}', comment='{}'",
+            pkg, thread, cpus, comment
         );
 
         let Some(cfg) = current_cfg() else {
@@ -420,7 +421,7 @@ fn rule_api(req: &Request) -> (u16, String) {
 
         let file = lock_ignore_poison(&CONFIG_FILE).clone();
         eprintln!("[rule_api] 调用 rule_upsert...");
-        let result = rule_upsert(&file, pkg, thread, cpus, &cfg);
+        let result = rule_upsert(&file, pkg, thread, cpus, comment, &cfg); // 传递 comment
         eprintln!("[rule_api] rule_upsert 返回: {:?}", result);
 
         match result {
