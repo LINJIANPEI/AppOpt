@@ -356,7 +356,6 @@ fn pkg_shape_ok(pkg: &str) -> bool {
 
 fn rule_api(req: &Request) -> (u16, String) {
     let result = std::panic::catch_unwind(|| {
-        // ----- 原有逻辑开始 -----
         let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
             return err_json(400, "请求体不是合法 JSON");
         };
@@ -386,42 +385,14 @@ fn rule_api(req: &Request) -> (u16, String) {
         }
 
         let file = lock_ignore_poison(&CONFIG_FILE).clone();
-        match rule_upsert(&file, pkg, thread, cpus) {
+        match rule_upsert(&file, pkg, thread, cpus, &cfg) {
             RuleEdit::Ok => {
-                // 重新加载配置
-                config_reload_now();
-                // 等待加载完成（短暂睡眠）
-                std::thread::sleep(std::time::Duration::from_millis(100));
-
-                // 获取最新配置
-                let cfg_opt = current_cfg();
-                if let Some(cfg) = cfg_opt {
-                    // 读取当前文件内容
-                    let mut lines: Vec<String> = match fs::read_to_string(&file) {
-                        Ok(content) => content.lines().map(String::from).collect(),
-                        Err(_) => Vec::new(),
-                    };
-                    // 提取主包名
-                    let main_pkg = pkg.split(':').next().unwrap_or(pkg);
-                    if normalize_package_block(&mut lines, main_pkg, &cfg) {
-                        // 原子写入
-                        let tmp = format!("{}.tmp", file);
-                        let content = lines.join("\n");
-                        if fs::write(&tmp, content).is_ok() && fs::rename(&tmp, &file).is_ok() {
-                            // 再次重新加载以应用规范化后的文件
-                            config_reload_now();
-                            return (200, json!({ "ok": true }).to_string());
-                        }
-                    }
-                }
-                // 如果规范化失败，原始修改已生效，仍返回成功
                 config_reload_now();
                 (200, json!({ "ok": true }).to_string())
             }
             RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
             _ => err_json(500, "配置文件写入失败"),
         }
-        // ----- 原有逻辑结束 -----
     });
 
     match result {

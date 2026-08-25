@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
@@ -1119,78 +1120,239 @@ fn build_block(pkg: &str, data: &PackageData) -> Vec<String> {
     block
 }
 
-pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
-    let result = std::panic::catch_unwind(|| {
-        let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
-        let mut lines: Vec<String> = fs::read_to_string(config_path)
-            .unwrap_or_default()
-            .lines()
-            .map(String::from)
-            .collect();
+pub fn rule_upsert(
+    config_path: &str,
+    pkg: &str,
+    thread: &str,
+    cpus: &str,
+    cfg: &crate::config::AppConfig,
+) -> RuleEdit {
+    let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
+    let mut lines: Vec<String> = fs::read_to_string(config_path)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect();
 
-        // 子包处理
-        if pkg.contains(':') {
-            let parts: Vec<&str> = pkg.split(':').collect();
-            if parts.len() == 2 {
-                let main_pkg = parts[0];
-                let sub = parts[1];
-                // 若 cpus 非空，则是写入操作（覆盖）；若为空，则是删除操作（由调用方处理）
-                let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
-                if let RuleEdit::Ok = result {
+    // ---- 子包处理：若 pkg 包含 ':'，则调用 write_sub_pkg_block（保留原有逻辑） ----
+    if pkg.contains(':') {
+        let parts: Vec<&str> = pkg.split(':').collect();
+        if parts.len() == 2 {
+            let main_pkg = parts[0];
+            let sub = parts[1];
+            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
+            if let RuleEdit::Ok = result {
+                clean_empty_lines(&mut lines);
+                return file_write(config_path, &lines);
+            }
+            return result;
+        }
+        return RuleEdit::Ok;
+    }
+
+    // ---- 主包处理 ----
+    // 1. 用 target_scan 获取主包结构（包含子包信息）
+    let t = target_scan(&lines, pkg);
+    let mut has_any_rule = t.any_line();
+
+    // 2. 获取主包块范围
+    let (block_open, block_close) = match (t.block_open, t.block_close) {
+        (Some(open), Some(close)) => (open, close),
+        _ => {
+            // 没有块，可能是单行包级规则，或完全不存在
+            if let Some(PkgLine::Standalone(idx)) = t.pkg_line {
+                // 单行包级规则：将其转换为块（保留缩进和注释）
+                let line = &lines[idx];
+                let comment = comment_at(line).map(|pos| &line[pos..]).unwrap_or("");
+                let indent = line
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect::<String>();
+                // 新的包级行（可能带 CPU）
+                let new_line = if cpus.is_empty() {
+                    format!("{} {} {{", indent, pkg)
+                } else {
+                    format!("{} {}={} {{", indent, pkg, cpus)
+                };
+                lines[idx] = new_line;
+                // 在下一行插入闭合 }
+                lines.insert(idx + 1, format!("{}}}", indent));
+                // 重新扫描获取块
+                let t2 = target_scan(&lines, pkg);
+                if let (Some(open2), Some(close2)) = (t2.block_open, t2.block_close) {
+                    // 进入块处理流程，但我们不需要重新执行，直接使用新的 open/close
+                    // 但为了统一，我们重新赋值并继续
+                    // 由于我们修改了 lines，重新运行整个函数可能更稳妥，但为避免递归，我们直接手动处理。
+                    // 这里我们简单重新运行一次（但可能导致无限递归，所以采取直接进入块处理）
+                    // 简便方法：将 lines 设置好后，重新执行函数，但容易死循环。
+                    // 我们直接手动执行块内操作。
+                    // 为了简化，我改用另一种方式：直接创建块并写入。
+                    let mut new_block = Vec::new();
+                    new_block.push(new_line);
+                    if !thread.is_empty() && !cpus.is_empty() {
+                        new_block.push(format!("    {}={}", thread, cpus));
+                    }
+                    new_block.push(format!("{}}}", indent));
+                    lines.splice(idx..idx + 2, new_block);
                     clean_empty_lines(&mut lines);
                     return file_write(config_path, &lines);
+                } else {
+                    return RuleEdit::Malformed;
                 }
-                return result;
+            } else {
+                // 没有现有任何规则，直接创建新块
+                let mut new_block = Vec::new();
+                let first_line = if cpus.is_empty() {
+                    format!("{} {{", pkg)
+                } else {
+                    format!("{}={} {{", pkg, cpus)
+                };
+                new_block.push(first_line);
+                if !thread.is_empty() && !cpus.is_empty() {
+                    new_block.push(format!("    {}={}", thread, cpus));
+                }
+                new_block.push("}".to_string());
+                let insert_pos = find_insert_pos(&lines);
+                lines.splice(insert_pos..insert_pos, new_block);
+                clean_empty_lines(&mut lines);
+                return file_write(config_path, &lines);
             }
-            return RuleEdit::Ok;
         }
+    };
 
-        // --- 主包处理 ---
-        let (mut data, indices) = collect_package(&lines, pkg);
-        if indices.is_empty() && thread.is_empty() && cpus.is_empty() {
-            return RuleEdit::NotFound;
+    // 3. 重新扫描获取最新的 t（因为 lines 可能已经变化）
+    let t = target_scan(&lines, pkg);
+    let (block_open, block_close) = match (t.block_open, t.block_close) {
+        (Some(open), Some(close)) => (open, close),
+        _ => return RuleEdit::Malformed,
+    };
+
+    // 4. 收集块内现有的线程行（不包括子包行，以 ':' 开头的行）
+    let mut thread_indices: Vec<(usize, String)> = Vec::new();
+    let mut i = block_open + 1;
+    while i < block_close {
+        let line = &lines[i];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            i += 1;
+            continue;
         }
-
-        // ★ 修复：使用覆盖（替换）而非追加
-        if !thread.is_empty() && !cpus.is_empty() {
-            // 线程规则：直接替换
-            data.threads.insert(thread.to_string(), cpus.to_string());
-        } else if thread.is_empty() && !cpus.is_empty() {
-            // 包级规则：替换原有 cpus 列表
-            data.cpus = vec![cpus.to_string()];
+        // 检查是否为子包定义（以 ':' 开头）
+        if trimmed.starts_with(':') {
+            i += 1;
+            continue;
         }
-        // 如果 cpus 为空，则保持现有数据（由调用方决定删除，例如通过 rule_delete）
+        // 检查是否为线程行（包含 '='）
+        if let Some(eq_pos) = trimmed.find('=') {
+            let name = trimmed[..eq_pos].trim();
+            if !name.is_empty() && !name.starts_with(':') {
+                thread_indices.push((i, name.to_string()));
+            }
+        }
+        i += 1;
+    }
 
-        // 合并去重
-        let merged = merge_data(data);
+    // 5. 确定要删除、更新、添加的线程
+    // 现有的线程名集合
+    let existing_names: HashSet<String> = thread_indices.iter().map(|(_, n)| n.clone()).collect();
 
-        let new_block = build_block(pkg, &merged);
-
-        // 删除旧定义
-        let insert_pos = if indices.is_empty() {
-            lines.len()
+    // 如果传入的 thread 非空，则视为要更新或添加
+    let mut to_add = Vec::new();
+    let mut to_update = Vec::new();
+    if !thread.is_empty() && !cpus.is_empty() {
+        if existing_names.contains(thread) {
+            // 更新
+            to_update.push((thread, cpus));
         } else {
-            *indices.iter().min().unwrap()
-        };
-        let mut remove_indices = indices;
-        remove_indices.sort();
-        remove_indices.dedup();
-        for idx in remove_indices.into_iter().rev() {
-            lines.remove(idx);
-        }
-
-        lines.splice(insert_pos..insert_pos, new_block);
-        clean_empty_lines(&mut lines);
-        file_write(config_path, &lines)
-    });
-
-    match result {
-        Ok(edit) => edit,
-        Err(e) => {
-            eprintln!("!!! rule_upsert panic: {:?}", e);
-            RuleEdit::IoErr
+            // 添加
+            to_add.push((thread, cpus));
         }
     }
+
+    // 如果传入的 thread 为空但 cpus 非空，则是更新包级规则（稍后处理）
+    // 如果 thread 非空但 cpus 为空，表示要删除该线程（但我们不处理删除，因为删除由 rule_delete 负责）
+
+    // 6. 执行更新（修改行内容）
+    for (idx, new_cpu) in to_update {
+        let line = &lines[idx];
+        if let Some(eq_pos) = line.find('=') {
+            let indent = line
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect::<String>();
+            let comment = comment_at(line).map(|pos| &line[pos..]).unwrap_or("");
+            let new_line = format!("{}{}={}{}", indent, line[..eq_pos].trim(), new_cpu, comment);
+            lines[idx] = new_line;
+        }
+    }
+
+    // 7. 执行添加（在块内最后一条线程之后，或块内末尾）
+    if !to_add.is_empty() {
+        // 找到块内最后一条非注释行（不包括子包）
+        let mut insert_pos = block_close; // 默认在闭合 } 之前
+        for idx in (block_open + 1)..block_close {
+            let trimmed = lines[idx].trim();
+            if !trimmed.is_empty()
+                && !trimmed.starts_with('#')
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with(':')
+            {
+                // 可能是线程行或子包行，但子包开头是 ':'，我们已经跳过，这里线程行可以
+                // 但我们希望插入到最后一条线程之后，子包之前？
+                // 简单起见，我们插入到所有非子包行的末尾，即最后一个线程行之后
+                // 我们可以从后往前找最后一个非子包行
+            }
+        }
+        // 更简单：在 block_close 之前插入（即闭合 } 之前）
+        let mut pos = block_close;
+        // 如果闭合 } 前一行是空行或注释，则往前找
+        while pos > block_open + 1 {
+            let prev = &lines[pos - 1];
+            let trimmed = prev.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+                pos -= 1;
+            } else {
+                break;
+            }
+        }
+        // 在 pos 位置插入
+        for (name, cpu) in to_add {
+            lines.insert(pos, format!("    {}={}", name, cpu));
+            pos += 1; // 插入后 pos 增加，避免覆盖
+        }
+    }
+
+    // 8. 更新包级规则（如果 cpus 非空且 thread 为空）
+    if thread.is_empty() && !cpus.is_empty() {
+        let first_line = &lines[block_open];
+        if let Some(eq_pos) = first_line.find('=') {
+            let pkg_part = first_line[..eq_pos].trim();
+            let indent = first_line
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect::<String>();
+            let comment = comment_at(first_line)
+                .map(|pos| &first_line[pos..])
+                .unwrap_or("");
+            let new_first = format!("{}{}={} {{{}", indent, pkg_part, cpus, comment);
+            lines[block_open] = new_first;
+        } else {
+            // 没有 =，说明之前没有包级规则，需要添加
+            let indent = first_line
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect::<String>();
+            let comment = comment_at(first_line)
+                .map(|pos| &first_line[pos..])
+                .unwrap_or("");
+            let new_first = format!("{}{}={} {{{}", indent, pkg, cpus, comment);
+            lines[block_open] = new_first;
+        }
+    }
+
+    // 9. 清理多余空行
+    clean_empty_lines(&mut lines);
+    file_write(config_path, &lines)
 }
 
 /// 清理空块（若块内只有注释或空行，则删除整个块）
