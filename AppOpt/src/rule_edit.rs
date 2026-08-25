@@ -1440,11 +1440,12 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        let is_pkg_line = !lines[i].starts_with(' ') && !lines[i].starts_with('\t')
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        let is_pkg_line = is_top_level
             && (trimmed == pkg
                 || trimmed.starts_with(&format!("{} ", pkg))
                 || trimmed.starts_with(&format!("{}=", pkg))
-                || trimmed.starts_with(&format!("{}{", pkg)));
+                || trimmed.starts_with(&format!("{}{{", pkg))); // 注意这里转义了 {
         if is_pkg_line {
             let mut depth = 0;
             let mut j = i;
@@ -1456,17 +1457,14 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
                 }
                 depth += t.matches('{').count() - t.matches('}').count();
                 if depth == 0 && j > i {
-                    // 找到闭合
                     return Some((i, j));
                 }
                 j += 1;
-                // 防止无限循环，若 j 超出则退出
                 if j >= lines.len() && depth != 0 {
-                    // 未闭合，但退出循环，返回本行作为范围
+                    // 未闭合，返回单行
                     return Some((i, i));
                 }
             }
-            // 若未找到闭合，返回单行
             return Some((i, i));
         }
         i += 1;
