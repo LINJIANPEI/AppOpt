@@ -1119,13 +1119,7 @@ fn build_block(pkg: &str, data: &PackageData) -> Vec<String> {
     block
 }
 
-pub fn rule_upsert(
-    config_path: &str,
-    pkg: &str,
-    thread: &str,
-    cpus: &str,
-    cfg: &crate::config::AppConfig,
-) -> RuleEdit {
+pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str, cfg: &crate::config::AppConfig) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
@@ -1133,7 +1127,7 @@ pub fn rule_upsert(
         .map(String::from)
         .collect();
 
-    // ---- 子包处理：保留原有逻辑 ----
+    // ---- 子包处理 ----
     if pkg.contains(':') {
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
@@ -1142,8 +1136,10 @@ pub fn rule_upsert(
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
-                // 对于子包操作，也要规范化主包（合并顶格子包）
-                normalize_package_block(&mut lines, main_pkg, cfg);
+                // 子包操作后，可能还有独立的子包块，用 normalize_package_block 合并
+                // 但我们这里调用一个专门的合并函数（如果存在）
+                // 如果不需要合并，可以注释掉下一行
+                // normalize_package_block(&mut lines, main_pkg, cfg);
                 return file_write(config_path, &lines);
             }
             return result;
@@ -1151,142 +1147,95 @@ pub fn rule_upsert(
         return RuleEdit::Ok;
     }
 
-    // ---- 主包处理 ----
-    // 1. 用 target_scan 获取主包结构
-    let t = target_scan(&lines, pkg);
-    let (block_open, block_close) = match (t.block_open, t.block_close) {
-        (Some(open), Some(close)) => (open, close),
-        _ => {
-            // 没有块，创建新块
-            let mut new_block = Vec::new();
-            let first_line = if cpus.is_empty() {
-                format!("{} {{", pkg)
-            } else {
-                format!("{}={} {{", pkg, cpus)
+    // ---- 主包处理：删除所有旧块，插入新块 ----
+    // 1. 构建新规则列表
+    let mut new_rules = cfg.rules.clone();
+    if thread.is_empty() {
+        new_rules.retain(|r| !(r.pkg == pkg && r.thread.is_empty()));
+        if !cpus.is_empty() {
+            let cpuset_dir = crate::cpuset::ensure_cpuset_dir(&crate::cpuset::parse_cpu_spec(cpus, &cfg.topo), &cfg.topo);
+            let new_rule = crate::config::AffinityRule {
+                pkg: pkg.to_string(),
+                thread: String::new(),
+                thread_pattern: std::ffi::CString::new("").unwrap_or_default(),
+                cpuset_dir,
+                cpus: crate::cpuset::parse_cpu_spec(cpus, &cfg.topo),
+                spec: cpus.to_string(),
             };
-            new_block.push(first_line);
-            if !thread.is_empty() && !cpus.is_empty() {
-                new_block.push(format!("    {}={}", thread, cpus));
-            }
-            new_block.push("}".to_string());
-            let insert_pos = find_insert_pos(&lines);
-            lines.splice(insert_pos..insert_pos, new_block);
-            clean_empty_lines(&mut lines);
-            // 规范化：合并顶格子包
-            normalize_package_block(&mut lines, pkg, cfg);
-            return file_write(config_path, &lines);
+            new_rules.push(new_rule);
         }
+    } else {
+        new_rules.retain(|r| !(r.pkg == pkg && r.thread == thread));
+        if !cpus.is_empty() {
+            let new_rule = crate::config::AffinityRule {
+                pkg: pkg.to_string(),
+                thread: thread.to_string(),
+                thread_pattern: std::ffi::CString::new(thread).unwrap_or_default(),
+                cpuset_dir: String::new(),
+                cpus: crate::cpuset::parse_cpu_spec(cpus, &cfg.topo),
+                spec: cpus.to_string(),
+            };
+            new_rules.push(new_rule);
+        }
+    }
+
+    use std::collections::HashSet;
+    let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
+    let has_thread_rules: HashSet<String> = new_rules.iter()
+        .filter(|r| !r.thread.is_empty())
+        .map(|r| r.pkg.clone())
+        .collect();
+    let new_cfg = crate::config::AppConfig {
+        rules: new_rules,
+        pkgs,
+        has_thread_rules,
+        topo: cfg.topo.clone(),
     };
 
-    // 2. 收集块内现有的线程行（跳过注释、空行和子包行）
-    let mut thread_indices: Vec<(usize, String)> = Vec::new();
-    let mut i = block_open + 1;
-    while i < block_close {
-        let trimmed = lines[i].trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+    // 2. 删除所有顶格的、以 pkg 开头（或 pkg:）的独立块（包括重复块）
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim();
+            let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+            let is_pkg_line = is_top_level && (trimmed.starts_with(pkg) && (trimmed.len() == pkg.len()
+                || trimmed[pkg.len()..].starts_with('=')
+                || trimmed[pkg.len()..].starts_with('{')
+                || trimmed[pkg.len()..].starts_with(' '))
+                || trimmed.starts_with(&format!("{}:", pkg)));
+            if is_pkg_line {
+                let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
+                if let Some((start, end)) = find_package_range(&lines, pkg_name) {
+                    lines.drain(start..=end);
+                    changed = true;
+                    break;
+                }
+            }
             i += 1;
-            continue;
-        }
-        if trimmed.starts_with(':') {
-            i += 1;
-            continue;
-        }
-        if let Some(eq_pos) = trimmed.find('=') {
-            let name = trimmed[..eq_pos].trim();
-            if !name.is_empty() {
-                thread_indices.push((i, name.to_string()));
-            }
-        }
-        i += 1;
-    }
-
-    // 3. 确定要添加或更新的线程
-    let existing_names: HashSet<String> = thread_indices.iter().map(|(_, n)| n.clone()).collect();
-    let mut to_add = Vec::new();
-    let mut to_update = Vec::new();
-    if !thread.is_empty() && !cpus.is_empty() {
-        if existing_names.contains(thread) {
-            to_update.push((thread.to_string(), cpus.to_string()));
-        } else {
-            to_add.push((thread.to_string(), cpus.to_string()));
         }
     }
 
-    // 4. 更新现有线程行
-    for (name, new_cpu) in &to_update {
-        if let Some((idx, _)) = thread_indices.iter().find(|(_, n)| n == name) {
-            let line = &lines[*idx];
-            if let Some(eq_pos) = line.find('=') {
-                let indent = line
-                    .chars()
-                    .take_while(|c| c.is_whitespace())
-                    .collect::<String>();
-                let comment = comment_at(line).map(|pos| &line[pos..]).unwrap_or("");
-                let new_line = format!(
-                    "{}{}={}{}",
-                    indent,
-                    &line[..eq_pos].trim(),
-                    new_cpu,
-                    comment
-                );
-                lines[*idx] = new_line;
-            }
-        }
+    // 3. 生成新块
+    let new_block = build_package_block(pkg, &new_cfg);
+    if new_block.is_empty() {
+        // 如果没有规则，删除所有旧块后返回
+        clean_empty_lines(&mut lines);
+        return file_write(config_path, &lines);
     }
 
-    // 5. 添加新线程行
-    if !to_add.is_empty() {
-        let mut insert_pos = block_close;
-        while insert_pos > block_open + 1 {
-            let prev = &lines[insert_pos - 1];
-            let trimmed = prev.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
-                insert_pos -= 1;
-            } else {
-                break;
-            }
-        }
-        for (name, cpu) in to_add {
-            lines.insert(insert_pos, format!("    {}={}", name, cpu));
-            insert_pos += 1;
-        }
+    // 4. 在文件末尾插入新块（因为没有旧块了）
+    if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
+        lines.push(String::new());
     }
+    lines.extend(new_block);
+    lines.push(String::new());
 
-    // 6. 更新包级规则
-    if thread.is_empty() && !cpus.is_empty() {
-        let first_line = &lines[block_open];
-        if let Some(eq_pos) = first_line.find('=') {
-            let pkg_part = first_line[..eq_pos].trim();
-            let indent = first_line
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>();
-            let comment = comment_at(first_line)
-                .map(|pos| &first_line[pos..])
-                .unwrap_or("");
-            let new_first = format!("{}{}={} {{{}", indent, pkg_part, cpus, comment);
-            lines[block_open] = new_first;
-        } else {
-            let indent = first_line
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>();
-            let comment = comment_at(first_line)
-                .map(|pos| &first_line[pos..])
-                .unwrap_or("");
-            let new_first = format!("{}{}={} {{{}", indent, pkg, cpus, comment);
-            lines[block_open] = new_first;
-        }
-    }
-
-    // 7. 规范化：删除顶格子包独立块，合并到主包内部
-    normalize_package_block(&mut lines, pkg, cfg);
-
-    // 8. 清理多余空行
+    // 5. 清理多余空行
     clean_empty_lines(&mut lines);
     file_write(config_path, &lines)
 }
-
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
@@ -1578,13 +1527,11 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
     while i < lines.len() {
         let line = &lines[i];
         let trimmed = line.trim();
-        let is_pkg_line = !line.starts_with(' ')
-            && !line.starts_with('\t')
-            && (trimmed.starts_with(pkg)
-                && (trimmed.len() == pkg.len()
-                    || trimmed[pkg.len()..].starts_with('=')
-                    || trimmed[pkg.len()..].starts_with('{')
-                    || trimmed[pkg.len()..].starts_with(' '))
+        let is_pkg_line = !line.starts_with(' ') && !line.starts_with('\t')
+            && (trimmed.starts_with(pkg) && (trimmed.len() == pkg.len()
+                || trimmed[pkg.len()..].starts_with('=')
+                || trimmed[pkg.len()..].starts_with('{')
+                || trimmed[pkg.len()..].starts_with(' '))
                 || trimmed.starts_with(&format!("{}:", pkg)));
         if is_pkg_line {
             let mut depth = 0;
@@ -1619,10 +1566,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     for rule in &cfg.rules {
         if let Some(stripped) = rule.pkg.strip_prefix(&format!("{}:", pkg)) {
             let sub_name = stripped.split(':').next().unwrap_or(stripped);
-            sub_rules
-                .entry(sub_name.to_string())
-                .or_default()
-                .push(rule);
+            sub_rules.entry(sub_name.to_string()).or_default().push(rule);
         } else if rule.pkg == pkg {
             main_rules.push(rule);
         }
@@ -1632,13 +1576,11 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         return block;
     }
 
-    let pkg_cpus: Vec<&str> = main_rules
-        .iter()
+    let pkg_cpus: Vec<&str> = main_rules.iter()
         .filter(|r| r.thread.is_empty())
         .map(|r| r.spec.as_str())
         .collect();
-    let thread_rules: Vec<&crate::config::AffinityRule> = main_rules
-        .iter()
+    let thread_rules: Vec<&crate::config::AffinityRule> = main_rules.iter()
         .filter(|r| !r.thread.is_empty())
         .map(|&r| r)
         .collect();
@@ -1655,13 +1597,11 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     }
 
     for (sub_name, sub_rules_vec) in sub_rules {
-        let sub_cpus: Vec<&str> = sub_rules_vec
-            .iter()
+        let sub_cpus: Vec<&str> = sub_rules_vec.iter()
             .filter(|r| r.thread.is_empty())
             .map(|r| r.spec.as_str())
             .collect();
-        let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec
-            .iter()
+        let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec.iter()
             .filter(|r| !r.thread.is_empty())
             .map(|&r| r)
             .collect();
@@ -1681,7 +1621,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     block.push("}".to_string());
     block
 }
-
 /// 规范化主包：删除所有顶格子包独立块，替换主包块为规范化新块，保留块外注释
 pub fn normalize_package_block(
     lines: &mut Vec<String>,
