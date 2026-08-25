@@ -1142,6 +1142,8 @@ pub fn rule_upsert(
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
+                // 对于子包操作，也要规范化主包（合并顶格子包）
+                normalize_package_block(&mut lines, main_pkg, cfg);
                 return file_write(config_path, &lines);
             }
             return result;
@@ -1170,6 +1172,8 @@ pub fn rule_upsert(
             let insert_pos = find_insert_pos(&lines);
             lines.splice(insert_pos..insert_pos, new_block);
             clean_empty_lines(&mut lines);
+            // 规范化：合并顶格子包
+            normalize_package_block(&mut lines, pkg, cfg);
             return file_write(config_path, &lines);
         }
     };
@@ -1184,7 +1188,6 @@ pub fn rule_upsert(
             continue;
         }
         if trimmed.starts_with(':') {
-            // 子包行，跳过
             i += 1;
             continue;
         }
@@ -1231,7 +1234,7 @@ pub fn rule_upsert(
         }
     }
 
-    // 5. 添加新线程行（在块内末尾，闭合 '}' 之前）
+    // 5. 添加新线程行
     if !to_add.is_empty() {
         let mut insert_pos = block_close;
         while insert_pos > block_open + 1 {
@@ -1249,7 +1252,7 @@ pub fn rule_upsert(
         }
     }
 
-    // 6. 更新包级规则（如果 thread 为空且 cpus 非空）
+    // 6. 更新包级规则
     if thread.is_empty() && !cpus.is_empty() {
         let first_line = &lines[block_open];
         if let Some(eq_pos) = first_line.find('=') {
@@ -1276,7 +1279,10 @@ pub fn rule_upsert(
         }
     }
 
-    // 7. 清理多余空行
+    // 7. 规范化：删除顶格子包独立块，合并到主包内部
+    normalize_package_block(&mut lines, pkg, cfg);
+
+    // 8. 清理多余空行
     clean_empty_lines(&mut lines);
     file_write(config_path, &lines)
 }
@@ -1568,54 +1574,43 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
 // ========== 新增规范化函数 ==========
 
 /// 查找主包 pkg 的块范围（从包定义行开始到匹配的 '}' 结束）
-/// 返回 Some((start_index, end_index))，若找不到则返回 None
 pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < lines.len() {
         let line = &lines[i];
         let trimmed = line.trim();
-        // 匹配行首非空白且以 pkg 开头，且后面是 =、{ 或空白（即包定义行）
-        let is_pkg_line = if line.starts_with(' ') || line.starts_with('\t') {
-            false
-        } else {
-            trimmed.starts_with(pkg)
-                && (trimmed.len() == pkg.len()
-                    || trimmed[pkg.len()..].starts_with('=')
-                    || trimmed[pkg.len()..].starts_with('{')
-                    || trimmed[pkg.len()..].starts_with(' '))
-        };
+        let is_pkg_line = !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && trimmed.starts_with(pkg)
+            && (trimmed.len() == pkg.len()
+                || trimmed[pkg.len()..].starts_with('=')
+                || trimmed[pkg.len()..].starts_with('{')
+                || trimmed[pkg.len()..].starts_with(' '));
         if is_pkg_line {
             let mut depth = 0;
             let mut j = i;
-            let mut found_end = false;
             while j < lines.len() {
                 let t = lines[j].trim();
                 if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
                     j += 1;
                     continue;
                 }
-                let open_count = t.matches('{').count();
-                let close_count = t.matches('}').count();
-                depth += open_count - close_count;
+                depth += t.matches('{').count() - t.matches('}').count();
                 if depth == 0 && j >= i {
-                    found_end = true;
-                    break;
+                    return Some((i, j));
                 }
                 j += 1;
             }
-            if found_end {
-                return Some((i, j));
-            } else {
-                i += 1;
-                continue;
-            }
+            // 未找到闭合，继续向后找
+            i += 1;
+        } else {
+            i += 1;
         }
-        i += 1;
     }
     None
 }
 
-/// 根据 AppConfig 中的规则，生成规范化的主包块（包括所有子包和线程）
+/// 根据 AppConfig 中的规则生成规范化的主包块（包含子包嵌套）
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
     use std::collections::BTreeMap;
     let mut block = Vec::new();
@@ -1643,18 +1638,16 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         .filter(|r| r.thread.is_empty())
         .map(|r| r.spec.as_str())
         .collect();
-
     let thread_rules: Vec<&crate::config::AffinityRule> = main_rules
         .iter()
         .filter(|r| !r.thread.is_empty())
-        .map(|&r| r) // 关键修复：解引用 &&AffinityRule → &AffinityRule
+        .map(|&r| r)
         .collect();
 
     let first_line = if pkg_cpus.is_empty() {
         format!("{} {{", pkg)
     } else {
-        let cpus_str = pkg_cpus.join(",");
-        format!("{}={} {{", pkg, cpus_str)
+        format!("{}={} {{", pkg, pkg_cpus.join(","))
     };
     block.push(first_line);
 
@@ -1668,18 +1661,16 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
             .filter(|r| r.thread.is_empty())
             .map(|r| r.spec.as_str())
             .collect();
-
         let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec
             .iter()
             .filter(|r| !r.thread.is_empty())
-            .map(|&r| r) // 关键修复
+            .map(|&r| r)
             .collect();
 
         let sub_first = if sub_cpus.is_empty() {
             format!("    :{} {{", sub_name)
         } else {
-            let cpus_str = sub_cpus.join(",");
-            format!("    :{}={} {{", sub_name, cpus_str)
+            format!("    :{}={} {{", sub_name, sub_cpus.join(","))
         };
         block.push(sub_first);
         for rule in sub_threads {
@@ -1692,12 +1683,13 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     block
 }
 
+/// 规范化主包：删除所有顶格子包独立块，替换主包块为规范化新块，保留块外注释
 pub fn normalize_package_block(
     lines: &mut Vec<String>,
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 第一步：删除所有顶格的、以 "pkg:" 开头的独立子包块（旧格式）
+    // 1. 删除所有顶格的、以 "pkg:" 开头的独立子包块
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
@@ -1705,16 +1697,14 @@ pub fn normalize_package_block(
         if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
             let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
             if let Some((start, end)) = find_package_range(lines, pkg_name) {
-                if start <= end && end < lines.len() {
-                    lines.drain(start..=end);
-                    continue;
-                }
+                lines.drain(start..=end);
+                continue;
             }
         }
         i += 1;
     }
 
-    // 第二步：查找主包范围
+    // 2. 查找主包范围
     let (start, end) = match find_package_range(lines, pkg) {
         Some((s, e)) if s <= e && e < lines.len() => (s, e),
         Some(_) => {
@@ -1727,7 +1717,6 @@ pub fn normalize_package_block(
             if new_block.is_empty() {
                 return false;
             }
-            // 在文件末尾插入
             if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
                 lines.push(String::new());
             }
@@ -1737,30 +1726,18 @@ pub fn normalize_package_block(
         }
     };
 
-    // 第三步：生成新块
+    // 3. 生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
-        // 没有规则，删除主包范围
         lines.drain(start..=end);
         return true;
     }
 
-    // 第四步：替换旧块为新块
+    // 4. 替换旧块为新块
     let block_len = new_block.len();
-    // 确保 start 和 end 有效
-    if start > end || end >= lines.len() {
-        eprintln!(
-            "警告: 主包 {} 范围无效 (start={}, end={}, len={})，跳过替换",
-            pkg,
-            start,
-            end,
-            lines.len()
-        );
-        return false;
-    }
     lines.splice(start..=end, new_block);
 
-    // 确保块后有空行（如果后面还有其他内容且非空行）
+    // 5. 确保块后有空行
     let block_end = start + block_len;
     if block_end < lines.len() && !lines[block_end].trim().is_empty() {
         lines.insert(block_end, String::new());
