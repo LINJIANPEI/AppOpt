@@ -1070,13 +1070,14 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
+    // ================= 核心修改：简化查找旧块 =================
     eprintln!("[rule_upsert] 开始查找旧块");
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut first_start = None;
     let mut i = 0;
-    let max_iter = lines.len() * 2 + 100;
-    while i < lines.len() && i < max_iter {
+    while i < lines.len() {
         let trimmed = lines[i].trim();
+        // 判断是否为顶格的包行（以 pkg 开头，后面跟着 =、{、空格或冒号）
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
         let is_pkg_line = is_top_level
             && (trimmed == pkg
@@ -1084,32 +1085,60 @@ pub fn rule_upsert(
                 || trimmed.starts_with(&format!("{}=", pkg))
                 || trimmed.starts_with(&format!("{}{{", pkg))
                 || trimmed.starts_with(&format!("{}:", pkg)));
+
         if is_pkg_line {
-            let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
-            if let Some((start, end)) = find_package_range(&lines, pkg_name) {
-                let end = end.min(lines.len() - 1);
-                let start = start.min(end);
-                if start <= end {
+            let start = i;
+            // 检查该行是否包含 '{'（即是否为块）
+            let has_brace = trimmed.contains('{');
+            if has_brace {
+                let mut depth = 0;
+                let mut j = i;
+                while j < lines.len() {
+                    let t = lines[j].trim();
+                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                        j += 1;
+                        continue;
+                    }
+                    depth += t.matches('{').count() - t.matches('}').count();
+                    if depth == 0 && j > i {
+                        // 找到闭合
+                        ranges.push((start, j));
+                        if first_start.is_none() {
+                            first_start = Some(start);
+                        }
+                        i = j + 1;
+                        break;
+                    }
+                    j += 1;
+                    if j - i > 10000 {
+                        // 安全保护
+                        eprintln!("[rule_upsert] 警告: 查找闭合时达到最大深度");
+                        break;
+                    }
+                }
+                if i == start {
+                    // 未找到闭合，当作单行
+                    ranges.push((start, start));
                     if first_start.is_none() {
                         first_start = Some(start);
                     }
-                    ranges.push((start, end));
-                    i = end + 1;
-                    continue;
+                    i = start + 1;
                 }
             } else {
-                eprintln!("[rule_upsert] 警告: 未找到 {} 的闭合，跳过此行", pkg_name);
-                i += 1;
+                // 单行规则，无块
+                ranges.push((start, start));
+                if first_start.is_none() {
+                    first_start = Some(start);
+                }
+                i = start + 1;
             }
         } else {
             i += 1;
         }
     }
-    if i >= max_iter {
-        eprintln!("[rule_upsert] 警告: 查找循环达到最大迭代次数");
-    }
     eprintln!("[rule_upsert] 找到 {} 个旧块", ranges.len());
 
+    // ========== 生成新块 ==========
     eprintln!("[rule_upsert] 开始生成新块");
     let new_block = build_package_block(pkg, &new_cfg);
     eprintln!("[rule_upsert] 新块行数={}", new_block.len());
@@ -1159,6 +1188,7 @@ pub fn rule_upsert(
     eprintln!("[rule_upsert] file_write 结果: {:?}", result);
     result
 }
+
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
