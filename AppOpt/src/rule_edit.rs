@@ -1573,19 +1573,22 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
 
 // ========== 新增规范化函数 ==========
 
-/// 查找主包 pkg 的块范围（从包定义行开始到匹配的 '}' 结束）
+/// 查找包 pkg 的块范围（支持普通包和子包，例如 pkg 或 pkg:sub）
 pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < lines.len() {
         let line = &lines[i];
         let trimmed = line.trim();
+        // 判断是否为顶格包定义行（普通包或子包）
         let is_pkg_line = !line.starts_with(' ')
             && !line.starts_with('\t')
-            && trimmed.starts_with(pkg)
-            && (trimmed.len() == pkg.len()
-                || trimmed[pkg.len()..].starts_with('=')
-                || trimmed[pkg.len()..].starts_with('{')
-                || trimmed[pkg.len()..].starts_with(' '));
+            && (trimmed.starts_with(pkg)
+                && (trimmed.len() == pkg.len()
+                    || trimmed[pkg.len()..].starts_with('=')
+                    || trimmed[pkg.len()..].starts_with('{')
+                    || trimmed[pkg.len()..].starts_with(' '))
+                || trimmed.starts_with(&format!("{}:", pkg))); // ★ 新增：匹配 pkg:sub
+
         if is_pkg_line {
             let mut depth = 0;
             let mut j = i;
@@ -1601,15 +1604,13 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
                 }
                 j += 1;
             }
-            // 未找到闭合，继续向后找
-            i += 1;
+            i += 1; // 未找到闭合，继续下一个
         } else {
             i += 1;
         }
     }
     None
 }
-
 /// 根据 AppConfig 中的规则生成规范化的主包块（包含子包嵌套）
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
     use std::collections::BTreeMap;
@@ -1689,19 +1690,24 @@ pub fn normalize_package_block(
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 1. 删除所有顶格的、以 "pkg:" 开头的独立子包块
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
-            let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
-            if let Some((start, end)) = find_package_range(lines, pkg_name) {
-                lines.drain(start..=end);
-                continue;
+    // 1. 循环删除所有顶格的、以 "pkg:" 开头的独立子包块
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim();
+            let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+            if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
+                let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
+                if let Some((start, end)) = find_package_range(lines, pkg_name) {
+                    lines.drain(start..=end);
+                    changed = true;
+                    break; // 重新从开头扫描
+                }
             }
+            i += 1;
         }
-        i += 1;
     }
 
     // 2. 查找主包范围
@@ -1737,17 +1743,43 @@ pub fn normalize_package_block(
     let block_len = new_block.len();
     lines.splice(start..=end, new_block);
 
-    // 5. 确保块后有空行
+    // 5. 清理主包块之后的残留缩进行（可能是未删干净的子包行）
     let block_end = start + block_len;
-    if block_end < lines.len() && !lines[block_end].trim().is_empty() {
-        lines.insert(block_end, String::new());
-    } else if block_end == lines.len() {
+    if block_end < lines.len() {
+        let mut remove_indices = Vec::new();
+        let mut j = block_end;
+        while j < lines.len() {
+            let line = &lines[j];
+            let trimmed = line.trim();
+            // 如果行以空格开头且不是注释，并且不是以 `:` 开头的子包行，则视为残留
+            if line.starts_with(' ') || line.starts_with('\t') {
+                if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+                    remove_indices.push(j);
+                } else {
+                    // 遇到空行或注释，保留，但继续往后检查
+                }
+            } else {
+                // 遇到顶格行，停止清理
+                break;
+            }
+            j += 1;
+        }
+        // 从后往前删除残留行
+        for &idx in remove_indices.iter().rev() {
+            lines.remove(idx);
+        }
+    }
+
+    // 6. 确保块后有空行（如果后面还有其他内容）
+    let new_block_end = start + block_len;
+    if new_block_end < lines.len() && !lines[new_block_end].trim().is_empty() {
+        lines.insert(new_block_end, String::new());
+    } else if new_block_end == lines.len() {
         lines.push(String::new());
     }
 
     true
 }
-
 fn find_insert_pos(lines: &[String]) -> usize {
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
