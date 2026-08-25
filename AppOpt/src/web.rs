@@ -20,7 +20,10 @@ use crate::cpuset::{
     CpuSet, CpuTopology, DEFAULT_CPUSET_NAME, base_cpuset, create_cpuset_dir, parse_cpu_spec,
 };
 use crate::ebpf_mode::ebpf_probe;
-use crate::rule_edit::{RuleEdit, rule_delete, rule_delete_pkg, rule_rename, rule_upsert};
+use crate::rule_edit::{
+    RuleEdit, normalize_package_block, rule_delete, rule_delete_pkg, rule_rename, rule_upsert,
+};
+// 确保已经存在，若没有则添加
 use crate::{EBPF_GAVE_UP, MAX_PKG_LEN, MAX_THREAD_LEN, lock_ignore_poison};
 
 pub const WEB_PORT: u16 = 8889;
@@ -407,6 +410,33 @@ fn rule_api(req: &Request) -> (u16, String) {
         let file = lock_ignore_poison(&CONFIG_FILE).clone();
         match rule_upsert(&file, pkg, thread, cpus) {
             RuleEdit::Ok => {
+                // 重新加载配置
+                config_reload_now();
+                // 等待加载完成（短暂睡眠）
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // 获取最新配置
+                let cfg_opt = current_cfg();
+                if let Some(cfg) = cfg_opt {
+                    // 读取当前文件内容
+                    let mut lines: Vec<String> = match fs::read_to_string(&file) {
+                        Ok(content) => content.lines().map(String::from).collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    // 提取主包名
+                    let main_pkg = pkg.split(':').next().unwrap_or(pkg);
+                    if normalize_package_block(&mut lines, main_pkg, &cfg) {
+                        // 原子写入
+                        let tmp = format!("{}.tmp", file);
+                        let content = lines.join("\n");
+                        if fs::write(&tmp, content).is_ok() && fs::rename(&tmp, &file).is_ok() {
+                            // 再次重新加载以应用规范化后的文件
+                            config_reload_now();
+                            return (200, json!({ "ok": true }).to_string());
+                        }
+                    }
+                }
+                // 如果规范化失败，原始修改已生效，仍返回成功
                 config_reload_now();
                 (200, json!({ "ok": true }).to_string())
             }
@@ -443,6 +473,24 @@ fn rule_del_api(req: &Request) -> (u16, String) {
     match result {
         RuleEdit::Ok => {
             config_reload_now();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let cfg_opt = current_cfg();
+            if let Some(cfg) = cfg_opt {
+                let mut lines: Vec<String> = match fs::read_to_string(&file) {
+                    Ok(content) => content.lines().map(String::from).collect(),
+                    Err(_) => Vec::new(),
+                };
+                let main_pkg = pkg.split(':').next().unwrap_or(pkg);
+                if normalize_package_block(&mut lines, main_pkg, &cfg) {
+                    let tmp = format!("{}.tmp", file);
+                    let content = lines.join("\n");
+                    if fs::write(&tmp, content).is_ok() && fs::rename(&tmp, &file).is_ok() {
+                        config_reload_now();
+                        return (200, json!({ "ok": true }).to_string());
+                    }
+                }
+            }
+            config_reload_now();
             (200, json!({ "ok": true }).to_string())
         }
         RuleEdit::NotFound => err_json(404, "规则不存在"),
@@ -477,6 +525,25 @@ fn rule_rename_api(req: &Request) -> (u16, String) {
         let file = lock_ignore_poison(&CONFIG_FILE).clone();
         match rule_rename(&file, old, new) {
             RuleEdit::Ok => {
+                config_reload_now();
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let cfg_opt = current_cfg();
+                if let Some(cfg) = cfg_opt {
+                    let mut lines: Vec<String> = match fs::read_to_string(&file) {
+                        Ok(content) => content.lines().map(String::from).collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    // 重命名后，新包名是 new
+                    let main_pkg = new.split(':').next().unwrap_or(new);
+                    if normalize_package_block(&mut lines, main_pkg, &cfg) {
+                        let tmp = format!("{}.tmp", file);
+                        let content = lines.join("\n");
+                        if fs::write(&tmp, content).is_ok() && fs::rename(&tmp, &file).is_ok() {
+                            config_reload_now();
+                            return (200, json!({ "ok": true }).to_string());
+                        }
+                    }
+                }
                 config_reload_now();
                 (200, json!({ "ok": true }).to_string())
             }

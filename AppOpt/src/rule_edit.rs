@@ -1693,3 +1693,156 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
     }
     file_write(path, &lines)
 }
+
+// ========== 新增规范化函数 ==========
+
+/// 查找主包 pkg 的块范围（从包定义行开始到匹配的 '}' 结束）
+/// 返回 Some((start_index, end_index))，若找不到则返回 None
+pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)> {
+    let mut i = 0;
+    while i < lines.len() {
+        let line = &lines[i];
+        let trimmed = line.trim();
+        // 匹配行首非空白且以 pkg 开头，且后面是 =、{ 或空白（即包定义行）
+        let is_pkg_line = if line.starts_with(' ') || line.starts_with('\t') {
+            false
+        } else {
+            trimmed.starts_with(pkg)
+                && (trimmed.len() == pkg.len()
+                    || trimmed[pkg.len()..].starts_with('=')
+                    || trimmed[pkg.len()..].starts_with('{')
+                    || trimmed[pkg.len()..].starts_with(' '))
+        };
+        if is_pkg_line {
+            let mut depth = 0;
+            let mut j = i;
+            let mut found_end = false;
+            while j < lines.len() {
+                let t = lines[j].trim();
+                if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                    j += 1;
+                    continue;
+                }
+                let open_count = t.matches('{').count();
+                let close_count = t.matches('}').count();
+                depth += open_count - close_count;
+                if depth == 0 && j >= i {
+                    found_end = true;
+                    break;
+                }
+                j += 1;
+            }
+            if found_end {
+                return Some((i, j));
+            } else {
+                i += 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 根据 AppConfig 中的规则，生成规范化的主包块（包括所有子包和线程）
+pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let mut block = Vec::new();
+
+    let mut main_rules = Vec::new();
+    let mut sub_rules: BTreeMap<String, Vec<&crate::config::AffinityRule>> = BTreeMap::new();
+    for rule in &cfg.rules {
+        if let Some(stripped) = rule.pkg.strip_prefix(&format!("{}:", pkg)) {
+            let sub_name = stripped.split(':').next().unwrap_or(stripped);
+            sub_rules
+                .entry(sub_name.to_string())
+                .or_default()
+                .push(rule);
+        } else if rule.pkg == pkg {
+            main_rules.push(rule);
+        }
+    }
+
+    if main_rules.is_empty() && sub_rules.is_empty() {
+        return block;
+    }
+
+    let pkg_cpus: Vec<&str> = main_rules
+        .iter()
+        .filter(|r| r.thread.is_empty())
+        .map(|r| r.spec.as_str())
+        .collect();
+    let thread_rules: Vec<&crate::config::AffinityRule> =
+        main_rules.iter().filter(|r| !r.thread.is_empty()).collect();
+
+    let first_line = if pkg_cpus.is_empty() {
+        format!("{} {{", pkg)
+    } else {
+        let cpus_str = pkg_cpus.join(",");
+        format!("{}={} {{", pkg, cpus_str)
+    };
+    block.push(first_line);
+
+    for rule in thread_rules {
+        block.push(format!("    {}={}", rule.thread, rule.spec));
+    }
+
+    for (sub_name, sub_rules_vec) in sub_rules {
+        let sub_cpus: Vec<&str> = sub_rules_vec
+            .iter()
+            .filter(|r| r.thread.is_empty())
+            .map(|r| r.spec.as_str())
+            .collect();
+        let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec
+            .iter()
+            .filter(|r| !r.thread.is_empty())
+            .collect();
+
+        let sub_first = if sub_cpus.is_empty() {
+            format!("    :{} {{", sub_name)
+        } else {
+            let cpus_str = sub_cpus.join(",");
+            format!("    :{}={} {{", sub_name, cpus_str)
+        };
+        block.push(sub_first);
+        for rule in sub_threads {
+            block.push(format!("        {}={}", rule.thread, rule.spec));
+        }
+        block.push("    }".to_string());
+    }
+
+    block.push("}".to_string());
+    block
+}
+
+/// 重新规范化指定主包的整个块，替换文件中的旧块，保留文件其他部分
+pub fn normalize_package_block(
+    lines: &mut Vec<String>,
+    pkg: &str,
+    cfg: &crate::config::AppConfig,
+) -> bool {
+    let (start, end) = match find_package_range(lines, pkg) {
+        Some(range) => range,
+        None => {
+            let new_block = build_package_block(pkg, cfg);
+            if !new_block.is_empty() {
+                if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
+                    lines.push(String::new());
+                }
+                lines.extend(new_block);
+                lines.push(String::new());
+                return true;
+            }
+            return false;
+        }
+    };
+
+    let new_block = build_package_block(pkg, cfg);
+    if new_block.is_empty() {
+        lines.drain(start..=end);
+        return true;
+    }
+
+    lines.splice(start..=end, new_block);
+    true
+}
