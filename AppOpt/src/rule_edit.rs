@@ -404,24 +404,6 @@ fn with_comment(new_line: &str, old: &str) -> String {
     }
 }
 
-fn spec_swap(raw: &str, cpus: &str) -> String {
-    let cut = comment_at(raw).unwrap_or(raw.len());
-    let Some(eq) = raw[..cut].rfind('=') else {
-        return raw.into();
-    };
-    let rhs = &raw[eq + 1..cut];
-    let val = rhs.trim_start();
-    let lead = rhs.len() - val.len();
-    let v_end = val
-        .find(|c: char| c.is_whitespace() || c == '{' || c == '}')
-        .unwrap_or(val.len());
-    let tail: String = val[v_end..]
-        .chars()
-        .filter(|c| c.is_whitespace() || *c == '{' || *c == '}')
-        .collect();
-    format!("{}{}{}{}", &raw[..eq + 1 + lead], cpus, tail, &raw[cut..])
-}
-
 fn line_remove(lines: &mut Vec<String>, pkg: &str, loc: &ThreadLoc) {
     if loc.open {
         lines[loc.idx] = with_comment(&bare_open_line(pkg), &lines[loc.idx]);
@@ -448,181 +430,6 @@ fn file_write(path: &str, lines: &[String]) -> RuleEdit {
     } else {
         RuleEdit::IoErr
     }
-}
-
-fn collect_all_lines(lines: &[String], pkg: &str) -> Vec<usize> {
-    let t = target_scan(lines, pkg);
-    let mut idxs: Vec<usize> = Vec::new();
-
-    if let Some(
-        PkgLine::Standalone(i)
-        | PkgLine::OpenInline(i)
-        | PkgLine::BareOpen(i)
-        | PkgLine::BarePending(i),
-    ) = t.pkg_line
-    {
-        idxs.push(i);
-    }
-    if let Some(open) = t.block_open {
-        let end = t
-            .block_close
-            .or_else(|| {
-                t.threads
-                    .values()
-                    .flatten()
-                    .filter(|l| !l.single)
-                    .map(|l| l.idx)
-                    .max()
-            })
-            .unwrap_or(open);
-        idxs.extend(open..=end);
-    }
-    idxs.extend(t.singles().map(|l| l.idx));
-
-    for (sub, _) in &t.sub_pkgs {
-        let sub_pkg = format!("{}:{}", pkg, sub);
-        idxs.extend(collect_all_lines(lines, &sub_pkg));
-    }
-
-    idxs.sort_unstable();
-    idxs.dedup();
-    idxs
-}
-
-fn consolidate_sub_pkg(lines: &mut Vec<String>, pkg: &str, sub: &str) -> RuleEdit {
-    // 重新扫描主包块闭合索引
-    let t = target_scan(lines, pkg);
-    let block_close = match t.block_close {
-        Some(c) => c,
-        None => return RuleEdit::NotFound,
-    };
-
-    // 收集所有属于该子包的条目
-    let mut pkg_rule_idx = None;
-    let mut block_indices = Vec::new();
-    let mut thread_lines = Vec::new();
-
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed.starts_with(&format!(":{} =", sub)) || trimmed.starts_with(&format!(":{}=", sub))
-        {
-            pkg_rule_idx = Some(i);
-            if trimmed.ends_with('{') {
-                let start = i;
-                let mut depth = 1;
-                let mut end = start;
-                for j in (i + 1)..lines.len() {
-                    let next_trimmed = lines[j].trim();
-                    if close_like(next_trimmed) {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = j;
-                            break;
-                        }
-                    } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                        depth += 1;
-                    }
-                }
-                if end > start {
-                    for k in (start + 1)..end {
-                        let line = lines[k].trim();
-                        if !line.is_empty() && !close_like(line) && !line.starts_with(':') {
-                            thread_lines.push(line.to_string());
-                        }
-                    }
-                    block_indices.push((start, end));
-                    i = end + 1;
-                    continue;
-                }
-            }
-            i += 1;
-            continue;
-        }
-        if trimmed == format!(":{} {{", sub) || trimmed == format!(":{}={{", sub) {
-            let start = i;
-            let mut depth = 1;
-            let mut end = start;
-            for j in (i + 1)..lines.len() {
-                let next_trimmed = lines[j].trim();
-                if close_like(next_trimmed) {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = j;
-                        break;
-                    }
-                } else if next_trimmed.starts_with(':') && next_trimmed.ends_with('{') {
-                    depth += 1;
-                }
-            }
-            if end > start {
-                for k in (start + 1)..end {
-                    let line = lines[k].trim();
-                    if !line.is_empty() && !line.starts_with(':') && !close_like(line) {
-                        thread_lines.push(line.to_string());
-                    }
-                }
-                block_indices.push((start, end));
-                i = end + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    let pkg_idx = match pkg_rule_idx {
-        Some(idx) => idx,
-        None => return RuleEdit::NotFound,
-    };
-
-    let pkg_line = &lines[pkg_idx];
-    let cpus_val = if let Some(eq_pos) = pkg_line.rfind('=') {
-        pkg_line[eq_pos + 1..]
-            .trim()
-            .trim_end_matches('{')
-            .trim()
-            .to_string()
-    } else {
-        return RuleEdit::Malformed;
-    };
-
-    let mut threads: Vec<String> = Vec::new();
-    for line in thread_lines {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with('}') {
-            if !threads.contains(&trimmed.to_string()) {
-                threads.push(trimmed.to_string());
-            }
-        }
-    }
-
-    let mut remove_indices: Vec<usize> = Vec::new();
-    remove_indices.push(pkg_idx);
-    for (start, end) in &block_indices {
-        for idx in *start..=*end {
-            if idx != pkg_idx {
-                remove_indices.push(idx);
-            }
-        }
-    }
-    remove_indices.sort_unstable();
-    remove_indices.dedup();
-    for idx in remove_indices.iter().rev() {
-        lines.remove(*idx);
-    }
-
-    let merged_line = format!(" :{}={} {{", sub, cpus_val);
-    lines.insert(block_close, merged_line);
-    let mut offset = 1;
-    for thread_line in threads {
-        lines.insert(block_close + offset, format!("        {}", thread_line));
-        offset += 1;
-    }
-    if offset > 1 {
-        lines.insert(block_close + offset, "    }".to_string());
-    }
-
-    RuleEdit::Ok
 }
 
 /// 查找所有以 `:子包 {` 开头的独立块的范围
@@ -771,12 +578,6 @@ fn write_sub_pkg_block(
         t = t2;
     }
 
-    // 确保 block_open 和 block_close 都存在
-    let (block_open, block_close) = match (t.block_open, t.block_close) {
-        (Some(open), Some(close)) => (open, close),
-        _ => return RuleEdit::Malformed,
-    };
-
     // ---- 处理独立行子包（如果存在） ----
     let mut standalone_idx = None;
     for (i, line) in lines.iter().enumerate() {
@@ -790,13 +591,6 @@ fn write_sub_pkg_block(
     }
     if let Some(idx) = standalone_idx {
         lines.remove(idx);
-        t = target_scan(lines, pkg);
-        let (open, close) = match (t.block_open, t.block_close) {
-            (Some(o), Some(c)) => (o, c),
-            _ => return RuleEdit::Malformed,
-        };
-        // 更新 block_close（不再直接使用，但保持一致性）
-        let block_close = close;
     }
 
     // === 删除整个子包（delete_all = true） ===
@@ -1323,17 +1117,6 @@ fn build_block(pkg: &str, data: &PackageData) -> Vec<String> {
         block.push("}".to_string());
     }
     block
-}
-
-/// 查找插入位置（第一个非注释行之后）
-fn find_insert_pos(lines: &[String]) -> usize {
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
-            return idx + 1;
-        }
-    }
-    lines.len()
 }
 
 pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
@@ -1898,39 +1681,4 @@ pub fn normalize_package_block(
     }
 
     true
-}
-
-/// 查找属于主包 pkg 的所有顶格块（包括主包本身和所有 `pkg:sub` 独立块）
-/// 返回 Vec<(start_index, end_index)>，每个块的范围（起始行到结束行）
-pub fn find_all_package_blocks(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
-    let mut blocks = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let line = &lines[i];
-        let trimmed = line.trim();
-        // 只处理顶格行（无前导空格）
-        let is_top_level = !line.starts_with(' ') && !line.starts_with('\t');
-        if !is_top_level {
-            i += 1;
-            continue;
-        }
-        // 检查是否是主包或子包块（以 pkg 或 pkg: 开头）
-        let is_pkg_block = trimmed.starts_with(pkg)
-            && (trimmed.len() == pkg.len()
-                || trimmed[pkg.len()..].starts_with('=')
-                || trimmed[pkg.len()..].starts_with('{')
-                || trimmed[pkg.len()..].starts_with(' ')
-                || trimmed[pkg.len()..].starts_with(':'));
-        if is_pkg_block {
-            // 提取完整包名（可能包含子包）
-            let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
-            if let Some((start, end)) = find_package_range(lines, pkg_name) {
-                blocks.push((start, end));
-                i = end + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    blocks
 }

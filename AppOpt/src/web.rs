@@ -261,26 +261,6 @@ fn sys_procs() -> u16 {
     }
 }
 
-/// CPU 集合转语义名
-fn spec_name(cpus: &CpuSet, topo: &CpuTopology) -> String {
-    if cpus.count() > 0 {
-        // 先检查是否是 e_core
-        if *cpus == topo.e_core {
-            return "e-core".into();
-        }
-        if *cpus == topo.p_core {
-            return "p-core".into();
-        }
-        if *cpus == topo.hp_core {
-            return "hp-core".into();
-        }
-        if *cpus == topo.present_cpus {
-            return "all-core".into();
-        }
-    }
-    cpus.to_range_string()
-}
-
 fn status_json() -> String {
     let stats = lock_ignore_poison(&WEB_STATS).clone();
     let cfg = current_cfg();
