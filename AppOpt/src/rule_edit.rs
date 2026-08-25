@@ -973,7 +973,6 @@ pub fn rule_upsert(
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     eprintln!("[rule_upsert] 已获取锁");
 
-    // 1. 读取文件
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
         .lines()
@@ -981,10 +980,10 @@ pub fn rule_upsert(
         .collect();
     eprintln!("[rule_upsert] 读取文件，行数={}", lines.len());
 
-    // 2. 辅助：校验 CPU 规格
+    // 辅助：校验 CPU 规格
     fn validate_cpus(cpus: &str, topo: &crate::cpuset::CpuTopology) -> Option<crate::cpuset::CpuSet> {
         if cpus.is_empty() {
-            return None; // 空表示删除
+            return None;
         }
         let set = crate::cpuset::parse_cpu_spec(cpus, topo);
         if set.count() == 0 {
@@ -995,8 +994,9 @@ pub fn rule_upsert(
         }
     }
 
-    // 3. 子包处理
+    // ---- 子包处理 ----
     if pkg.contains(':') {
+        eprintln!("[rule_upsert] 进入子包分支");
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
             let main_pkg = parts[0];
@@ -1005,39 +1005,39 @@ pub fn rule_upsert(
                 return RuleEdit::Malformed;
             }
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
+            eprintln!("[rule_upsert] 子包处理结果: {:?}", result);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
                 return file_write(config_path, &lines);
             }
             return result;
         }
-        return RuleEdit::Ok; // 格式错误但忽略
+        return RuleEdit::Ok;
     }
 
-    // 4. 主包处理
-    // 构建新规则列表
+    // ---- 主包处理 ----
+    eprintln!("[rule_upsert] 进入主包分支");
     let mut new_rules = Vec::new();
-    // 先保留其他包的所有规则
+    // 保留其他包规则，并移除本包的同名旧规则
     for r in &cfg.rules {
         if r.pkg == pkg {
-            // 如果操作的是包级规则 (thread 为空)
             if thread.is_empty() {
-                // 跳过旧的包级规则
                 if r.thread.is_empty() {
-                    continue;
+                    continue; // 跳过旧的包级规则
                 }
             } else {
-                // 操作的是线程规则，跳过同名旧线程
                 if r.thread == thread {
-                    continue;
+                    continue; // 跳过旧的同名线程
                 }
             }
         }
         new_rules.push(r.clone());
     }
+    eprintln!("[rule_upsert] 保留 {} 条旧规则", new_rules.len());
 
-    // 如果 cpus 非空，添加新规则（否则为删除操作）
+    // 添加新规则
     if !cpus.is_empty() {
+        eprintln!("[rule_upsert] 准备添加新规则，cpus={}", cpus);
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
             let cpuset_dir = if thread.is_empty() {
                 crate::cpuset::ensure_cpuset_dir(&cpuset, &cfg.topo)
@@ -1053,12 +1053,14 @@ pub fn rule_upsert(
                 spec: cpus.to_string(),
             };
             new_rules.push(new_rule);
+            eprintln!("[rule_upsert] 新规则已加入，总数={}", new_rules.len());
         } else {
+            eprintln!("[rule_upsert] CPU 规格无效，返回 Malformed");
             return RuleEdit::Malformed;
         }
     }
 
-    // 重建 cfg
+    // 重新构建新配置
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
@@ -1072,7 +1074,8 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // 5. 查找旧块
+    // ---- 查找旧块 ----
+    eprintln!("[rule_upsert] 开始查找旧块");
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut first_start = None;
     let mut i = 0;
@@ -1089,7 +1092,6 @@ pub fn rule_upsert(
         if is_pkg_line {
             let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
             if let Some((start, end)) = find_package_range(&lines, pkg_name) {
-                // 边界保护
                 let end = end.min(lines.len() - 1);
                 let start = start.min(end);
                 if start <= end {
@@ -1103,16 +1105,21 @@ pub fn rule_upsert(
             }
         }
         i += 1;
+        if i >= lines.len() {
+            break;
+        }
     }
+    eprintln!("[rule_upsert] 找到 {} 个旧块，first_start={:?}", ranges.len(), first_start);
 
-    // 6. 生成新块
+    // ---- 生成新块 ----
+    eprintln!("[rule_upsert] 开始生成新块");
     let new_block = build_package_block(pkg, &new_cfg);
     eprintln!("[rule_upsert] 新块行数={}", new_block.len());
 
-    // 7. 若没有旧块，直接插入
+    // ---- 无旧块直接插入 ----
     if ranges.is_empty() {
+        eprintln!("[rule_upsert] 无旧块，直接插入");
         if new_block.is_empty() {
-            // 没有规则，不做任何事
             clean_empty_lines(&mut lines);
             return file_write(config_path, &lines);
         }
@@ -1125,7 +1132,8 @@ pub fn rule_upsert(
         return file_write(config_path, &lines);
     }
 
-    // 8. 删除旧块（从后往前）
+    // ---- 删除旧块 ----
+    eprintln!("[rule_upsert] 删除旧块...");
     ranges.sort_by_key(|(_, end)| *end);
     ranges.reverse();
     for (start, end) in ranges {
@@ -1136,14 +1144,14 @@ pub fn rule_upsert(
         }
     }
 
-    // 9. 插入新块（如果非空）
+    // ---- 插入新块 ----
     if !new_block.is_empty() {
         let insert_pos = first_start.unwrap_or(lines.len());
         let pos = if insert_pos > lines.len() { lines.len() } else { insert_pos };
         lines.splice(pos..pos, new_block);
+        eprintln!("[rule_upsert] 新块已插入在 pos={}", pos);
     }
 
-    // 10. 清理并写入
     clean_empty_lines(&mut lines);
     let result = file_write(config_path, &lines);
     eprintln!("[rule_upsert] file_write 结果: {:?}", result);
