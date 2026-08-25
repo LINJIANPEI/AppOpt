@@ -15,6 +15,7 @@
             margin: 0;
             padding: 0;
         }
+
         [hidden] {
             display: none !important;
         }
@@ -88,22 +89,28 @@
             background: rgba(255, 255, 255, 0.75);
             border-color: rgba(0, 0, 0, 0.06);
         }
+
         body.light .card:hover {
             background: rgba(255, 255, 255, 0.8);
         }
+
         body.light .stat:hover {
             background: rgba(0, 0, 0, 0.05);
         }
+
         body.light .seg button.on {
             background: rgba(255, 255, 255, 0.9);
             box-shadow: 0 1px 8px rgba(0, 0, 0, 0.08);
         }
+
         body.light .modal {
             background: rgba(255, 255, 255, 0.85);
         }
+
         body.light .sg-box {
             background: rgba(255, 255, 255, 0.9);
         }
+
         body.light #toast {
             background: rgba(255, 255, 255, 0.9);
             color: #1e293b;
@@ -122,6 +129,7 @@
             line-height: 1.5;
             transition: background .3s, color .3s;
         }
+
         button {
             cursor: pointer;
             border: none;
@@ -130,6 +138,7 @@
             color: inherit;
             outline: none;
         }
+
         input {
             font-family: inherit;
             outline: none;
@@ -142,14 +151,17 @@
             transition: border-color .2s, background .2s, box-shadow .2s;
             width: 100%;
         }
+
         input:focus {
             border-color: var(--blue);
             background: var(--input-focus);
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
         }
+
         input::placeholder {
             color: var(--sub);
         }
+
         input[readonly] {
             opacity: 0.7;
             cursor: default;
@@ -165,11 +177,13 @@
             overflow: hidden;
             background: transparent;
         }
+
         .main {
             flex: 1;
             overflow: hidden;
             position: relative;
         }
+
         .panel {
             height: 100%;
             overflow-y: auto;
@@ -178,9 +192,11 @@
             -webkit-overflow-scrolling: touch;
             scroll-behavior: smooth;
         }
+
         .panel::-webkit-scrollbar {
             width: 4px;
         }
+
         .panel::-webkit-scrollbar-thumb {
             background: rgba(148, 163, 184, 0.3);
             border-radius: 8px;
@@ -199,9 +215,11 @@
             padding: 18px 20px;
             transition: box-shadow .2s, background .2s;
         }
+
         .card:hover {
             box-shadow: var(--sh-lg);
         }
+
         .card-title {
             font-size: 12px;
             font-weight: 600;
@@ -213,6 +231,7 @@
             align-items: center;
             gap: 8px;
         }
+
         .card-title::after {
             content: '';
             flex: 1;
@@ -229,14 +248,17 @@
             padding: 8px 0;
             font-size: 14px;
         }
+
         .row+.row {
             border-top: 1px solid var(--border);
         }
+
         .row .label {
             color: var(--sub);
             flex-shrink: 0;
             font-weight: 450;
         }
+
         .row .value {
             font-weight: 600;
             text-align: right;
@@ -245,6 +267,7 @@
             align-items: center;
             gap: 6px;
         }
+
         .mono {
             font-family: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
             font-size: 13px;
@@ -260,10 +283,12 @@
             align-items: center;
             gap: 4px;
         }
+
         .badge.ebpf {
             background: var(--green-bg);
             color: var(--green);
         }
+
         .badge.proc {
             background: var(--blue-light);
             color: var(--blue);
@@ -275,11 +300,13 @@
             grid-template-columns: 1fr 1fr;
             gap: 10px;
         }
+
         .grid3 {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
             gap: 10px;
         }
+
         .stat {
             background: var(--stat-bg);
             border-radius: var(--radius-sm);
@@ -287,15 +314,18 @@
             text-align: center;
             transition: background .2s;
         }
+
         .stat:hover {
             background: var(--stat-hover);
         }
+
         .stat .num {
             font-size: 26px;
             font-weight: 700;
             font-variant-numeric: tabular-nums;
             line-height: 1.2;
         }
+
         .stat .lbl {
             font-size: 11px;
             color: var(--sub);
@@ -319,42 +349,52 @@
             -webkit-backdrop-filter: blur(8px);
             border: 1px solid var(--glass-border);
         }
+
         .chip.e {
             color: var(--green);
             background: var(--green-bg);
         }
+
         .chip.e::before {
             content: '🟢';
             font-size: 10px;
         }
+
         .chip.p {
             color: var(--blue);
             background: var(--blue-light);
         }
+
         .chip.p::before {
             content: '🔵';
             font-size: 10px;
         }
+
         .chip.h {
             color: var(--purple);
             background: var(--purple-bg);
         }
+
         .chip.h::before {
             content: '🟣';
             font-size: 10px;
         }
+
         .chip.c {
             color: var(--gray);
             background: var(--gray-bg);
         }
+
         .chip.c::before {
             content: '⚪';
             font-size: 10px;
         }
+
         .chip.sm {
             font-size: 11px;
             padding: 1px 10px;
         }
+
         .chip-group {
             display: flex;
             flex-wrap: wrap;
@@ -367,6 +407,7 @@
             grid-template-columns: 1fr 1fr;
             gap: 8px 16px;
         }
+
         .core-item {
             display: flex;
             align-items: center;
@@ -375,12 +416,14 @@
             border-bottom: 1px solid var(--border);
             font-size: 13px;
         }
+
         .core-item .core-label {
             font-weight: 500;
             display: flex;
             align-items: center;
             gap: 6px;
         }
+
         .core-item .core-dot {
             width: 10px;
             height: 10px;
@@ -388,6 +431,7 @@
             display: inline-block;
             flex-shrink: 0;
         }
+
         .core-item .core-val {
             font-family: 'SF Mono', Consolas, monospace;
             font-size: 13px;
@@ -409,6 +453,7 @@
             position: relative;
             transition: background .3s;
         }
+
         .tab {
             flex: 1;
             color: var(--sub);
@@ -422,6 +467,7 @@
             position: relative;
             padding: 4px 0;
         }
+
         .tab svg {
             width: 24px;
             height: 24px;
@@ -432,12 +478,15 @@
             stroke-linejoin: round;
             transition: transform .2s;
         }
+
         .tab.active {
             color: var(--blue);
         }
+
         .tab.active svg {
             transform: translateY(-1px) scale(1.06);
         }
+
         .tab.active::after {
             content: '';
             position: absolute;
@@ -449,10 +498,12 @@
             border-radius: 0 0 4px 4px;
             box-shadow: 0 0 12px rgba(99, 102, 241, 0.3);
         }
+
         @media(orientation:landscape) {
             .app {
                 flex-direction: row;
             }
+
             .tabbar {
                 flex-direction: column;
                 height: 100%;
@@ -463,11 +514,13 @@
                 justify-content: center;
                 padding-bottom: 0;
             }
+
             .tab {
                 flex: 1;
                 max-height: 72px;
                 padding: 8px 0;
             }
+
             .tab.active::after {
                 top: 20%;
                 bottom: 20%;
@@ -487,6 +540,7 @@
             gap: 10px;
             margin-bottom: 14px;
         }
+
         #r-filter {
             flex: 1;
             min-width: 0;
@@ -499,6 +553,7 @@
             transition: border-color .2s, box-shadow .2s;
             box-shadow: var(--sh);
         }
+
         #r-filter:focus {
             border-color: var(--blue);
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12), var(--sh);
@@ -520,13 +575,16 @@
             flex-shrink: 0;
             border: none;
         }
+
         .btn:active {
             transform: scale(.94);
             opacity: .8;
         }
+
         .btn:hover {
             box-shadow: 0 4px 24px var(--btn-hover-shadow);
         }
+
         .btn-outline {
             background: var(--input-bg);
             color: var(--sub);
@@ -540,9 +598,11 @@
             align-items: center;
             justify-content: center;
         }
+
         .btn-outline:active {
             background: rgba(0, 0, 0, 0.05);
         }
+
         .btn-danger {
             background: var(--red);
             box-shadow: 0 2px 12px rgba(239, 68, 68, 0.3);
@@ -561,9 +621,11 @@
             animation: fadeUp .18s ease both;
             transition: box-shadow .2s, background .2s;
         }
+
         .grp:hover {
             box-shadow: var(--sh-lg);
         }
+
         .grp-head {
             display: flex;
             align-items: center;
@@ -574,9 +636,11 @@
             -webkit-user-select: none;
             transition: background .15s;
         }
+
         .grp-head:active {
             background: rgba(0, 0, 0, 0.03);
         }
+
         .chev {
             width: 18px;
             height: 18px;
@@ -588,16 +652,67 @@
             transition: transform .2s ease;
             flex-shrink: 0;
         }
+
         .grp.open .chev {
             transform: rotate(90deg);
         }
+
+        /* 注释（左侧）使用包名样式：粗体大号 */
+        .grp-comment {
+            font-weight: 600;
+            font-size: 14px;
+            color: inherit;
+            background: transparent;
+            padding: 0;
+            border-radius: 0;
+            white-space: nowrap;
+            flex-shrink: 0;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            order: -1;
+        }
+
+        /* 包名（右侧）使用注释样式：灰色小字圆角背景 */
         .grp-name {
             flex: 1;
             min-width: 0;
-            word-break: break-all;
-            font-weight: 600;
-            font-size: 14px;
+            color: #94a3b8;
+            font-size: 12px;
+            opacity: 0.8;
+            background: rgba(148, 163, 184, 0.15);
+            padding: 0 10px;
+            border-radius: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-weight: 400;
         }
+
+        .grp-name marquee {
+            display: block;
+            width: 100%;
+            font-size: 12px;
+            color: #94a3b8;
+            background: transparent;
+            border: none;
+            padding: 0;
+            opacity: 0.8;
+            font-weight: 400;
+        }
+
+        .grp-name .static {
+            display: inline-block;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            color: #94a3b8;
+            font-size: 12px;
+            opacity: 0.8;
+            font-weight: 400;
+        }
+
         .grp-count {
             font-size: 11px;
             font-weight: 500;
@@ -607,14 +722,17 @@
             padding: 2px 10px;
             flex-shrink: 0;
         }
+
         .grp-body {
             display: grid;
             grid-template-rows: 0fr;
             transition: grid-template-rows .22s ease;
         }
+
         .grp.open .grp-body {
             grid-template-rows: 1fr;
         }
+
         .grp-inner {
             overflow: hidden;
             padding: 0 4px 4px;
@@ -629,9 +747,11 @@
             transition: background .12s;
             flex-wrap: wrap;
         }
+
         .rule-row:hover {
             background: rgba(0, 0, 0, 0.02);
         }
+
         .rule-name {
             flex: 1;
             min-width: 80px;
@@ -639,40 +759,43 @@
             font-size: 13px;
             font-weight: 450;
         }
+
         .rule-sub {
             color: var(--sub);
             font-size: 12px;
             font-weight: 400;
         }
 
-        /* 修正：添加线程/子包按钮尺寸缩小 */
         .rule-add {
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 4px;
             margin: 6px 14px 8px;
-            padding: 6px 0;               /* 减小上下内边距 */
+            padding: 6px 0;
             border: 1.5px dashed var(--border);
             border-radius: var(--radius-sm);
             color: var(--sub);
-            font-size: 12px;              /* 缩小字号 */
+            font-size: 12px;
             font-weight: 500;
             transition: all .15s;
             width: calc(100% - 28px);
             background: rgba(0, 0, 0, 0.02);
         }
+
         .rule-add:active {
             opacity: .5;
             transform: scale(.97);
         }
+
         .rule-add:hover {
             border-color: var(--blue);
             color: var(--blue);
             background: var(--blue-light);
         }
+
         .rule-add svg {
-            width: 14px;                 /* 缩小图标 */
+            width: 14px;
             height: 14px;
             stroke: currentColor;
             fill: none;
@@ -690,16 +813,20 @@
             transition: transform .12s, background .12s, color .15s;
             flex-shrink: 0;
         }
+
         .icon-btn:hover {
             background: rgba(0, 0, 0, 0.05);
         }
+
         .icon-btn.danger:hover {
             color: var(--red);
             background: rgba(239, 68, 68, 0.1);
         }
+
         .icon-btn:active {
             transform: scale(.85);
         }
+
         .icon-btn svg {
             width: 17px;
             height: 17px;
@@ -710,12 +837,12 @@
             stroke-linejoin: round;
         }
 
-        /* 子包 */
         .sub-group {
             border-left: 2.5px solid rgba(99, 102, 241, 0.25);
             margin: 4px 0 4px 10px;
             padding-left: 12px;
         }
+
         .sub-head {
             display: flex;
             align-items: center;
@@ -725,6 +852,7 @@
             font-weight: 600;
             color: var(--sub);
         }
+
         .sub-label {
             font-family: 'SF Mono', Consolas, monospace;
             font-weight: 500;
@@ -738,6 +866,7 @@
             font-size: 14px;
             line-height: 2;
         }
+
         .empty .empty-icon {
             font-size: 40px;
             display: block;
@@ -745,7 +874,6 @@
             opacity: .5;
         }
 
-        /* 分段控制器 */
         .seg {
             display: flex;
             background: var(--seg-bg);
@@ -753,6 +881,7 @@
             padding: 3px;
             gap: 3px;
         }
+
         .seg button {
             flex: 1;
             padding: 8px 0;
@@ -762,6 +891,7 @@
             transition: all .2s;
             color: var(--sub);
         }
+
         .seg button.on {
             background: var(--glass-bg);
             backdrop-filter: blur(24px);
@@ -770,6 +900,7 @@
             font-weight: 600;
             color: var(--blue);
         }
+
         .seg button:active {
             opacity: .6;
         }
@@ -781,11 +912,11 @@
             line-height: 1.6;
             word-break: break-all;
         }
+
         .hint.warn {
             color: var(--orange);
         }
 
-        /* 模态框 */
         .modal-bg {
             position: fixed;
             inset: 0;
@@ -799,6 +930,7 @@
             animation: fadeIn .15s;
             padding: 20px;
         }
+
         .modal {
             background: var(--glass-bg);
             backdrop-filter: blur(24px);
@@ -814,11 +946,13 @@
             box-shadow: var(--sh-lg);
             text-align: center;
         }
+
         .modal h3 {
             font-size: 17px;
             font-weight: 700;
             margin-bottom: 16px;
         }
+
         .modal input {
             text-align: left;
             background: var(--input-bg);
@@ -829,21 +963,23 @@
             width: 100%;
             margin-bottom: 10px;
         }
+
         .modal input:focus {
             border-color: var(--blue);
             background: var(--input-focus);
         }
+
         .modal .sg-wrap {
             text-align: left;
         }
 
-        /* 弹窗底部按钮 - 确保文字居中 */
         .modal-actions {
             display: flex;
             gap: 10px;
             margin-top: 14px;
             justify-content: center;
         }
+
         .modal-actions button {
             flex: 1;
             padding: 10px 0;
@@ -852,15 +988,15 @@
             font-weight: 600;
             transition: all .15s;
             max-width: 120px;
-            display: flex;           /* 关键：flex 使文字居中 */
+            display: flex;
             align-items: center;
             justify-content: center;
         }
+
         .modal-actions button:active {
             transform: scale(.95);
         }
 
-        /* 核心选择器 — 居中 */
         .core-chips {
             display: flex;
             gap: 6px;
@@ -868,6 +1004,7 @@
             flex-wrap: wrap;
             justify-content: center;
         }
+
         .core-chips button {
             padding: 6px 14px;
             border-radius: 999px;
@@ -878,9 +1015,11 @@
             transition: all .15s;
             border: 1.5px solid transparent;
         }
+
         .core-chips button:active {
             transform: scale(.93);
         }
+
         .core-chips button.on {
             background: var(--blue);
             color: #fff;
@@ -888,64 +1027,73 @@
             border-color: var(--blue);
             box-shadow: 0 2px 12px var(--btn-shadow);
         }
+
         .core-chips button[data-core="e-core"].on {
             background: var(--green);
             border-color: var(--green);
             box-shadow: 0 2px 12px rgba(16, 185, 129, 0.3);
         }
+
         .core-chips button[data-core="p-core"].on {
             background: var(--blue);
             border-color: var(--blue);
             box-shadow: 0 2px 12px rgba(99, 102, 241, 0.3);
         }
+
         .core-chips button[data-core="hp-core"].on {
             background: var(--purple);
             border-color: var(--purple);
             box-shadow: 0 2px 12px rgba(139, 92, 246, 0.3);
         }
+
         .core-chips button[data-core="all-core"].on {
             background: var(--gray);
             border-color: var(--gray);
             box-shadow: 0 2px 12px rgba(148, 163, 184, 0.3);
         }
 
-        /* 树形行（弹窗内） */
         .tree-row {
             margin-bottom: 12px;
             text-align: left;
         }
+
         .tree-row.branch {
             border-left: 2.5px solid rgba(99, 102, 241, 0.25);
             padding-left: 12px;
         }
+
         .tr-head {
             display: flex;
             align-items: center;
             gap: 8px;
             margin-bottom: 6px;
         }
+
         .tr-head input {
             flex: 1;
             min-width: 0;
             margin-bottom: 0;
         }
+
         .tr-tag {
             font-size: 12px;
             font-weight: 600;
         }
+
         .tr-sub {
             font-size: 11px;
             color: var(--sub);
         }
+
         .rr-custom {
             margin-top: 4px;
         }
 
-        /* 建议下拉 */
         .sg-wrap {
             position: relative;
             text-align: left;
         }
+
         .sg-box {
             position: absolute;
             left: 0;
@@ -962,6 +1110,7 @@
             z-index: 20;
             animation: fadeIn .1s;
         }
+
         .sg-item {
             padding: 10px 14px;
             font-size: 13px;
@@ -969,13 +1118,13 @@
             cursor: pointer;
             transition: background .1s;
         }
+
         .sg-item.hl,
         .sg-item:hover {
             background: var(--blue-light);
             color: var(--fg);
         }
 
-        /* 关于页 */
         .page {
             position: absolute;
             inset: 0;
@@ -989,10 +1138,12 @@
             transition: transform .22s cubic-bezier(.25, .46, .45, .94);
             pointer-events: none;
         }
+
         .page.show {
             transform: none;
             pointer-events: auto;
         }
+
         .navbar {
             display: flex;
             align-items: center;
@@ -1005,10 +1156,12 @@
             -webkit-backdrop-filter: blur(24px);
             border-bottom: 1px solid var(--glass-border);
         }
+
         .nav-title {
             font-size: 16px;
             font-weight: 600;
         }
+
         .back {
             position: absolute;
             left: 6px;
@@ -1023,9 +1176,11 @@
             font-weight: 500;
             transition: opacity .15s;
         }
+
         .back:active {
             opacity: .5;
         }
+
         .back svg {
             width: 22px;
             height: 22px;
@@ -1040,6 +1195,7 @@
             text-align: center;
             padding: 28px 16px 20px;
         }
+
         .logo {
             width: 76px;
             height: 76px;
@@ -1053,6 +1209,7 @@
             backdrop-filter: blur(8px);
             border: 1px solid var(--glass-border);
         }
+
         .logo svg {
             width: 38px;
             height: 38px;
@@ -1062,11 +1219,13 @@
             stroke-linecap: round;
             stroke-linejoin: round;
         }
+
         .hero .name {
             font-size: 22px;
             font-weight: 700;
             letter-spacing: -.3px;
         }
+
         .hero .ver {
             font-size: 13px;
             color: var(--sub);
@@ -1082,17 +1241,18 @@
             word-break: break-all;
             text-align: left;
         }
+
         .text ol {
             padding-left: 20px;
             display: grid;
             gap: 4px;
         }
+
         .text ol li::marker {
             color: var(--blue);
             font-weight: 600;
         }
 
-        /* Toast */
         #toast {
             position: fixed;
             top: 50%;
@@ -1116,6 +1276,7 @@
             text-align: center;
             box-shadow: var(--sh-lg);
         }
+
         #toast.show {
             opacity: 1;
         }
@@ -1132,9 +1293,11 @@
             border-top: 1px solid var(--border);
             text-align: left;
         }
+
         .entry:first-child {
             border-top: none;
         }
+
         .entry svg {
             margin-left: auto;
             width: 16px;
@@ -1146,16 +1309,17 @@
             stroke-linejoin: round;
             flex-shrink: 0;
         }
+
         .entry:active {
             opacity: .5;
         }
 
-        /* 主题切换按钮 (设置页) */
         .theme-selector {
             display: flex;
             gap: 8px;
             justify-content: center;
         }
+
         .theme-selector button {
             padding: 6px 16px;
             border-radius: 999px;
@@ -1166,46 +1330,107 @@
             transition: all .2s;
             color: var(--sub);
         }
+
         .theme-selector button.on {
             background: var(--blue);
             color: #fff;
             border-color: var(--blue);
             box-shadow: 0 2px 12px var(--btn-shadow);
         }
+
         .theme-selector button:active {
             transform: scale(.94);
         }
 
-        /* 动画 */
         @keyframes fadeUp {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: none; }
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        @keyframes popIn {
-            from { opacity: 0; transform: scale(.94) translateY(12px); }
-            to { opacity: 1; transform: none; }
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: none;
+            }
         }
 
-        /* 响应式 */
-        @media(max-width:480px) {
-            .grid2 { grid-template-columns: 1fr 1fr; gap: 8px; }
-            .grid3 { grid-template-columns: 1fr 1fr; }
-            .card { padding: 14px 16px; }
-            .panel { padding: 12px 12px 20px; }
-            .modal { padding: 20px 16px; max-width: 96%; }
-            .core-grid { grid-template-columns: 1fr; }
-            .field { flex-wrap: wrap; }
-            .field .btn { width: 100%; justify-content: center; }
-            .bar { flex-wrap: wrap; }
-            .bar .btn { width: 100%; justify-content: center; }
-            .sub-group { margin-left: 4px; padding-left: 8px; }
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
         }
+
+        @keyframes popIn {
+            from {
+                opacity: 0;
+                transform: scale(.94) translateY(12px);
+            }
+
+            to {
+                opacity: 1;
+                transform: none;
+            }
+        }
+
+        @media(max-width:480px) {
+            .grid2 {
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+
+            .grid3 {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .card {
+                padding: 14px 16px;
+            }
+
+            .panel {
+                padding: 12px 12px 20px;
+            }
+
+            .modal {
+                padding: 20px 16px;
+                max-width: 96%;
+            }
+
+            .core-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .field {
+                flex-wrap: wrap;
+            }
+
+            .field .btn {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .bar {
+                flex-wrap: wrap;
+            }
+
+            .bar .btn {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .sub-group {
+                margin-left: 4px;
+                padding-left: 8px;
+            }
+        }
+
         @media(min-width:600px) {
-            .core-grid { grid-template-columns: 1fr 1fr; }
+            .core-grid {
+                grid-template-columns: 1fr 1fr;
+            }
         }
     </style>
 </head>
@@ -1225,8 +1450,14 @@
                 <div class="card">
                     <div class="card-title">📋 规则</div>
                     <div class="grid2">
-                        <div class="stat"><div class="num" id="s-rules">0</div><div class="lbl">规则数量</div></div>
-                        <div class="stat"><div class="num" id="s-pkgs">0</div><div class="lbl">覆盖应用</div></div>
+                        <div class="stat">
+                            <div class="num" id="s-rules">0</div>
+                            <div class="lbl">规则数量</div>
+                        </div>
+                        <div class="stat">
+                            <div class="num" id="s-pkgs">0</div>
+                            <div class="lbl">覆盖应用</div>
+                        </div>
                     </div>
                     <div class="hint warn" id="s-pf" hidden style="color:var(--orange)"></div>
                 </div>
@@ -1234,20 +1465,40 @@
                 <div class="card">
                     <div class="card-title">📊 进程</div>
                     <div class="grid3">
-                        <div class="stat"><div class="num" id="s-hit">0</div><div class="lbl">命中应用</div></div>
-                        <div class="stat"><div class="num" id="s-threads">0</div><div class="lbl">绑定线程</div></div>
-                        <div class="stat"><div class="num" id="s-procs">0</div><div class="lbl">系统进程</div></div>
-                        <div class="stat"><div class="num" id="s-cores">0</div><div class="lbl">CPU 核心</div></div>
+                        <div class="stat">
+                            <div class="num" id="s-hit">0</div>
+                            <div class="lbl">命中应用</div>
+                        </div>
+                        <div class="stat">
+                            <div class="num" id="s-threads">0</div>
+                            <div class="lbl">绑定线程</div>
+                        </div>
+                        <div class="stat">
+                            <div class="num" id="s-procs">0</div>
+                            <div class="lbl">系统进程</div>
+                        </div>
+                        <div class="stat">
+                            <div class="num" id="s-cores">0</div>
+                            <div class="lbl">CPU 核心</div>
+                        </div>
                     </div>
                 </div>
 
                 <div class="card" id="s-card-cores">
                     <div class="card-title">🧠 核心分层</div>
                     <div class="core-grid">
-                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--green)"></span>小核</span><span class="core-val chip e sm" id="s-ecore">-</span></div>
-                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--blue)"></span>中核</span><span class="core-val chip p sm" id="s-pcore">-</span></div>
-                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--purple)"></span>大核</span><span class="core-val chip h sm" id="s-hcore">-</span></div>
-                        <div class="core-item"><span class="core-label"><span class="core-dot" style="background:var(--gray)"></span>全部</span><span class="core-val chip c sm" id="s-all">-</span></div>
+                        <div class="core-item"><span class="core-label"><span class="core-dot"
+                                    style="background:var(--green)"></span>小核</span><span class="core-val chip e sm"
+                                id="s-ecore">-</span></div>
+                        <div class="core-item"><span class="core-label"><span class="core-dot"
+                                    style="background:var(--blue)"></span>中核</span><span class="core-val chip p sm"
+                                id="s-pcore">-</span></div>
+                        <div class="core-item"><span class="core-label"><span class="core-dot"
+                                    style="background:var(--purple)"></span>大核</span><span class="core-val chip h sm"
+                                id="s-hcore">-</span></div>
+                        <div class="core-item"><span class="core-label"><span class="core-dot"
+                                    style="background:var(--gray)"></span>全部</span><span class="core-val chip c sm"
+                                id="s-all">-</span></div>
                     </div>
                 </div>
             </section>
@@ -1255,7 +1506,8 @@
             <!-- 规则面板 -->
             <section id="tab-rules" class="panel" hidden>
                 <div class="bar">
-                    <input id="r-filter" placeholder="🔍 搜索应用包名…">
+                    <!-- 搜索框同时支持搜索包名和注释（应用名） -->
+                    <input id="r-filter" placeholder="🔍 搜索应用或注释…">
                     <button class="btn" id="r-add">＋ 添加</button>
                 </div>
                 <div id="r-list"></div>
@@ -1285,7 +1537,8 @@
 
                 <div class="card">
                     <div class="card-title">⏱️ 扫描参数</div>
-                    <div class="field"><input id="c-interval" type="number" min="1" max="3600"><button class="btn" id="c-interval-save">保存</button></div>
+                    <div class="field"><input id="c-interval" type="number" min="1" max="3600"><button class="btn"
+                            id="c-interval-save">保存</button></div>
                     <div class="hint">检查间隔（秒），影响 /proc 扫描与配置轮询频率</div>
                 </div>
 
@@ -1303,7 +1556,9 @@
 
                 <div class="card">
                     <div class="card-title">ℹ️ 关于</div>
-                    <button class="entry" id="c-about">关于 AppOpt <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+                    <button class="entry" id="c-about">关于 AppOpt <svg viewBox="0 0 24 24">
+                            <path d="M9 6l6 6-6 6" />
+                        </svg></button>
                 </div>
             </section>
         </main>
@@ -1311,15 +1566,30 @@
         <!-- 标签栏 -->
         <nav class="tabbar">
             <button class="tab active" data-tab="status">
-                <svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 0 1 16 0"/><path d="M12 16L16 12"/><circle cx="12" cy="16" r="1.2" fill="currentColor" stroke="none"/><path d="M6 20h12"/></svg>
+                <svg viewBox="0 0 24 24">
+                    <path d="M4 16a8 8 0 0 1 16 0" />
+                    <path d="M12 16L16 12" />
+                    <circle cx="12" cy="16" r="1.2" fill="currentColor" stroke="none" />
+                    <path d="M6 20h12" />
+                </svg>
                 状态
             </button>
             <button class="tab" data-tab="rules">
-                <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+                <svg viewBox="0 0 24 24">
+                    <path d="M8 6h13M8 12h13M8 18h13" />
+                    <circle cx="4" cy="6" r="1" fill="currentColor" stroke="none" />
+                    <circle cx="4" cy="12" r="1" fill="currentColor" stroke="none" />
+                    <circle cx="4" cy="18" r="1" fill="currentColor" stroke="none" />
+                </svg>
                 规则
             </button>
             <button class="tab" data-tab="settings">
-                <svg viewBox="0 0 24 24"><path d="M5 21V9M12 21V3M19 21v-8"/><circle cx="5" cy="6" r="2"/><circle cx="12" cy="9" r="2"/><circle cx="19" cy="10" r="2"/></svg>
+                <svg viewBox="0 0 24 24">
+                    <path d="M5 21V9M12 21V3M19 21v-8" />
+                    <circle cx="5" cy="6" r="2" />
+                    <circle cx="12" cy="9" r="2" />
+                    <circle cx="19" cy="10" r="2" />
+                </svg>
                 设置
             </button>
         </nav>
@@ -1327,18 +1597,24 @@
         <!-- 关于页 -->
         <section id="page-about" class="page">
             <div class="navbar">
-                <button class="back" id="about-back"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>设置</button>
+                <button class="back" id="about-back"><svg viewBox="0 0 24 24">
+                        <path d="M15 6l-6 6 6 6" />
+                    </svg>设置</button>
                 <span class="nav-title">关于</span>
             </div>
             <div class="panel">
                 <div class="card hero" style="animation-delay:.05s">
-                    <div class="logo"><svg viewBox="0 0 24 24"><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2"/><rect x="7" y="7" width="10" height="10" rx="2"/></svg></div>
+                    <div class="logo"><svg viewBox="0 0 24 24">
+                            <path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" />
+                            <rect x="7" y="7" width="10" height="10" rx="2" />
+                        </svg></div>
                     <div class="name">AppOpt</div>
                     <div class="ver" id="a-ver">v?</div>
                 </div>
                 <div class="card" style="animation-delay:.08s">
                     <div class="card-title">📖 简介</div>
-                    <p class="text">AppOpt 是一款 Android 应用 CPU 亲和性管理工具。基于规则配置文件，将指定应用的进程与线程绑定到合适的 CPU 核心（小核省电、大核高性能），配置保存后即时热加载，无需重启应用。</p>
+                    <p class="text">AppOpt 是一款 Android 应用 CPU 亲和性管理工具。基于规则配置文件，将指定应用的进程与线程绑定到合适的 CPU
+                        核心（小核省电、大核高性能），配置保存后即时热加载，无需重启应用。</p>
                 </div>
                 <div class="card" style="animation-delay:.11s">
                     <div class="card-title">📌 使用说明</div>
@@ -1354,7 +1630,8 @@
                 <div class="card" style="animation-delay:.14s">
                     <div class="card-title">👤 作者</div>
                     <div class="row"><span class="label">作者</span><span class="value">Suto</span></div>
-                    <div class="row"><span class="label">主页</span><span class="value mono">http://appopt.suto.top</span></div>
+                    <div class="row"><span class="label">主页</span><span class="value mono">http://appopt.suto.top</span>
+                    </div>
                 </div>
             </div>
         </section>
@@ -1364,7 +1641,9 @@
     <div id="modal-rule" class="modal-bg" hidden>
         <div class="modal">
             <h3 id="mr-title">添加应用</h3>
-            <div class="sg-wrap"><input id="mr-pkg" placeholder="输入应用包名"><div class="sg-box" id="sg-pkg" hidden></div></div>
+            <div class="sg-wrap"><input id="mr-pkg" placeholder="输入应用包名">
+                <div class="sg-box" id="sg-pkg" hidden></div>
+            </div>
             <div id="mr-rows"></div>
             <button class="rule-add" id="mr-addrow" hidden>＋ 线程规则</button>
             <div class="modal-actions">
@@ -1464,12 +1743,18 @@
             };
         });
 
-        function startStat() { stopStat();
+        function startStat() {
+            stopStat();
             refreshStat();
-            statTimer = setInterval(refreshStat, 3000); }
+            statTimer = setInterval(refreshStat, 3000);
+        }
 
-        function stopStat() { if (statTimer) { clearInterval(statTimer);
-                statTimer = null } }
+        function stopStat() {
+            if (statTimer) {
+                clearInterval(statTimer);
+                statTimer = null
+            }
+        }
 
         let topoCores = null;
 
@@ -1504,7 +1789,7 @@
                 topoCores = topoOf(d);
                 const vis = semanticVisible();
                 $('s-card-cores').hidden = !vis.length;
-            } catch (e) {}
+            } catch (e) { }
         }
 
         function semanticVisible() {
@@ -1544,6 +1829,7 @@
         const ICO_TRASH =
             '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg>';
 
+        // 注释直接从后端获取
         async function loadRules() {
             fetchTopo();
             try {
@@ -1554,10 +1840,18 @@
         }
 
         function grpInner(g, gi) {
+            const commentHtml = g.comment ? `<span class="grp-comment">${esc(g.comment)}</span>` : '';
+            const pkgText = esc(g.pkg);
+            const isLong = g.pkg.length > 12;
+            const pkgHtml = isLong
+                ? `<marquee behavior="scroll" direction="left" scrollamount="3">${pkgText}</marquee>`
+                : `<span class="static">${pkgText}</span>`;
+
             let html = `
         <div class="grp-head">
           <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-          <span class="grp-name">${esc(g.pkg)}</span>
+          ${commentHtml}
+          <span class="grp-name">${pkgHtml}</span>
           <span class="grp-count">${(g.items ? g.items.length : 0) + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
           <button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
           <button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
@@ -1632,7 +1926,12 @@
 
         function renderRules() {
             const f = $('r-filter').value.trim().toLowerCase();
-            const idx = rulesData.map((g, gi) => gi).filter(gi => !f || rulesData[gi].pkg.toLowerCase().includes(f));
+            // 同时匹配包名和注释
+            const idx = rulesData.map((g, gi) => gi).filter(gi => {
+                const pkg = rulesData[gi].pkg.toLowerCase();
+                const comment = (rulesData[gi].comment || '').toLowerCase();
+                return !f || pkg.includes(f) || comment.includes(f);
+            });
             $('r-filter').placeholder = f ? `匹配 ${idx.length}/${rulesData.length} 个应用` : `共 ${rulesData.length} 个应用`;
             const box = $('r-list');
             const shown = new Set(idx);
@@ -1641,9 +1940,11 @@
             let ref = box.firstChild;
             rulesData.forEach((g, gi) => {
                 let el = live.get(g.pkg);
-                if (!el) { el = document.createElement('div');
+                if (!el) {
+                    el = document.createElement('div');
                     el.className = 'grp';
-                    el.dataset.pkg = g.pkg; }
+                    el.dataset.pkg = g.pkg;
+                }
                 el.innerHTML = grpInner(g, gi);
                 el.hidden = !shown.has(gi);
                 if (el !== ref) box.insertBefore(el, ref);
@@ -1652,9 +1953,11 @@
             live.forEach((el, p) => { if (!pkgs.has(p)) el.remove(); });
             let tip = box.querySelector('.empty');
             if (!idx.length) {
-                if (!tip) { tip = document.createElement('div');
+                if (!tip) {
+                    tip = document.createElement('div');
                     tip.className = 'empty';
-                    box.appendChild(tip); }
+                    box.appendChild(tip);
+                }
                 tip.innerHTML = f ? '无匹配应用' : '<span class="empty-icon">📭</span>暂无规则<br>点击右上角「添加」创建第一条规则';
             } else tip?.remove();
         }
@@ -1662,7 +1965,7 @@
         $('r-filter').addEventListener('input', renderRules);
 
         // ============================================================
-        //  规则列表事件
+        //  规则列表事件（保持不变）
         // ============================================================
         $('r-list').addEventListener('click', e => {
             const ea = e.target.closest('[data-editapp]');
@@ -1710,8 +2013,10 @@
                         thread = parts[2] || '';
                     const g = rulesData[gi];
                     const item = g.items.find(it => it.thread === thread);
-                    if (item) confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: thread ||
-                            '' });
+                    if (item) confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, {
+                        pkg: g.pkg, thread: thread ||
+                            ''
+                    });
                 } else if (type === 'sub') {
                     const gi = +parts[1],
                         sub = parts[2],
@@ -1741,11 +2046,13 @@
         });
 
         // ============================================================
-        //  规则编辑弹窗
+        //  规则编辑弹窗（保持不变）
         // ============================================================
         async function fetchTopo() {
-            if (!topoCores) try { const d = await api('/api/status');
-                topoCores = topoOf(d); } catch (e) {}
+            if (!topoCores) try {
+                const d = await api('/api/status');
+                topoCores = topoOf(d);
+            } catch (e) { }
         }
 
         function parseSpec(spec) {
@@ -1787,7 +2094,7 @@
                 const c = b.dataset.core;
                 const on = c === '自定义' ? r.custom :
                     c === 'all-core' ? r.all :
-                    (!r.custom && !r.all && r.sem.includes(c));
+                        (!r.custom && !r.all && r.sem.includes(c));
                 b.classList.toggle('on', on);
             });
             el.querySelector('.rr-custom').hidden = !r.custom;
@@ -1835,16 +2142,22 @@
 
         $('mr-rows').addEventListener('click', e => {
             const del = e.target.closest('.rr-del');
-            if (del) { mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1);
-                renderRows(); return; }
+            if (del) {
+                mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1);
+                renderRows(); return;
+            }
             const b = e.target.closest('.core-chips button');
             if (!b) return;
             const el = b.closest('[data-ri]'),
                 r = mrRows[+el.dataset.ri],
                 c = b.dataset.core;
-            if (c === '自定义') { r.custom = !r.custom;
-                r.all = false; } else if (c === 'all-core') { r.all = !r.all;
-                r.custom = false; if (!r.all) r.sem = []; } else {
+            if (c === '自定义') {
+                r.custom = !r.custom;
+                r.all = false;
+            } else if (c === 'all-core') {
+                r.all = !r.all;
+                r.custom = false; if (!r.all) r.sem = [];
+            } else {
                 const base = r.custom || r.all ? [] : r.sem;
                 r.sem = base.includes(c) ? base.filter(x => x !== c) : [...base, c];
                 r.custom = false;
@@ -1860,9 +2173,11 @@
             if (e.target.classList.contains('rr-custom')) r.customVal = e.target.value;
         });
 
-        $('mr-addrow').onclick = () => { mrRows.push(mkRow({}));
+        $('mr-addrow').onclick = () => {
+            mrRows.push(mkRow({}));
             renderRows(); const m = $('mr-addrow').closest('.modal');
-            m.scrollTop = m.scrollHeight; };
+            m.scrollTop = m.scrollHeight;
+        };
 
         let mrMode = 'add-pkg',
             mrOldThread = '',
@@ -2061,17 +2376,19 @@
         };
 
         // ============================================================
-        //  建议下拉
+        //  建议下拉（保持不变）
         // ============================================================
         function suggest_bind(input, box, opts = {}) {
             let seq = 0,
                 hl = -1,
                 items = [],
                 tm = null;
-            const hide = () => { seq++;
+            const hide = () => {
+                seq++;
                 box.dataset.closed = '1';
                 box.hidden = true;
-                hl = -1; };
+                hl = -1;
+            };
             const render = () => {
                 if (!items.length) { hide(); return; }
                 box.innerHTML = items.map((it, i) =>
@@ -2092,21 +2409,27 @@
                     items = d.list;
                     hl = -1;
                     render();
-                } catch (e) {}
+                } catch (e) { }
             };
-            input.addEventListener('input', () => { clearTimeout(tm);
-                tm = setTimeout(fetch_list, 250); });
-            const pick = v => { input.value = v;
+            input.addEventListener('input', () => {
+                clearTimeout(tm);
+                tm = setTimeout(fetch_list, 250);
+            });
+            const pick = v => {
+                input.value = v;
                 opts.onpick?.(v);
-                hide(); };
+                hide();
+            };
             input.addEventListener('keydown', e => {
                 if (box.hidden || !items.length) return;
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     e.preventDefault();
                     hl = (hl + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
                     render();
-                } else if (e.key === 'Enter' && hl >= 0) { e.preventDefault();
-                    pick(items[hl]); } else if (e.key === 'Escape') hide();
+                } else if (e.key === 'Enter' && hl >= 0) {
+                    e.preventDefault();
+                    pick(items[hl]);
+                } else if (e.key === 'Escape') hide();
             });
             box.addEventListener('click', e => {
                 const it = e.target.closest('.sg-item');
@@ -2116,8 +2439,10 @@
                 if (document.activeElement !== input && !box.hidden) hide();
             }, 150));
         }
-        const sgClose = b => { b.hidden = true;
-            b.dataset.closed = '1'; };
+        const sgClose = b => {
+            b.hidden = true;
+            b.dataset.closed = '1';
+        };
         const closeThreadSuggest = () => document.querySelectorAll('#mr-rows .sg-box:not([hidden])').forEach(sgClose);
         suggest_bind($('mr-pkg'), $('sg-pkg'), { onpick: closeThreadSuggest });
         $('mr-pkg').addEventListener('input', closeThreadSuggest);
@@ -2127,16 +2452,18 @@
         });
 
         // ============================================================
-        //  确认删除
+        //  确认删除（保持不变）
         // ============================================================
         let confirmCb = null;
 
         function confirmDel(msg, body) {
             $('mc-msg').textContent = msg;
             confirmCb = async () => {
-                try { await api('/api/rule/del', body);
+                try {
+                    await api('/api/rule/del', body);
                     toast('已删除');
-                    loadRules(); } catch (e) { toast(e.message); }
+                    loadRules();
+                } catch (e) { toast(e.message); }
             };
             $('modal-confirm').hidden = false;
         }
@@ -2147,17 +2474,19 @@
         }
 
         $('mc-cancel').onclick = () => $('modal-confirm').hidden = true;
-        $('mc-ok').onclick = () => { $('modal-confirm').hidden = true;
-            confirmCb && confirmCb(); };
+        $('mc-ok').onclick = () => {
+            $('modal-confirm').hidden = true;
+            confirmCb && confirmCb();
+        };
 
         // ============================================================
-        //  设置页
+        //  设置页（保持不变）
         // ============================================================
         async function loadCfg() {
             try {
                 const d = await api('/api/config');
                 document.querySelectorAll('#seg-mode button').forEach(b => b.classList.toggle('on', +b.dataset.mode === d
-                .mode));
+                    .mode));
                 $('c-mode-active').textContent = '当前生效: ' + modeLabel(d.mode_active);
                 $('c-ebpf-hint').hidden = d.ebpf_available;
                 $('c-interval').value = d.interval;
@@ -2169,16 +2498,20 @@
 
         document.querySelectorAll('#seg-mode button').forEach(b => {
             b.onclick = async () => {
-                try { await api('/api/config', { mode: +b.dataset.mode });
+                try {
+                    await api('/api/config', { mode: +b.dataset.mode });
                     toast('已切换');
-                    loadCfg(); } catch (e) { toast(e.message); }
+                    loadCfg();
+                } catch (e) { toast(e.message); }
             };
         });
 
         async function saveField(body) {
-            try { await api('/api/config', body);
+            try {
+                await api('/api/config', body);
                 toast('已保存');
-                loadCfg(); } catch (e) { toast(e.message); }
+                loadCfg();
+            } catch (e) { toast(e.message); }
         }
 
         $('c-interval-save').onclick = () => saveField({ interval: Math.max(1, +$('c-interval').value || 0) });
@@ -2243,12 +2576,14 @@
         initTheme();
 
         // ============================================================
-        //  关于页
+        //  关于页（保持不变）
         // ============================================================
         $('c-about').onclick = async () => {
             $('page-about').classList.add('show');
-            try { const d = await api('/api/status');
-                $('a-ver').textContent = 'v' + d.version; } catch (e) {}
+            try {
+                const d = await api('/api/status');
+                $('a-ver').textContent = 'v' + d.version;
+            } catch (e) { }
         };
         $('about-back').onclick = () => $('page-about').classList.remove('show');
 
