@@ -1754,10 +1754,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     for rule in &cfg.rules {
         if let Some(stripped) = rule.pkg.strip_prefix(&format!("{}:", pkg)) {
             let sub_name = stripped.split(':').next().unwrap_or(stripped);
-            sub_rules
-                .entry(sub_name.to_string())
-                .or_default()
-                .push(rule);
+            sub_rules.entry(sub_name.to_string()).or_default().push(rule);
         } else if rule.pkg == pkg {
             main_rules.push(rule);
         }
@@ -1772,8 +1769,12 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         .filter(|r| r.thread.is_empty())
         .map(|r| r.spec.as_str())
         .collect();
-    let thread_rules: Vec<&crate::config::AffinityRule> =
-        main_rules.iter().filter(|r| !r.thread.is_empty()).collect();
+
+    let thread_rules: Vec<&crate::config::AffinityRule> = main_rules
+        .iter()
+        .filter(|r| !r.thread.is_empty())
+        .map(|&r| r)   // 关键修复：解引用 &&AffinityRule → &AffinityRule
+        .collect();
 
     let first_line = if pkg_cpus.is_empty() {
         format!("{} {{", pkg)
@@ -1793,9 +1794,11 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
             .filter(|r| r.thread.is_empty())
             .map(|r| r.spec.as_str())
             .collect();
+
         let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec
             .iter()
             .filter(|r| !r.thread.is_empty())
+            .map(|&r| r)   // 关键修复
             .collect();
 
         let sub_first = if sub_cpus.is_empty() {
