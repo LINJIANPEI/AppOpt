@@ -1818,12 +1818,26 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     block
 }
 
-/// 重新规范化指定主包的整个块，替换文件中的旧块，保留文件其他部分
-pub fn normalize_package_block(
-    lines: &mut Vec<String>,
-    pkg: &str,
-    cfg: &crate::config::AppConfig,
-) -> bool {
+/// 重新规范化指定主包的整个块，替换文件中的旧块，并删除所有顶格的独立子包块（旧格式）
+/// 保留文件其他部分（包括块外的注释和空行）。
+pub fn normalize_package_block(lines: &mut Vec<String>, pkg: &str, cfg: &crate::config::AppConfig) -> bool {
+    // 第一步：删除所有顶格的、以 "pkg:" 开头的独立子包块
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
+            // 提取包名（可能带有 =CPU 或 {）
+            let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
+            if let Some((start, end)) = find_package_range(lines, pkg_name) {
+                lines.drain(start..=end);
+                continue; // 删除后继续从当前 i 检查
+            }
+        }
+        i += 1;
+    }
+
+    // 第二步：查找主包范围并替换
     let (start, end) = match find_package_range(lines, pkg) {
         Some(range) => range,
         None => {
