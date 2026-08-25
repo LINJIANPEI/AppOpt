@@ -1119,7 +1119,13 @@ fn build_block(pkg: &str, data: &PackageData) -> Vec<String> {
     block
 }
 
-pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str, cfg: &crate::config::AppConfig) -> RuleEdit {
+pub fn rule_upsert(
+    config_path: &str,
+    pkg: &str,
+    thread: &str,
+    cpus: &str,
+    cfg: &crate::config::AppConfig,
+) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
@@ -1153,7 +1159,10 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str, cfg: 
     if thread.is_empty() {
         new_rules.retain(|r| !(r.pkg == pkg && r.thread.is_empty()));
         if !cpus.is_empty() {
-            let cpuset_dir = crate::cpuset::ensure_cpuset_dir(&crate::cpuset::parse_cpu_spec(cpus, &cfg.topo), &cfg.topo);
+            let cpuset_dir = crate::cpuset::ensure_cpuset_dir(
+                &crate::cpuset::parse_cpu_spec(cpus, &cfg.topo),
+                &cfg.topo,
+            );
             let new_rule = crate::config::AffinityRule {
                 pkg: pkg.to_string(),
                 thread: String::new(),
@@ -1181,7 +1190,8 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str, cfg: 
 
     use std::collections::HashSet;
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
-    let has_thread_rules: HashSet<String> = new_rules.iter()
+    let has_thread_rules: HashSet<String> = new_rules
+        .iter()
         .filter(|r| !r.thread.is_empty())
         .map(|r| r.pkg.clone())
         .collect();
@@ -1200,11 +1210,13 @@ pub fn rule_upsert(config_path: &str, pkg: &str, thread: &str, cpus: &str, cfg: 
         while i < lines.len() {
             let trimmed = lines[i].trim();
             let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-            let is_pkg_line = is_top_level && (trimmed.starts_with(pkg) && (trimmed.len() == pkg.len()
-                || trimmed[pkg.len()..].starts_with('=')
-                || trimmed[pkg.len()..].starts_with('{')
-                || trimmed[pkg.len()..].starts_with(' '))
-                || trimmed.starts_with(&format!("{}:", pkg)));
+            let is_pkg_line = is_top_level
+                && (trimmed.starts_with(pkg)
+                    && (trimmed.len() == pkg.len()
+                        || trimmed[pkg.len()..].starts_with('=')
+                        || trimmed[pkg.len()..].starts_with('{')
+                        || trimmed[pkg.len()..].starts_with(' '))
+                    || trimmed.starts_with(&format!("{}:", pkg)));
             if is_pkg_line {
                 let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
                 if let Some((start, end)) = find_package_range(&lines, pkg_name) {
@@ -1527,11 +1539,13 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
     while i < lines.len() {
         let line = &lines[i];
         let trimmed = line.trim();
-        let is_pkg_line = !line.starts_with(' ') && !line.starts_with('\t')
-            && (trimmed.starts_with(pkg) && (trimmed.len() == pkg.len()
-                || trimmed[pkg.len()..].starts_with('=')
-                || trimmed[pkg.len()..].starts_with('{')
-                || trimmed[pkg.len()..].starts_with(' '))
+        let is_pkg_line = !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && (trimmed.starts_with(pkg)
+                && (trimmed.len() == pkg.len()
+                    || trimmed[pkg.len()..].starts_with('=')
+                    || trimmed[pkg.len()..].starts_with('{')
+                    || trimmed[pkg.len()..].starts_with(' '))
                 || trimmed.starts_with(&format!("{}:", pkg)));
         if is_pkg_line {
             let mut depth = 0;
@@ -1566,7 +1580,10 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     for rule in &cfg.rules {
         if let Some(stripped) = rule.pkg.strip_prefix(&format!("{}:", pkg)) {
             let sub_name = stripped.split(':').next().unwrap_or(stripped);
-            sub_rules.entry(sub_name.to_string()).or_default().push(rule);
+            sub_rules
+                .entry(sub_name.to_string())
+                .or_default()
+                .push(rule);
         } else if rule.pkg == pkg {
             main_rules.push(rule);
         }
@@ -1576,11 +1593,13 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         return block;
     }
 
-    let pkg_cpus: Vec<&str> = main_rules.iter()
+    let pkg_cpus: Vec<&str> = main_rules
+        .iter()
         .filter(|r| r.thread.is_empty())
         .map(|r| r.spec.as_str())
         .collect();
-    let thread_rules: Vec<&crate::config::AffinityRule> = main_rules.iter()
+    let thread_rules: Vec<&crate::config::AffinityRule> = main_rules
+        .iter()
         .filter(|r| !r.thread.is_empty())
         .map(|&r| r)
         .collect();
@@ -1597,11 +1616,13 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     }
 
     for (sub_name, sub_rules_vec) in sub_rules {
-        let sub_cpus: Vec<&str> = sub_rules_vec.iter()
+        let sub_cpus: Vec<&str> = sub_rules_vec
+            .iter()
             .filter(|r| r.thread.is_empty())
             .map(|r| r.spec.as_str())
             .collect();
-        let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec.iter()
+        let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec
+            .iter()
             .filter(|r| !r.thread.is_empty())
             .map(|&r| r)
             .collect();

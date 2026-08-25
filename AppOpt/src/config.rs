@@ -19,13 +19,14 @@ pub static CHECK_INTERVAL: AtomicU64 = AtomicU64::new(2);
 pub static FORCE_RELOAD: AtomicBool = AtomicBool::new(false);
 pub static CONFIG_FILE: Mutex<String> = Mutex::new(String::new());
 
+#[derive(Clone, Debug)]
 pub struct AffinityRule {
     pub pkg: String,
     pub thread: String,
     pub thread_pattern: CString,
     pub cpuset_dir: String,
     pub cpus: CpuSet,
-    pub spec: String, // 新增：保存原始 CPU 规格字符串
+    pub spec: String,
 }
 
 pub struct AppConfig {
