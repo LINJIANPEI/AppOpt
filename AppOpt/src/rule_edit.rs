@@ -1754,7 +1754,10 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     for rule in &cfg.rules {
         if let Some(stripped) = rule.pkg.strip_prefix(&format!("{}:", pkg)) {
             let sub_name = stripped.split(':').next().unwrap_or(stripped);
-            sub_rules.entry(sub_name.to_string()).or_default().push(rule);
+            sub_rules
+                .entry(sub_name.to_string())
+                .or_default()
+                .push(rule);
         } else if rule.pkg == pkg {
             main_rules.push(rule);
         }
@@ -1773,7 +1776,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     let thread_rules: Vec<&crate::config::AffinityRule> = main_rules
         .iter()
         .filter(|r| !r.thread.is_empty())
-        .map(|&r| r)   // 关键修复：解引用 &&AffinityRule → &AffinityRule
+        .map(|&r| r) // 关键修复：解引用 &&AffinityRule → &AffinityRule
         .collect();
 
     let first_line = if pkg_cpus.is_empty() {
@@ -1798,7 +1801,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         let sub_threads: Vec<&crate::config::AffinityRule> = sub_rules_vec
             .iter()
             .filter(|r| !r.thread.is_empty())
-            .map(|&r| r)   // 关键修复
+            .map(|&r| r) // 关键修复
             .collect();
 
         let sub_first = if sub_cpus.is_empty() {
@@ -1823,50 +1826,63 @@ pub fn normalize_package_block(
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 第一步：找到所有属于该主包的块（包括主包和所有独立子包块）
-    let blocks = find_all_package_blocks(lines, pkg);
-
-    // 收集所有需要删除的行索引
-    let mut indices: Vec<usize> = blocks
-        .iter()
-        .flat_map(|(start, end)| *start..=*end)
-        .collect();
-
-    // 确定插入位置：如果有块，取第一个块的起始位置；否则在文件末尾
-    let insert_pos = if blocks.is_empty() {
-        lines.len()
-    } else {
-        blocks.iter().map(|(s, _)| *s).min().unwrap()
-    };
-
-    // 第二步：删除所有旧块（从后往前删除）
-    indices.sort_unstable();
-    indices.dedup();
-    for idx in indices.into_iter().rev() {
-        lines.remove(idx);
+    // 第一步：删除所有顶格的、以 "pkg:" 开头的独立子包块
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
+            let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
+            if let Some((start, end)) = find_package_range(lines, pkg_name) {
+                lines.drain(start..=end);
+                continue;
+            }
+        }
+        i += 1;
     }
 
-    // 第三步：生成新的规范化块
+    // 第二步：收集主包的所有行索引（包括嵌套子包）
+    let mut indices = collect_all_lines(lines, pkg);
+    let insert_pos = if indices.is_empty() {
+        lines.len()
+    } else {
+        *indices.iter().min().unwrap()
+    };
+
+    // 第三步：删除旧的主包行（包括其嵌套子包）
+    if !indices.is_empty() {
+        indices.sort_unstable();
+        indices.dedup();
+        for idx in indices.into_iter().rev() {
+            lines.remove(idx);
+        }
+    }
+
+    // 第四步：生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
-        // 如果没有规则，只删除不插入
         return true;
     }
 
-    // 第四步：在插入位置插入新块
-    let mut pos = insert_pos;
-    if pos > lines.len() {
-        pos = lines.len();
-    }
-    // 确保插入位置前有空行（除非是文件开头）
+    // 第五步：在合适位置插入新块
+    let mut pos = if insert_pos == lines.len() {
+        lines.len()
+    } else {
+        insert_pos
+    };
+
+    // 插入前确保有空行分隔
     if pos > 0 && !lines[pos - 1].trim().is_empty() {
         lines.insert(pos, String::new());
         pos += 1;
     }
+
+    // 保存新块长度，以便后续插入空行
+    let block_len = new_block.len();
     lines.splice(pos..pos, new_block);
 
     // 确保块后有空行
-    let block_end = pos + new_block.len();
+    let block_end = pos + block_len;
     if block_end < lines.len() && !lines[block_end].trim().is_empty() {
         lines.insert(block_end, String::new());
     } else if block_end == lines.len() {
@@ -1875,6 +1891,7 @@ pub fn normalize_package_block(
 
     true
 }
+
 /// 查找属于主包 pkg 的所有顶格块（包括主包本身和所有 `pkg:sub` 独立块）
 /// 返回 Vec<(start_index, end_index)>，每个块的范围（起始行到结束行）
 pub fn find_all_package_blocks(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
