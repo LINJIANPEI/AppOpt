@@ -1142,10 +1142,9 @@ pub fn rule_upsert(
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
-                // 子包操作后，可能还有独立的子包块，用 normalize_package_block 合并
-                // 但我们这里调用一个专门的合并函数（如果存在）
-                // 如果不需要合并，可以注释掉下一行
-                // normalize_package_block(&mut lines, main_pkg, cfg);
+                // 子包操作后，使用 normalize_package_block 合并所有独立子包块
+                // 但 normalize_package_block 需要 cfg，我们传入 cfg
+                normalize_package_block(&mut lines, main_pkg, cfg);
                 return file_write(config_path, &lines);
             }
             return result;
@@ -1153,10 +1152,13 @@ pub fn rule_upsert(
         return RuleEdit::Ok;
     }
 
-    // ---- 主包处理：删除所有旧块，插入新块 ----
-    // 1. 构建新规则列表
+    // ---- 主包处理 ----
+    // 1. 构建新规则列表（基于当前 cfg 并应用本次修改）
     let mut new_rules = cfg.rules.clone();
+
+    // 1.1 应用本次修改
     if thread.is_empty() {
+        // 包级规则
         new_rules.retain(|r| !(r.pkg == pkg && r.thread.is_empty()));
         if !cpus.is_empty() {
             let cpuset_dir = crate::cpuset::ensure_cpuset_dir(
@@ -1174,6 +1176,7 @@ pub fn rule_upsert(
             new_rules.push(new_rule);
         }
     } else {
+        // 线程规则
         new_rules.retain(|r| !(r.pkg == pkg && r.thread == thread));
         if !cpus.is_empty() {
             let new_rule = crate::config::AffinityRule {
@@ -1188,6 +1191,34 @@ pub fn rule_upsert(
         }
     }
 
+    // 1.2 对该包的所有规则去重（按 (thread, spec) 去重，保留最后一个）
+    // 先收集该包的所有规则（包括主包和子包）
+    let pkg_prefix = format!("{}:", pkg);
+    let mut rules_to_dedup = Vec::new();
+    let mut other_rules = Vec::new();
+    for rule in new_rules {
+        if rule.pkg == pkg || rule.pkg.starts_with(&pkg_prefix) {
+            rules_to_dedup.push(rule);
+        } else {
+            other_rules.push(rule);
+        }
+    }
+    // 按 (thread, spec) 去重（保留最后一个）
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for rule in rules_to_dedup.into_iter().rev() {
+        let key = (rule.thread.clone(), rule.spec.clone());
+        if !seen.contains(&key) {
+            seen.insert(key);
+            deduped.push(rule);
+        }
+    }
+    deduped.reverse();
+    // 合并回 new_rules
+    new_rules = other_rules;
+    new_rules.extend(deduped);
+
+    // 重建 HashSet
     use std::collections::HashSet;
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
@@ -1202,7 +1233,7 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // 2. 删除所有顶格的、以 pkg 开头（或 pkg:）的独立块（包括重复块）
+    // 2. 删除所有顶格的、以 pkg 开头（或 pkg:）的独立块（包括重复块和子包独立块）
     let mut changed = true;
     while changed {
         changed = false;
@@ -1232,12 +1263,11 @@ pub fn rule_upsert(
     // 3. 生成新块
     let new_block = build_package_block(pkg, &new_cfg);
     if new_block.is_empty() {
-        // 如果没有规则，删除所有旧块后返回
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
 
-    // 4. 在文件末尾插入新块（因为没有旧块了）
+    // 4. 在文件末尾插入新块（因为已经删除了所有旧块）
     if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
         lines.push(String::new());
     }
@@ -1572,9 +1602,10 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
 
 /// 根据 AppConfig 中的规则生成规范化的主包块（包含子包嵌套）
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
     let mut block = Vec::new();
 
+    // ---- 1. 收集主包和子包规则 ----
     let mut main_rules = Vec::new();
     let mut sub_rules: BTreeMap<String, Vec<&crate::config::AffinityRule>> = BTreeMap::new();
     for rule in &cfg.rules {
@@ -1589,10 +1620,44 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         }
     }
 
+    // ---- 2. 去重主包规则（包级规则和线程规则分别去重） ----
+    // 2.1 包级规则：只保留最后一个（取 thread 为空且 spec 相同去重，但通常只有一个，这里不额外处理）
+    // 2.2 线程规则：按 (thread, spec) 去重，保留最新（后面的覆盖前面的）
+    let mut seen = HashSet::new();
+    let mut main_dedup = Vec::new();
+    for rule in main_rules.into_iter().rev() {
+        let key = (rule.thread.clone(), rule.spec.clone());
+        if !seen.contains(&key) {
+            seen.insert(key);
+            main_dedup.push(rule);
+        }
+    }
+    main_dedup.reverse();
+    let main_rules = main_dedup;
+
+    // ---- 3. 去重子包规则（每个子包单独去重） ----
+    let mut sub_rules_dedup = BTreeMap::new();
+    for (sub, rules) in sub_rules {
+        let mut seen = HashSet::new();
+        let mut dedup = Vec::new();
+        for rule in rules.into_iter().rev() {
+            let key = (rule.thread.clone(), rule.spec.clone());
+            if !seen.contains(&key) {
+                seen.insert(key);
+                dedup.push(rule);
+            }
+        }
+        dedup.reverse();
+        sub_rules_dedup.insert(sub, dedup);
+    }
+    let sub_rules = sub_rules_dedup;
+
+    // ---- 4. 如果没有规则，返回空块 ----
     if main_rules.is_empty() && sub_rules.is_empty() {
         return block;
     }
 
+    // ---- 5. 生成主包第一行 ----
     let pkg_cpus: Vec<&str> = main_rules
         .iter()
         .filter(|r| r.thread.is_empty())
@@ -1611,10 +1676,12 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     };
     block.push(first_line);
 
+    // ---- 6. 写入主包线程规则 ----
     for rule in thread_rules {
         block.push(format!("    {}={}", rule.thread, rule.spec));
     }
 
+    // ---- 7. 写入子包 ----
     for (sub_name, sub_rules_vec) in sub_rules {
         let sub_cpus: Vec<&str> = sub_rules_vec
             .iter()
@@ -1639,6 +1706,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         block.push("    }".to_string());
     }
 
+    // ---- 8. 关闭主包块 ----
     block.push("}".to_string());
     block
 }
