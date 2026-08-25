@@ -19,7 +19,7 @@ pub static CHECK_INTERVAL: AtomicU64 = AtomicU64::new(2);
 pub static FORCE_RELOAD: AtomicBool = AtomicBool::new(false);
 pub static CONFIG_FILE: Mutex<String> = Mutex::new(String::new());
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AffinityRule {
     pub pkg: String,
     pub thread: String,

@@ -968,6 +968,7 @@ pub fn rule_upsert(
     cpus: &str,
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
+    use std::collections::HashSet;
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
@@ -984,8 +985,6 @@ pub fn rule_upsert(
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
-                // 子包操作后，可能还有独立的子包块，调用规范化合并
-                // normalize_package_block(&mut lines, main_pkg, cfg); // 如果不需要合并可注释
                 return file_write(config_path, &lines);
             }
             return result;
@@ -993,8 +992,8 @@ pub fn rule_upsert(
         return RuleEdit::Ok;
     }
 
-    // ---- 主包处理：删除所有旧块，记录第一个块的位置 ----
-    // 1. 构建新规则列表（基于当前 cfg 并应用本次修改）
+    // ---- 主包处理 ----
+    // 1. 构建新规则列表
     let mut new_rules = cfg.rules.clone();
     if thread.is_empty() {
         new_rules.retain(|r| !(r.pkg == pkg && r.thread.is_empty()));
@@ -1028,7 +1027,6 @@ pub fn rule_upsert(
         }
     }
 
-    use std::collections::HashSet;
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
@@ -1059,12 +1057,15 @@ pub fn rule_upsert(
         if is_pkg_line {
             let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
             if let Some((start, end)) = find_package_range(&lines, pkg_name) {
-                if first_start.is_none() {
-                    first_start = Some(start);
+                // 边界检查
+                if start <= end && end < lines.len() {
+                    if first_start.is_none() {
+                        first_start = Some(start);
+                    }
+                    ranges.push((start, end));
+                    i = end + 1;
+                    continue;
                 }
-                ranges.push((start, end));
-                i = end + 1; // 跳到块结束之后
-                continue;
             }
         }
         i += 1;
@@ -1090,29 +1091,27 @@ pub fn rule_upsert(
     ranges.sort_by_key(|(_, end)| *end);
     ranges.reverse();
 
-    // 5. 删除所有块
+    // 5. 删除所有块（增强边界）
     for (start, end) in ranges {
-        lines.drain(start..=end);
+        if start <= end && end < lines.len() {
+            lines.drain(start..=end);
+        }
     }
 
     // 6. 生成新块
     let new_block = build_package_block(pkg, &new_cfg);
     if new_block.is_empty() {
-        // 没有规则，直接返回
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
 
     // 7. 在第一个旧块的位置插入新块
     let insert_pos = first_start.unwrap_or(lines.len());
-    let mut pos = insert_pos;
-    // 如果插入位置之前有连续的空行或注释，我们保持插入点，但我们需要保留这些行，所以插入到它们之后？
-    // 但更自然的做法是直接插入到该位置（可能在注释后面）。
-    // 为了保留注释，我们插入到该位置，而不是在它后面。
-    // 但确保插入后块与注释之间有合适的空行？可以简单插入。
-
-    // 插入前，检查插入位置前是否有注释，如果有，保留一个空行间隔？
-    // 我们直接插入，保留用户原来的格式。
+    let pos = if insert_pos > lines.len() {
+        lines.len()
+    } else {
+        insert_pos
+    };
     lines.splice(pos..pos, new_block);
 
     // 8. 清理多余空行
