@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
@@ -17,14 +17,6 @@ pub enum RuleEdit {
 }
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
-
-/// 存储一个包（或子包）的合并结果
-#[derive(Default, Clone)]
-struct PackageData {
-    cpus: Vec<String>,                      // 包级 CPU 列表（未去重）
-    threads: HashMap<String, String>,       // 线程名 -> CPU 列表（未去重）
-    sub_pkgs: HashMap<String, PackageData>, // 子包名 -> 子包数据
-}
 
 #[derive(Clone, Copy, PartialEq)]
 enum PkgLine {
@@ -969,156 +961,6 @@ fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// 从给定的行范围中提取包级CPU、线程和子包信息
-fn extract_package_data(lines: &[String], ranges: &[(usize, usize)], pkg: &str) -> PackageData {
-    let mut data = PackageData::default();
-
-    for (start, end) in ranges {
-        for idx in *start..=*end {
-            let line = &lines[idx];
-            let trimmed = line.trim();
-            // 包级行
-            if trimmed.starts_with(&format!("{}", pkg)) {
-                if let Some(eq_pos) = trimmed.rfind('=') {
-                    let cpu_part = trimmed[eq_pos + 1..].trim();
-                    // ★ 修复：去除尾部的 '{' 和空白，避免累积
-                    let clean_cpu = cpu_part.trim_end_matches('{').trim_end();
-                    if !clean_cpu.is_empty() {
-                        for part in clean_cpu.split(',') {
-                            let p = part.trim();
-                            if !p.is_empty() {
-                                data.cpus.push(p.to_string());
-                            }
-                        }
-                    }
-                }
-            } else {
-                let inner = trimmed.trim_start();
-                // 子包（以 ':' 开头）
-                if inner.starts_with(':') {
-                    let sub_name = if let Some(eq_pos) = inner.find('=') {
-                        inner[1..eq_pos].trim()
-                    } else if let Some(brace_pos) = inner.find('{') {
-                        inner[1..brace_pos].trim()
-                    } else {
-                        ""
-                    };
-                    if !sub_name.is_empty() {
-                        let sub_ranges =
-                            find_package_ranges(lines, &format!("{}:{}", pkg, sub_name));
-                        if !sub_ranges.is_empty() {
-                            let sub_data = extract_package_data(
-                                lines,
-                                &sub_ranges,
-                                &format!("{}:{}", pkg, sub_name),
-                            );
-                            data.sub_pkgs.insert(sub_name.to_string(), sub_data);
-                        }
-                    }
-                } else if !inner.is_empty() && !inner.starts_with('{') && !inner.starts_with('}') {
-                    // 线程行
-                    if let Some(eq_pos) = inner.rfind('=') {
-                        let thread_name = inner[..eq_pos].trim();
-                        let cpus_val = inner[eq_pos + 1..].trim();
-                        if !thread_name.is_empty() && !cpus_val.is_empty() {
-                            data.threads
-                                .entry(thread_name.to_string())
-                                .and_modify(|e| *e = format!("{},{}", e, cpus_val))
-                                .or_insert(cpus_val.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    data
-}
-
-/// 收集指定包（主包或子包）的所有数据，并返回相关行索引
-fn collect_package(lines: &[String], pkg: &str) -> (PackageData, Vec<usize>) {
-    // 使用 find_package_ranges 获取精确的行范围
-    let ranges = find_package_ranges(lines, pkg);
-    if ranges.is_empty() {
-        return (PackageData::default(), Vec::new());
-    }
-
-    // 从这些范围中提取数据（包级CPU、线程、子包递归）
-    let data = extract_package_data(lines, &ranges, pkg);
-
-    // 生成所有相关行的索引列表（用于删除）
-    let mut indices = Vec::new();
-    for (start, end) in &ranges {
-        for idx in *start..=*end {
-            indices.push(idx);
-        }
-    }
-    indices.sort();
-    indices.dedup();
-
-    (data, indices)
-}
-
-/// 合并去重 PackageData
-fn merge_data(mut data: PackageData) -> PackageData {
-    data.cpus.sort();
-    data.cpus.dedup();
-
-    for (_, cpus_str) in data.threads.iter_mut() {
-        let parts: Vec<&str> = cpus_str
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let mut unique = parts.clone();
-        unique.sort();
-        unique.dedup();
-        *cpus_str = unique.join(",");
-    }
-
-    for (_, sub_data) in data.sub_pkgs.iter_mut() {
-        *sub_data = merge_data(sub_data.clone());
-    }
-    data
-}
-
-/// 根据合并后的数据构建规范块
-fn build_block(pkg: &str, data: &PackageData) -> Vec<String> {
-    let mut block = Vec::new();
-    let has_cpus = !data.cpus.is_empty();
-    let has_threads = !data.threads.is_empty();
-    let has_subs = !data.sub_pkgs.is_empty();
-
-    let first_line = if has_cpus {
-        format!("{}={} {{", pkg, data.cpus.join(","))
-    } else {
-        format!("{} {{", pkg)
-    };
-
-    if has_threads || has_subs {
-        block.push(first_line);
-        let mut threads: Vec<(&String, &String)> = data.threads.iter().collect();
-        threads.sort_by(|a, b| a.0.cmp(b.0));
-        for (name, cpus_val) in threads {
-            block.push(format!("    {}={}", name, cpus_val));
-        }
-        let mut subs: Vec<(&String, &PackageData)> = data.sub_pkgs.iter().collect();
-        subs.sort_by(|a, b| a.0.cmp(b.0));
-        for (sub_name, sub_data) in subs {
-            let sub_lines = build_block(&format!("{}:{}", pkg, sub_name), sub_data);
-            for line in sub_lines {
-                block.push(format!("    {}", line));
-            }
-        }
-        block.push("}".to_string());
-    } else if has_cpus {
-        block.push(format!("{}={}", pkg, data.cpus.join(",")));
-    } else {
-        block.push(format!("{} {{", pkg));
-        block.push("}".to_string());
-    }
-    block
-}
-
 pub fn rule_upsert(
     config_path: &str,
     pkg: &str,
@@ -1807,13 +1649,4 @@ pub fn normalize_package_block(
     }
 
     true
-}
-fn find_insert_pos(lines: &[String]) -> usize {
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
-            return idx + 1;
-        }
-    }
-    lines.len()
 }
