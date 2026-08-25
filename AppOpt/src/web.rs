@@ -355,7 +355,6 @@ fn pkg_shape_ok(pkg: &str) -> bool {
 }
 
 fn rule_api(req: &Request) -> (u16, String) {
-    // 使用 catch_unwind 捕获 rule_upsert 可能发生的 panic
     let result = std::panic::catch_unwind(|| {
         eprintln!("[rule_api] 收到请求");
 
@@ -392,7 +391,7 @@ fn rule_api(req: &Request) -> (u16, String) {
         if cpus.is_empty()
             || cpus.len() >= 64
             || !spec_like(cpus)
-            || crate::cpuset::parse_cpu_spec(cpus, &cfg.topo).count() == 0
+            || parse_cpu_spec(cpus, &cfg.topo).count() == 0
         {
             eprintln!("[rule_api] CPU 规格无效");
             return err_json(400, "无效的 CPU 规格");
@@ -428,7 +427,6 @@ fn rule_api(req: &Request) -> (u16, String) {
         }
     });
 
-    // 处理 panic 情况
     match result {
         Ok(res) => res,
         Err(e) => {
@@ -437,6 +435,7 @@ fn rule_api(req: &Request) -> (u16, String) {
         }
     }
 }
+
 fn rule_del_api(req: &Request) -> (u16, String) {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
         return err_json(400, "请求体不是合法 JSON");

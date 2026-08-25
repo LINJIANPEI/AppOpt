@@ -981,7 +981,10 @@ pub fn rule_upsert(
     eprintln!("[rule_upsert] 读取文件，行数={}", lines.len());
 
     // 辅助：校验 CPU 规格
-    fn validate_cpus(cpus: &str, topo: &crate::cpuset::CpuTopology) -> Option<crate::cpuset::CpuSet> {
+    fn validate_cpus(
+        cpus: &str,
+        topo: &crate::cpuset::CpuTopology,
+    ) -> Option<crate::cpuset::CpuSet> {
         if cpus.is_empty() {
             return None;
         }
@@ -1074,20 +1077,20 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // ---- 查找旧块 ----
+    // ---- 查找旧块（带保护） ----
     eprintln!("[rule_upsert] 开始查找旧块");
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut first_start = None;
     let mut i = 0;
-    while i < lines.len() {
+    let max_iter = lines.len() * 2 + 100; // 安全保护
+    while i < lines.len() && i < max_iter {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
         let is_pkg_line = is_top_level
-            && (trimmed.starts_with(pkg)
-                && (trimmed.len() == pkg.len()
-                    || trimmed[pkg.len()..].starts_with('=')
-                    || trimmed[pkg.len()..].starts_with('{')
-                    || trimmed[pkg.len()..].starts_with(' '))
+            && (trimmed == pkg
+                || trimmed.starts_with(&format!("{} ", pkg))
+                || trimmed.starts_with(&format!("{}=", pkg))
+                || trimmed.starts_with(&format!("{}{{", pkg))
                 || trimmed.starts_with(&format!("{}:", pkg)));
         if is_pkg_line {
             let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
@@ -1102,14 +1105,22 @@ pub fn rule_upsert(
                     i = end + 1;
                     continue;
                 }
+            } else {
+                eprintln!("[rule_upsert] 警告: 未找到 {} 的闭合，跳过此行", pkg_name);
+                i += 1;
             }
-        }
-        i += 1;
-        if i >= lines.len() {
-            break;
+        } else {
+            i += 1;
         }
     }
-    eprintln!("[rule_upsert] 找到 {} 个旧块，first_start={:?}", ranges.len(), first_start);
+    if i >= max_iter {
+        eprintln!("[rule_upsert] 警告: 查找循环达到最大迭代次数，提前结束");
+    }
+    eprintln!(
+        "[rule_upsert] 找到 {} 个旧块，first_start={:?}",
+        ranges.len(),
+        first_start
+    );
 
     // ---- 生成新块 ----
     eprintln!("[rule_upsert] 开始生成新块");
@@ -1140,14 +1151,21 @@ pub fn rule_upsert(
         if start <= end && end < lines.len() {
             lines.drain(start..=end);
         } else {
-            eprintln!("[rule_upsert] 警告: 跳过无效范围 start={}, end={}", start, end);
+            eprintln!(
+                "[rule_upsert] 警告: 跳过无效范围 start={}, end={}",
+                start, end
+            );
         }
     }
 
     // ---- 插入新块 ----
     if !new_block.is_empty() {
         let insert_pos = first_start.unwrap_or(lines.len());
-        let pos = if insert_pos > lines.len() { lines.len() } else { insert_pos };
+        let pos = if insert_pos > lines.len() {
+            lines.len()
+        } else {
+            insert_pos
+        };
         lines.splice(pos..pos, new_block);
         eprintln!("[rule_upsert] 新块已插入在 pos={}", pos);
     }
@@ -1157,7 +1175,6 @@ pub fn rule_upsert(
     eprintln!("[rule_upsert] file_write 结果: {:?}", result);
     result
 }
-
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);
@@ -1449,11 +1466,13 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
     while i < lines.len() {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        // 匹配顶格的包行：可以是 pkg, pkg=..., pkg {...}, pkg:...
         let is_pkg_line = is_top_level
             && (trimmed == pkg
                 || trimmed.starts_with(&format!("{} ", pkg))
                 || trimmed.starts_with(&format!("{}=", pkg))
-                || trimmed.starts_with(&format!("{}{{", pkg))); // 注意这里转义了 {
+                || trimmed.starts_with(&format!("{}{{", pkg))
+                || trimmed.starts_with(&format!("{}:", pkg)));
         if is_pkg_line {
             let mut depth = 0;
             let mut j = i;
@@ -1468,18 +1487,18 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
                     return Some((i, j));
                 }
                 j += 1;
-                if j >= lines.len() && depth != 0 {
-                    // 未闭合，返回单行
-                    return Some((i, i));
+                // 安全限制，防止无限循环
+                if j - i > 10000 {
+                    break;
                 }
             }
+            // 未找到闭合，返回单行
             return Some((i, i));
         }
         i += 1;
     }
     None
 }
-
 /// 根据 AppConfig 中的规则生成规范化的主包块（包含子包嵌套）
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
     use std::collections::{BTreeMap, HashSet};
