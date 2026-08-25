@@ -554,7 +554,6 @@ fn write_sub_pkg_block(
                 if !close_like(last) {
                     lines.push("}".to_string());
                 }
-                t = target_scan(lines, pkg);
             }
         } else {
             // 主包无规则，创建新块

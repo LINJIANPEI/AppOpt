@@ -16,9 +16,7 @@ use crate::config::{
     CHECK_INTERVAL, CONFIG_FILE, CURRENT_CONFIG, FORCE_RELOAD, PARSE_FAILS, config_reload_now,
     spec_like,
 };
-use crate::cpuset::{
-    CpuSet, CpuTopology, DEFAULT_CPUSET_NAME, base_cpuset, create_cpuset_dir, parse_cpu_spec,
-};
+use crate::cpuset::{DEFAULT_CPUSET_NAME, base_cpuset, create_cpuset_dir, parse_cpu_spec};
 use crate::ebpf_mode::ebpf_probe;
 use crate::rule_edit::{
     RuleEdit, normalize_package_block, rule_delete, rule_delete_pkg, rule_rename, rule_upsert,
