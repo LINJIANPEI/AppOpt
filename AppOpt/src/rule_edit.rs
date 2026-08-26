@@ -1327,6 +1327,7 @@ pub fn rule_delete_pkg(config_path: &str, pkg: &str) -> RuleEdit {
 
     if normalize_package_block(&mut lines, main_pkg, &new_cfg) {
         clean_empty_lines(&mut lines);
+
         file_write(config_path, &lines)
     } else {
         RuleEdit::Malformed
