@@ -947,123 +947,24 @@ pub fn normalize_package_block(
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    let mut ranges = Vec::new();
+    // 1. 删除所有与 pkg 相关的顶层块（主包 + 独立子包）
+    remove_all_package_blocks(lines, pkg);
 
-    // 1. 收集所有主包块（以 pkg 开头的顶格行）
-    ranges.extend(find_all_package_ranges(lines, pkg));
-
-    // 2. 收集所有独立子包块（以 "pkg:" 开头的顶格行）
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
-            // 提取完整的子包名（直到 '=', ' ', '{'）
-            let block_name = trimmed
-                .split(|c| c == '=' || c == ' ' || c == '{')
-                .next()
-                .unwrap_or(trimmed)
-                .trim();
-            if block_name.starts_with(&format!("{}:", pkg)) {
-                if let Some((s, e)) = find_package_range_exact(lines, block_name) {
-                    ranges.push((s, e));
-                    i = e + 1;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-
-    // 3. 扩展范围：向前包含顶格注释，向后包含孤立的 }
-    let mut extended_ranges = Vec::new();
-    for (start, end) in ranges {
-        let mut s = start;
-        let mut e = end;
-
-        while s > 0 {
-            let prev = s - 1;
-            let trimmed = lines[prev].trim();
-            if trimmed.is_empty() {
-                break;
-            }
-            if lines[prev].starts_with('#')
-                && !lines[prev].starts_with(' ')
-                && !lines[prev].starts_with('\t')
-            {
-                s = prev;
-            } else {
-                break;
-            }
-        }
-
-        let mut next = e + 1;
-        while next < lines.len() {
-            let trimmed = lines[next].trim();
-            if trimmed == "}" && !lines[next].starts_with(' ') && !lines[next].starts_with('\t') {
-                e = next;
-                next += 1;
-            } else if trimmed.is_empty() {
-                break;
-            } else {
-                break;
-            }
-        }
-
-        extended_ranges.push((s, e));
-    }
-
-    // 4. 合并重叠范围
-    if !extended_ranges.is_empty() {
-        extended_ranges.sort_by_key(|(s, _)| *s);
-        let mut merged = Vec::new();
-        let mut cur = extended_ranges[0];
-        for (s, e) in extended_ranges.iter().skip(1) {
-            if *s <= cur.1 + 1 {
-                cur.1 = cur.1.max(*e);
-            } else {
-                merged.push(cur);
-                cur = (*s, *e);
-            }
-        }
-        merged.push(cur);
-        extended_ranges = merged;
-    }
-
-    // 5. 删除所有扩展后的范围
-    for (start, end) in extended_ranges.iter().rev() {
-        lines.drain(*start..=*end);
-    }
-
-    // 6. 生成新块
+    // 2. 生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
         return true;
     }
 
-    // 7. 插入新块
-    let insert_pos = if !extended_ranges.is_empty() {
-        extended_ranges[0].0
-    } else {
-        lines.len()
-    };
-
+    // 3. 插入新块（在文件末尾）
+    let insert_pos = lines.len();
     if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
-        lines.insert(insert_pos, String::new());
-        let actual_pos = insert_pos + 1;
-        let block_len = new_block.len();
-        lines.splice(actual_pos..actual_pos, new_block);
-        if actual_pos + block_len < lines.len() && !lines[actual_pos + block_len].trim().is_empty()
-        {
-            lines.insert(actual_pos + block_len, String::new());
-        }
-    } else {
-        let block_len = new_block.len();
-        lines.splice(insert_pos..insert_pos, new_block);
-        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
-        {
-            lines.insert(insert_pos + block_len, String::new());
-        }
+        lines.push(String::new());
+    }
+    let block_len = new_block.len();
+    lines.splice(insert_pos..insert_pos, new_block);
+    if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty() {
+        lines.insert(insert_pos + block_len, String::new());
     }
 
     true
@@ -1840,4 +1741,93 @@ fn find_package_range_exact(lines: &[String], pkg: &str) -> Option<(usize, usize
         i += 1;
     }
     None
+}
+
+/// 删除文件中所有以 pkg 或 pkg: 开头的顶层块（包括注释和孤立 }）
+fn remove_all_package_blocks(lines: &mut Vec<String>, pkg: &str) {
+    let mut ranges = Vec::new();
+
+    // 使用 find_all_package_ranges 删除主包块（pkg 不含 ':'）
+    ranges.extend(find_all_package_ranges(lines, pkg));
+
+    // 遍历所有顶格行，删除以 "pkg:" 开头的块
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
+            // 提取块名（直到 '=', ' ', '{'）
+            let block_name = trimmed
+                .split(|c| c == '=' || c == ' ' || c == '{')
+                .next()
+                .unwrap_or(trimmed)
+                .trim();
+            if block_name.starts_with(&format!("{}:", pkg)) {
+                if let Some((s, e)) = find_package_range_exact(lines, block_name) {
+                    ranges.push((s, e));
+                    i = e + 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // 扩展范围：向前包含顶格注释，向后包含孤立的 }
+    let mut extended = Vec::new();
+    for (start, end) in ranges {
+        let mut s = start;
+        let mut e = end;
+
+        while s > 0 {
+            let prev = s - 1;
+            let trimmed = lines[prev].trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if lines[prev].starts_with('#')
+                && !lines[prev].starts_with(' ')
+                && !lines[prev].starts_with('\t')
+            {
+                s = prev;
+            } else {
+                break;
+            }
+        }
+
+        let mut next = e + 1;
+        while next < lines.len() {
+            let trimmed = lines[next].trim();
+            if trimmed == "}" && !lines[next].starts_with(' ') && !lines[next].starts_with('\t') {
+                e = next;
+                next += 1;
+            } else if trimmed.is_empty() {
+                break;
+            } else {
+                break;
+            }
+        }
+
+        extended.push((s, e));
+    }
+
+    // 合并重叠范围并删除
+    if !extended.is_empty() {
+        extended.sort_by_key(|(s, _)| *s);
+        let mut merged = Vec::new();
+        let mut cur = extended[0];
+        for (s, e) in extended.iter().skip(1) {
+            if *s <= cur.1 + 1 {
+                cur.1 = cur.1.max(*e);
+            } else {
+                merged.push(cur);
+                cur = (*s, *e);
+            }
+        }
+        merged.push(cur);
+
+        for (start, end) in merged.iter().rev() {
+            lines.drain(*start..=*end);
+        }
+    }
 }
