@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
@@ -1034,8 +1034,6 @@ pub fn rule_upsert(
     comment: Option<&str>,
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
-    use std::collections::HashSet;
-
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
 
     let mut lines: Vec<String> = fs::read_to_string(config_path)
@@ -1453,88 +1451,7 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
 }
 
 // ========== 新增规范化函数 ==========
-
-/// 查找主包 pkg 的完整范围（从包行到匹配的 '}'），返回 (start, end)
-/// 只匹配顶格行，不跨越其他顶层包（通过括号深度和空行判断）
-pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)> {
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        // 检查是否为该包的顶格行（忽略空行和注释）
-        if is_top_level
-            && !trimmed.is_empty()
-            && !trimmed.starts_with('#')
-            && !trimmed.starts_with("//")
-        {
-            // 匹配包名（后面可能跟着 '=', ' ', '{', 或 ':'）
-            let line_pkg = trimmed
-                .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
-                .next()
-                .unwrap_or("");
-            if line_pkg == pkg {
-                // 找到包行
-                let start = i;
-                let has_brace = trimmed.contains('{');
-                if !has_brace {
-                    // 单行规则，范围仅该行
-                    return Some((start, start));
-                }
-                // 块模式：查找匹配的 '}'
-                let mut depth = 0;
-                let mut j = i;
-                while j < lines.len() {
-                    let t = lines[j].trim();
-                    // 忽略空行和注释
-                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
-                        j += 1;
-                        continue;
-                    }
-                    // 检查是否是新的顶层包（顶格且不是当前包）
-                    if j > i {
-                        let is_new_top = !lines[j].starts_with(' ')
-                            && !lines[j].starts_with('\t')
-                            && !t.is_empty()
-                            && !t.starts_with('#')
-                            && !t.starts_with("//");
-                        if is_new_top {
-                            // 遇到了新的顶层包，说明当前块已结束（但尚未遇到 '}'）
-                            // 如果深度为0，则当前块结束于 j-1
-                            if depth == 0 {
-                                return Some((start, j - 1));
-                            }
-                            // 否则，新顶层包可能嵌套在当前块内？不可能，因为顶层包不会缩进。
-                            // 所以这里我们假定深度应该已经归零，否则说明括号不匹配，返回 None。
-                            return None;
-                        }
-                    }
-                    // 计算括号深度变化
-                    for ch in t.chars() {
-                        if ch == '{' {
-                            depth += 1;
-                        } else if ch == '}' {
-                            depth -= 1;
-                        }
-                    }
-                    if depth == 0 && j > i {
-                        return Some((start, j));
-                    }
-                    j += 1;
-                    if j - i > 10000 {
-                        break;
-                    }
-                }
-                // 未找到闭合，返回 None
-                return None;
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
-    use std::collections::{BTreeMap, HashSet};
 
     // ---- 子包节点结构 ----
     #[derive(Clone)]
