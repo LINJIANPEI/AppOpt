@@ -1686,57 +1686,86 @@ pub fn normalize_package_block(
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 1. 删除所有顶格的、以 "pkg:" 开头的独立子包块（旧残留）
+    // 1. 收集所有主包块范围（包括单行）
+    let mut ranges = find_all_package_ranges(lines, pkg);
+    // 扩展范围：将每个块前面的连续注释行包含进去
+    for (start, end) in &mut ranges {
+        let mut s = *start;
+        while s > 0 {
+            let prev = s - 1;
+            let trimmed = lines[prev].trim();
+            if trimmed.is_empty() {
+                // 空行不扩展，避免跨空行删除远处的注释
+                break;
+            }
+            if trimmed.starts_with('#') || trimmed.starts_with("//") {
+                s = prev;
+            } else {
+                break;
+            }
+        }
+        *start = s;
+    }
+    // 按结束位置降序排序，方便删除
+    ranges.sort_by_key(|(_, end)| *end);
+    ranges.reverse();
+
+    // 2. 删除所有旧块（及其前面的注释）
+    for (start, end) in ranges {
+        lines.drain(start..=end);
+    }
+
+    // 3. 删除孤立的 "}" 行（缩进的或顶格的，但不在块内的）
+    //    简单方法：删除所有单独的 "}" 行（顶格且内容仅为 "}"）
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
-            if let Some((s, e)) =
-                find_package_range(lines, trimmed.split('=').next().unwrap_or(trimmed))
-            {
-                lines.drain(s..=e);
-                continue;
-            }
+        if trimmed == "}" && !lines[i].starts_with(' ') && !lines[i].starts_with('\t') {
+            lines.remove(i);
+            // 不增加 i，继续检查同一位置
+        } else {
+            i += 1;
         }
-        i += 1;
     }
 
-    // 2. 找到所有主包块（包括单行和块）
-    let ranges = find_all_package_ranges(lines, pkg);
-    // 删除所有旧块
-    for (start, end) in ranges.iter().rev() {
-        lines.drain(*start..=*end);
-    }
+    // 4. 清理连续空行（保留一个）
+    clean_empty_lines(lines);
 
-    // 3. 生成新块
+    // 5. 生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
-        return true; // 无规则，已删除全部
+        return true;
     }
 
-    // 4. 插入新块（在第一个旧块位置，或文件末尾）
-    let insert_pos = ranges.first().map(|(s, _)| *s).unwrap_or(lines.len());
+    // 6. 确定插入位置：如果没有其他顶层包，插入到文件开头；否则插入到第一个顶层包之前（或末尾）
+    //    为了简单，插入到文件末尾（但可能会打乱顺序），我们最好找到第一个顶层包位置
+    let mut insert_pos = lines.len();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+            // 检查是否为顶层（顶格）
+            if !line.starts_with(' ') && !line.starts_with('\t') {
+                insert_pos = i;
+                break;
+            }
+        }
+    }
 
-    // 保证插入前有空行
+    // 如果插入位置不是0，前面可能缺少空行，我们确保有空行
     if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
         lines.insert(insert_pos, String::new());
-        // 插入空行后，实际插入位置后移一位
-        let actual_pos = insert_pos + 1;
-        let block_len = new_block.len();
-        lines.splice(actual_pos..actual_pos, new_block);
-        if actual_pos + block_len < lines.len() && !lines[actual_pos + block_len].trim().is_empty()
-        {
-            lines.insert(actual_pos + block_len, String::new());
-        }
-    } else {
-        let block_len = new_block.len();
-        lines.splice(insert_pos..insert_pos, new_block);
-        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
-        {
-            lines.insert(insert_pos + block_len, String::new());
-        }
+        insert_pos += 1;
     }
+
+    let block_len = new_block.len();
+    lines.splice(insert_pos..insert_pos, new_block);
+    // 确保块后有空行
+    if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty() {
+        lines.insert(insert_pos + block_len, String::new());
+    }
+
+    // 再次清理空行
+    clean_empty_lines(lines);
 
     true
 }
