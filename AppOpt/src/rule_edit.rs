@@ -883,7 +883,6 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
             && !trimmed.starts_with('#')
             && !trimmed.starts_with("//")
         {
-            // 提取行首的包名（忽略 =、{、空格、: 等）
             let line_pkg = trimmed
                 .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
                 .next()
@@ -892,12 +891,10 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                 let start = i;
                 let has_brace = trimmed.contains('{');
                 if !has_brace {
-                    // 单行规则（如 pkg=cpus）
                     ranges.push((start, start));
                     i += 1;
                     continue;
                 }
-                // 块模式：查找匹配的 '}'
                 let mut depth = 0;
                 let mut j = i;
                 while j < lines.len() {
@@ -906,7 +903,6 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                         j += 1;
                         continue;
                     }
-                    // 检查是否遇到了新的顶层包（顶格且不是当前行）
                     if j > i {
                         let is_new_top = !lines[j].starts_with(' ')
                             && !lines[j].starts_with('\t')
@@ -919,7 +915,6 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                             break;
                         }
                     }
-                    // 计算括号深度
                     for ch in t.chars() {
                         if ch == '{' {
                             depth += 1;
@@ -935,7 +930,6 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                     j += 1;
                 }
                 if i == start {
-                    // 未找到闭合，跳过该行
                     i += 1;
                 }
             } else {
@@ -1603,14 +1597,35 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
 
     block
 }
+
 pub fn normalize_package_block(
     lines: &mut Vec<String>,
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 1. 收集所有旧块范围（主包块）
-    let mut ranges = find_all_package_ranges(lines, pkg);
-    // 扩展范围：向前包含顶格注释，向后包含孤立的 }
+    let mut ranges = Vec::new();
+
+    // 1. 收集所有主包块（以 pkg 开头的顶格行）
+    ranges.extend(find_all_package_ranges(lines, pkg));
+
+    // 2. 收集所有独立子包块（以 "pkg:" 开头的顶格行，例如 com.example:sub=cpus）
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
+            // 获取完整块范围（子包可能带有 =cpus 或 { }）
+            let block_name = trimmed.split('=').next().unwrap_or(trimmed);
+            if let Some((s, e)) = find_package_range(lines, block_name) {
+                ranges.push((s, e));
+                i = e + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // 3. 扩展每个范围：向前包含连续的顶格注释，向后包含孤立的顶格 }
     let mut extended_ranges = Vec::new();
     for (start, end) in ranges {
         let mut s = start;
@@ -1633,7 +1648,7 @@ pub fn normalize_package_block(
             }
         }
 
-        // 向后扩展：孤立的顶格 } 行（无缩进）
+        // 向后扩展：孤立的顶格 } 行（无缩进，且不是其他块的一部分）
         let mut next = e + 1;
         while next < lines.len() {
             let trimmed = lines[next].trim();
@@ -1641,7 +1656,7 @@ pub fn normalize_package_block(
                 e = next;
                 next += 1;
             } else if trimmed.is_empty() {
-                // 遇到空行停止，防止误删
+                // 遇到空行停止，防止误删其他块间的空行
                 break;
             } else {
                 break;
@@ -1651,7 +1666,7 @@ pub fn normalize_package_block(
         extended_ranges.push((s, e));
     }
 
-    // 合并重叠范围（如果多个块相邻或重叠）
+    // 4. 合并重叠范围（如果有多个块相邻或重叠）
     if !extended_ranges.is_empty() {
         extended_ranges.sort_by_key(|(s, _)| *s);
         let mut merged = Vec::new();
@@ -1668,26 +1683,26 @@ pub fn normalize_package_block(
         extended_ranges = merged;
     }
 
-    // 2. 删除所有扩展后的旧块（从后往前删）
+    // 5. 删除所有扩展后的范围（从后往前删，保持索引有效）
     for (start, end) in extended_ranges.iter().rev() {
         lines.drain(*start..=*end);
     }
 
-    // 3. 生成新块
+    // 6. 生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
         // 无规则，已删除全部
         return true;
     }
 
-    // 4. 插入新块（在第一个旧块位置，或文件末尾）
+    // 7. 插入新块（在第一个旧块位置，或文件末尾）
     let insert_pos = if !extended_ranges.is_empty() {
         extended_ranges[0].0
     } else {
         lines.len()
     };
 
-    // 保证插入前有空行
+    // 确保插入前有空行
     if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
         lines.insert(insert_pos, String::new());
         let actual_pos = insert_pos + 1;
