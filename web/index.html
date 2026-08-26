@@ -1632,7 +1632,7 @@
                     <div class="card-title">📌 使用说明</div>
                     <div class="text">
                         <ol>
-                            <li>规则页点击「添加」，输入应用包名，可同时配置包级默认（可选）与多条线程规则后一次保存</li>
+                            <li>规则页点击「添加」，输入应用包名，可同时配置默认核心（可选）与多条线程规则后一次保存</li>
                             <li>设置页可切换 eBPF / Proc 工作模式、cpuset 目录名、检查间隔与配置文件路径</li>
                             <li>配置文件也可直接手工编辑，保存后自动热加载</li>
                             <li>更多规则编写说明参考官网文档</li>
@@ -1655,7 +1655,7 @@
             <h3 id="mr-title">添加应用</h3>
             <!-- 包级注释输入框 -->
             <div class="field-group">
-                <label for="mr-appname" id="mr-appname-label">📝 包级注释（独立行，可选）</label>
+                <label for="mr-appname" id="mr-appname-label">📝 应用名（可选）</label>
                 <input id="mr-appname" placeholder="例如：微信">
             </div>
             <div class="field-group">
@@ -1816,7 +1816,7 @@
             if (g.items) {
                 for (const it of g.items) {
                     const isPkgRule = !it.thread;
-                    const displayName = isPkgRule ? '<span class="rule-sub">包级默认</span>' : esc(it.thread);
+                    const displayName = isPkgRule ? '<span class="rule-sub">默认核心</span>' : esc(it.thread);
                     html += `
                     <div class="rule-row">
                       <span class="rule-name">${displayName}</span>
@@ -1834,7 +1834,7 @@
                     const subDisplay = sub.startsWith(':') ? sub : ':' + sub;
                     const threadRules = data.items.filter(it => it.thread);
                     const total = (pkgRule ? 1 : 0) + threadRules.length;
-                    // 子包独立注释（如果存在）
+                    // 子进程独立注释（如果存在）
                     const subCommentHtml = pkgRule && pkgRule.comment ? `<div class="sub-comment"># ${esc(pkgRule.comment)}</div>` : '';
                     html += `
                     <div class="sub-group">
@@ -1842,21 +1842,21 @@
                       <div class="sub-head">
                         <span class="sub-label">${esc(subDisplay)}</span>
                         <span class="grp-count">${total}</span>
-                        <button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子包包级规则">${ICO_EDIT}</button>
-                        <button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子包">${ICO_TRASH}</button>
+                        <button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子进程核心规则">${ICO_EDIT}</button>
+                        <button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子进程">${ICO_TRASH}</button>
                       </div>
                       <div class="sub-inner">`;
                     if (pkgRule) {
                         html += `
                         <div class="rule-row">
-                          <span class="rule-name"><span class="rule-sub">包级默认</span></span>
+                          <span class="rule-name"><span class="rule-sub">默认核心</span></span>
                           ${pkgRule.comment ? `<span class="rule-comment">${esc(pkgRule.comment)}</span>` : ''}
                           ${chipGroupHtml(pkgRule.spec)}
                           <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
                           <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
                         </div>`;
                     } else {
-                        html += `<div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">无包级规则，可编辑子包添加</div>`;
+                        html += `<div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">无包级规则，可编辑子进程添加</div>`;
                     }
                     for (const it of threadRules) {
                         html += `
@@ -1869,7 +1869,7 @@
                         </div>`;
                     }
                     html += `
-                        <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包线程规则</button>
+                        <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子进程线程规则</button>
                       </div>
                     </div>`;
                 }
@@ -1877,7 +1877,7 @@
 
             html += `
                 <button class="rule-add" data-addthread="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加线程规则</button>
-                <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包</button>
+                <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子进程</button>
               </div></div>`;
             return html;
         }
@@ -1976,8 +1976,8 @@
                     const gi = +parts[1], sub = parts[2], thread = parts[3] || '';
                     const g = rulesData[gi];
                     const fullPkg = g.pkg + ':' + sub;
-                    if (thread) confirmDel(`子包 :${sub} 的线程 ${thread}`, { pkg: fullPkg, thread: thread });
-                    else confirmDel(`子包 :${sub} 的包级规则`, { pkg: fullPkg, thread: '' });
+                    if (thread) confirmDel(`子进程 :${sub} 的线程 ${thread}`, { pkg: fullPkg, thread: thread });
+                    else confirmDel(`子进程 :${sub} 的包级规则`, { pkg: fullPkg, thread: '' });
                 }
                 return;
             }
@@ -1992,13 +1992,13 @@
             if (dsb) {
                 const [gi, sub] = dsb.dataset.delsub.split(':');
                 const g = rulesData[gi];
-                confirmDel(`删除子包 :${sub} 的全部规则`, { pkg: g.pkg + ':' + sub, all: true });
+                confirmDel(`删除子进程 :${sub} 的全部规则`, { pkg: g.pkg + ':' + sub, all: true });
                 return;
             }
         });
 
         // ============================================================
-        //  规则编辑弹窗（完整版，支持子包注释）
+        //  规则编辑弹窗（完整版，支持子进程注释）
         // ============================================================
         async function fetchTopo() { if (!topoCores) try { const d = await api('/api/status'); topoCores = topoOf(d); } catch (e) { } }
 
@@ -2042,7 +2042,7 @@
             box.innerHTML = mrRows.map((r, i) => {
                 if (r.pkgRow === true) {
                     return `<div class="tree-row" data-ri="${i}">
-                        <div class="tr-head"><span class="tr-tag">📦 包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
+                        <div class="tr-head"><span class="tr-tag">📦 默认核心</span><span class="tr-sub">全部线程 · 可选</span></div>
                         <div class="core-chips">${CHIP_BTNS}</div>
                         <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
                     </div>`;
@@ -2117,14 +2117,14 @@
 
             if (mode === 'add-pkg') {
                 $('mr-title').textContent = '➕ 添加应用';
-                label.textContent = '📝 包级注释（独立行，可选）';
+                label.textContent = '📝 应用名（可选）';
                 pkgInput.value = '';
                 pkgInput.readOnly = false;
                 appInput.value = '';
                 mrRows = [mkRow({ pkgRow: true })];
             } else if (mode === 'edit-app') {
                 $('mr-title').textContent = '✏️ 编辑应用';
-                label.textContent = '📝 包级注释（独立行，可选）';
+                label.textContent = '📝 应用名（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -2139,8 +2139,8 @@
                     if (it.thread) mrRows.push(mkRow({ thread: it.thread, comment: it.comment || '', ...parseSpec(it.spec) }));
                 }
             } else if (mode === 'edit-pkg') {
-                $('mr-title').textContent = '📦 包级默认规则';
-                label.textContent = '📝 包级注释（独立行，可选）';
+                $('mr-title').textContent = '📦 默认核心规则';
+                label.textContent = '📝 应用名（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -2149,7 +2149,7 @@
                 mrRows = [mkRow({ pkgRow: true, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-thread') {
                 $('mr-title').textContent = '🧵 添加线程规则';
-                label.textContent = '📝 包级注释（独立行，可选）';
+                label.textContent = '📝 应用名（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -2157,7 +2157,7 @@
                 mrRows = [mkRow({})];
             } else if (mode === 'edit-thread') {
                 $('mr-title').textContent = '🧵 编辑线程规则';
-                label.textContent = '📝 包级注释（独立行，可选）';
+                label.textContent = '📝 应用名（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -2168,42 +2168,42 @@
                 row.thread = thread;
                 mrRows = [row];
             } else if (mode === 'add-sub') {
-                $('mr-title').textContent = '📂 添加子包';
-                label.textContent = '📝 子包注释（独立行，可选）';
+                $('mr-title').textContent = '📂 添加子进程';
+                label.textContent = '📝 子进程注释（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
                 appInput.value = '';
                 $('mr-addrow').hidden = true;
                 mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
-                toast('请输入 :子包名，如 :push，并选择 CPU');
+                toast('请输入 :子进程，如 :push，并选择 CPU');
             } else if (mode === 'edit-sub') {
-                $('mr-title').textContent = '📂 编辑子包包级规则';
-                label.textContent = '📝 子包注释（独立行，可选）';
+                $('mr-title').textContent = '📂 编辑子进程核心规则';
+                label.textContent = '📝 子进程注释（可选）';
                 const g = rulesData[gi];
                 const fullPkg = g.pkg + ':' + sub;
                 pkgInput.value = fullPkg;
                 pkgInput.readOnly = true;
-                // 取子包包级规则注释
+                // 取子进程核心规则注释
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
                 appInput.value = item?.comment || '';
                 $('mr-addrow').hidden = true;
                 mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub-thread') {
-                $('mr-title').textContent = '🧵 添加子包线程规则';
-                label.textContent = '📝 子包注释（独立行，可选）';
+                $('mr-title').textContent = '🧵 添加子进程线程规则';
+                label.textContent = '📝 子进程注释（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
-                // 取子包包级注释
+                // 取子进程核心注释
                 const subData = g.subs && g.subs[sub];
                 const pkgItem = subData ? subData.items.find(it => !it.thread) : null;
                 appInput.value = pkgItem?.comment || '';
                 mrRows = [mkRow({})];
             } else if (mode === 'edit-sub-thread') {
-                $('mr-title').textContent = '🧵 编辑子包线程规则';
-                label.textContent = '📝 子包注释（独立行，可选）';
+                $('mr-title').textContent = '🧵 编辑子进程线程规则';
+                label.textContent = '📝 子进程注释（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
@@ -2249,15 +2249,15 @@
             if (!jobs.length) return toast('请至少配置一条规则');
             mrSaving = true;
             try {
-                // 子包添加/编辑分支
+                // 子进程添加/编辑分支
                 if (mrMode === 'add-sub') {
                     let subInput = jobs[0].thread.trim();
                     if (!subInput.startsWith(':')) subInput = ':' + subInput;
                     const subName = subInput.substring(1).trim();
-                    if (!subName) return toast('请输入子包名');
+                    if (!subName) return toast('请输入子进程');
                     const fullPkg = pkg + ':' + subName;
                     await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus, comment: appName });
-                    toast('子包已添加');
+                    toast('子进程已添加');
                     loadRules();
                     $('modal-rule').hidden = true;
                     mrSaving = false;
@@ -2266,7 +2266,7 @@
                 if (mrMode === 'edit-sub') {
                     const fullPkg = pkg;
                     await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus, comment: appName });
-                    toast('子包已更新');
+                    toast('子进程已更新');
                     loadRules();
                     $('modal-rule').hidden = true;
                     mrSaving = false;
@@ -2279,7 +2279,7 @@
                         if (!threadName) return toast('请输入线程名');
                         await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: j.comment });
                     }
-                    toast('子包线程规则已添加');
+                    toast('子进程线程规则已添加');
                     loadRules();
                     $('modal-rule').hidden = true;
                     mrSaving = false;
@@ -2295,9 +2295,9 @@
                         }
                         await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: j.comment });
                     }
-                    // 同时更新子包包级注释（如果有变化）
+                    // 同时更新子进程核心注释（如果有变化）
                     await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus, comment: appName });
-                    toast('子包线程规则已更新');
+                    toast('子进程线程规则已更新');
                     loadRules();
                     $('modal-rule').hidden = true;
                     mrSaving = false;
