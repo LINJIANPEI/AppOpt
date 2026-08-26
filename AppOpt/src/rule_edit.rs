@@ -1687,7 +1687,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
 
     block
 }
-
 pub fn normalize_package_block(
     lines: &mut Vec<String>,
     pkg: &str,
