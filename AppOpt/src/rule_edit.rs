@@ -1233,141 +1233,104 @@ fn delete_sub_pkg(lines: &mut Vec<String>, main_pkg: &str, sub: &str, thread: &s
 
 pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
+
+    let Some(cfg) = crate::CURRENT_CONFIG.lock().unwrap().clone() else {
+        return RuleEdit::NotFound;
+    };
+
+    // 构建新规则列表：删除目标 (pkg, thread)
+    let mut new_rules = Vec::new();
+    for r in cfg.rules.iter() {
+        if r.pkg == pkg && r.thread == thread {
+            continue;
+        }
+        // 如果指定了 thread 为空，且传入的 pkg 是子包（含 ':'），则只删除该子包的包级规则（thread空）
+        // 但 thread 已经传入，上面已经匹配了，所以这里不用额外处理
+        new_rules.push(r.clone());
+    }
+
+    // 如果没有变化（找不到规则），返回 NotFound
+    if new_rules.len() == cfg.rules.len() {
+        return RuleEdit::NotFound;
+    }
+
+    let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
+    let has_thread_rules: HashSet<String> = new_rules
+        .iter()
+        .filter(|r| !r.thread.is_empty())
+        .map(|r| r.pkg.clone())
+        .collect();
+    let new_cfg = crate::config::AppConfig {
+        rules: new_rules,
+        pkgs,
+        has_thread_rules,
+        topo: cfg.topo.clone(),
+    };
+
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
         .lines()
         .map(String::from)
         .collect();
 
-    // ---- 子包处理 ----
-    if pkg.contains(':') {
-        let parts: Vec<&str> = pkg.split(':').collect();
-        if parts.len() == 2 {
-            let main_pkg = parts[0];
-            let sub = parts[1];
-            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", None, false);
-            if let RuleEdit::Ok = result {
-                clean_empty_lines(&mut lines);
-                clean_empty_blocks(&mut lines, main_pkg);
-                return file_write(config_path, &lines);
-            }
-            return result;
-        }
-        return RuleEdit::NotFound;
-    }
+    // 提取主包名（如果 pkg 包含 ':'，取第一部分）
+    let main_pkg = pkg.split(':').next().unwrap_or(pkg);
 
-    // ---- 主包处理 ----
-    let ranges = find_all_package_ranges(&lines, pkg);
-    if ranges.is_empty() {
-        return RuleEdit::NotFound;
-    }
-
-    if thread.is_empty() {
-        // 删除包级规则：修改第一行，去掉 =CPU 部分
-        let start = ranges[0].0;
-        let line = &lines[start];
-        let trimmed = line.trim();
-        if trimmed.contains('=') {
-            if let Some(eq_pos) = trimmed.rfind('=') {
-                let pkg_part = trimmed[..eq_pos].trim();
-                // ★ 修复：正确处理 Option<usize>
-                let has_brace =
-                    trimmed.contains('{') && trimmed.rfind('{').is_some_and(|pos| pos > eq_pos);
-                let comment = match comment_at(line) {
-                    Some(pos) => &line[pos..],
-                    None => "",
-                };
-                let new_line = if has_brace {
-                    format!("{} {{", pkg_part)
-                } else {
-                    pkg_part.to_string()
-                };
-                let indent = line
-                    .chars()
-                    .take_while(|c| c.is_whitespace())
-                    .collect::<String>();
-                lines[start] = format!("{}{}{}", indent, new_line, comment);
-            }
-        } else {
-            // 没有包级规则，无需操作
-            return RuleEdit::Ok;
-        }
-        clean_empty_blocks(&mut lines, pkg);
+    if normalize_package_block(&mut lines, main_pkg, &new_cfg) {
         clean_empty_lines(&mut lines);
-        return file_write(config_path, &lines);
+        file_write(config_path, &lines)
     } else {
-        // 删除指定线程（在块内查找，包括子包内的线程）
-        let mut found = false;
-        for (start, end) in &ranges {
-            for idx in (*start + 1)..*end {
-                let trimmed = lines[idx].trim();
-                let inner = trimmed.trim_start();
-                if inner.starts_with(&format!("{}=", thread))
-                    || inner.starts_with(&format!("{} =", thread))
-                {
-                    if let Some(eq_pos) = inner.find('=') {
-                        let name_part = inner[..eq_pos].trim();
-                        if name_part == thread {
-                            lines.remove(idx);
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if found {
-                break;
-            }
-        }
-        if !found {
-            return RuleEdit::NotFound;
-        }
-        clean_empty_blocks(&mut lines, pkg);
-        clean_empty_lines(&mut lines);
-        return file_write(config_path, &lines);
+        RuleEdit::Malformed
     }
 }
+
 pub fn rule_delete_pkg(config_path: &str, pkg: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
+
+    let Some(cfg) = crate::CURRENT_CONFIG.lock().unwrap().clone() else {
+        return RuleEdit::NotFound;
+    };
+
+    // 删除所有该包名的规则（包括主包和子包）
+    let mut new_rules = Vec::new();
+    for r in cfg.rules.iter() {
+        if r.pkg == pkg || r.pkg.starts_with(&format!("{}:", pkg)) {
+            continue;
+        }
+        new_rules.push(r.clone());
+    }
+
+    if new_rules.len() == cfg.rules.len() {
+        return RuleEdit::NotFound;
+    }
+
+    let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
+    let has_thread_rules: HashSet<String> = new_rules
+        .iter()
+        .filter(|r| !r.thread.is_empty())
+        .map(|r| r.pkg.clone())
+        .collect();
+    let new_cfg = crate::config::AppConfig {
+        rules: new_rules,
+        pkgs,
+        has_thread_rules,
+        topo: cfg.topo.clone(),
+    };
+
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
         .lines()
         .map(String::from)
         .collect();
 
-    if pkg.contains(':') {
-        let parts: Vec<&str> = pkg.split(':').collect();
-        if parts.len() == 2 {
-            let main_pkg = parts[0];
-            let sub = parts[1];
-            let result = delete_sub_pkg(&mut lines, main_pkg, sub, "");
-            if let RuleEdit::Ok = result {
-                clean_empty_lines(&mut lines);
-                return file_write(config_path, &lines);
-            }
-            return result;
-        }
-        return RuleEdit::NotFound;
-    }
+    let main_pkg = pkg.split(':').next().unwrap_or(pkg);
 
-    let ranges = find_all_package_ranges(&lines, pkg);
-    if ranges.is_empty() {
-        return RuleEdit::NotFound;
+    if normalize_package_block(&mut lines, main_pkg, &new_cfg) {
+        clean_empty_lines(&mut lines);
+        file_write(config_path, &lines)
+    } else {
+        RuleEdit::Malformed
     }
-
-    let mut indices = Vec::new();
-    for (start, end) in &ranges {
-        for idx in *start..=*end {
-            indices.push(idx);
-        }
-    }
-    indices.sort();
-    indices.dedup();
-    for idx in indices.into_iter().rev() {
-        lines.remove(idx);
-    }
-    clean_empty_lines(&mut lines);
-    file_write(config_path, &lines)
 }
 
 pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
