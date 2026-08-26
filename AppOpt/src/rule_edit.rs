@@ -871,6 +871,84 @@ fn write_sub_pkg_block(
     }
 }
 
+/// 查找文件中所有名为 pkg 的顶层块范围（包括单行规则），返回 (start, end) 列表
+fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with("//")
+        {
+            // 提取行首的包名（忽略 =、{、空格、: 等）
+            let line_pkg = trimmed
+                .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
+                .next()
+                .unwrap_or("");
+            if line_pkg == pkg {
+                let start = i;
+                let has_brace = trimmed.contains('{');
+                if !has_brace {
+                    // 单行规则（如 pkg=cpus）
+                    ranges.push((start, start));
+                    i += 1;
+                    continue;
+                }
+                // 块模式：查找匹配的 '}'
+                let mut depth = 0;
+                let mut j = i;
+                while j < lines.len() {
+                    let t = lines[j].trim();
+                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                        j += 1;
+                        continue;
+                    }
+                    // 检查是否遇到了新的顶层包（顶格且不是当前行）
+                    if j > i {
+                        let is_new_top = !lines[j].starts_with(' ')
+                            && !lines[j].starts_with('\t')
+                            && !t.is_empty()
+                            && !t.starts_with('#')
+                            && !t.starts_with("//");
+                        if is_new_top {
+                            // 当前块结束于 j-1
+                            ranges.push((start, j - 1));
+                            i = j;
+                            break;
+                        }
+                    }
+                    // 计算括号深度
+                    for ch in t.chars() {
+                        if ch == '{' {
+                            depth += 1;
+                        } else if ch == '}' {
+                            depth -= 1;
+                        }
+                    }
+                    if depth == 0 && j > i {
+                        ranges.push((start, j));
+                        i = j + 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                if i == start {
+                    // 未找到闭合，跳过该行
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    ranges
+}
+
 /// 查找包的所有定义范围（包级行及其块）
 fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let pkg_prefix = format!("{}", pkg);
@@ -977,7 +1055,7 @@ pub fn rule_upsert(
         if set.count() == 0 { None } else { Some(set) }
     }
 
-    // 规范化参数
+    // ---- 规范化参数 ----
     let (main_pkg, sub_thread) = if pkg.contains(':') {
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
@@ -991,18 +1069,33 @@ pub fn rule_upsert(
         (pkg.to_string(), thread.to_string())
     };
 
-    // 构建新规则集
+    let sub_name = if sub_thread.starts_with(':') {
+        sub_thread.trim_start_matches(':').to_string()
+    } else {
+        String::new()
+    };
+    let child_pkg = if !sub_name.is_empty() {
+        format!("{}:{}", main_pkg, sub_name)
+    } else {
+        String::new()
+    };
+
+    // ---- 构建新规则集合：删除旧目标规则，保留其他全部 ----
     let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        // 1. 删除所有 pkg 为 main_pkg:子包 且 thread 为空的规则（历史遗留，统一清理）
-        if r.pkg.starts_with(&format!("{}:", main_pkg)) && r.thread.is_empty() {
-            continue;
-        }
-        // 2. 删除主包下要替换的规则（主包包级或子包包级）
+        // 1. 跳过主包下旧子包包级规则（pkg=主包, thread=:子包）
         if r.pkg == main_pkg && r.thread == sub_thread {
             continue;
         }
-        // 3. 保留其他所有规则（包括主包线程规则、其他子包规则、其他主包规则等）
+        // 2. 跳过子包内部的所有规则（pkg=主包:子包），仅当操作子包时
+        if !child_pkg.is_empty() && r.pkg == child_pkg {
+            continue;
+        }
+        // 3. 跳过历史遗留的不带冒号的同名线程（如 MSF=e-core）
+        if !sub_name.is_empty() && r.pkg == main_pkg && r.thread == sub_name {
+            continue;
+        }
+        // 4. 保留其他所有规则（包括子包内部线程规则）
         new_rules.push(r.clone());
     }
 
@@ -1043,10 +1136,16 @@ pub fn rule_upsert(
     }
 
     if new_rules.is_empty() {
-        return RuleEdit::Ok;
+        // 没有新规则，删除该包所有规则
+        let ranges = find_all_package_ranges(&lines, &main_pkg);
+        for (start, end) in ranges.iter().rev() {
+            lines.drain(*start..=*end);
+        }
+        clean_empty_lines(&mut lines);
+        return file_write(config_path, &lines);
     }
 
-    // 构建新配置
+    // ---- 构建新配置 ----
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
@@ -1060,47 +1159,37 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // 生成新主包块
+    // ---- 生成新主包块 ----
     let new_block = build_package_block(&main_pkg, &new_cfg);
-    if new_block.is_empty() {
-        if let Some((start, end)) = find_package_range(&lines, &main_pkg) {
-            lines.drain(start..=end);
+
+    // ---- 删除所有同名旧块 ----
+    let ranges = find_all_package_ranges(&lines, &main_pkg);
+    if !ranges.is_empty() {
+        for (start, end) in ranges.iter().rev() {
+            lines.drain(*start..=*end);
         }
-        clean_empty_lines(&mut lines);
-        return file_write(config_path, &lines);
     }
 
-    // 替换旧块
-    if let Some((start, end)) = find_package_range(&lines, &main_pkg) {
-        // 安全检查：确保范围内没有其他顶层包
-        let block_text = &lines[start..=end];
-        let has_other_top = block_text.iter().enumerate().any(|(offset, line)| {
-            if offset == 0 {
-                return false;
-            }
-            let trimmed = line.trim();
-            !line.starts_with(' ')
-                && !line.starts_with('\t')
-                && !trimmed.is_empty()
-                && !trimmed.starts_with('#')
-                && !trimmed.starts_with("//")
-                && trimmed != "}"
-        });
-        if has_other_top {
-            eprintln!("警告: 主包范围误包含其他顶层包，拒绝替换");
-            return RuleEdit::Malformed;
-        }
-        lines.splice(start..=end, new_block);
-    } else {
+    // ---- 插入新块 ----
+    if !new_block.is_empty() {
+        // 如果文件末尾没有空行，先补一个
         if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
             lines.push(String::new());
         }
-        lines.extend(new_block);
-        lines.push(String::new());
+        // 如果之前有旧块，插入到第一个旧块的位置；否则追加到末尾
+        let insert_pos = ranges.first().map(|(s, _)| *s).unwrap_or(lines.len());
+        lines.splice(insert_pos..insert_pos, new_block);
+        // 确保块后有空行
+        if insert_pos + new_block.len() < lines.len()
+            && !lines[insert_pos + new_block.len()].trim().is_empty()
+        {
+            lines.insert(insert_pos + new_block.len(), String::new());
+        }
     }
 
     clean_empty_lines(&mut lines);
-    file_write(config_path, &lines)
+    let result = file_write(config_path, &lines);
+    result
 }
 
 /// 清理空块（若块内只有注释或空行，则删除整个块）
