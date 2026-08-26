@@ -984,8 +984,30 @@ pub fn rule_upsert(
         }
     }
 
+    // ★ 修复：如果 thread 以 ':' 开头，说明是子包操作
+    if thread.starts_with(':') {
+        eprintln!("[rule_upsert] 进入子包分支 (thread 以 ':' 开头)");
+        // thread 格式为 ":子包名"，去除前导 ':' 得到子包名
+        let sub = thread.trim_start_matches(':').trim();
+        if sub.is_empty() {
+            eprintln!("[rule_upsert] 子包名为空，无效");
+            return RuleEdit::Malformed;
+        }
+        if !cpus.is_empty() && validate_cpus(cpus, &cfg.topo).is_none() {
+            return RuleEdit::Malformed;
+        }
+        let result = write_sub_pkg_block(&mut lines, pkg, sub, "", cpus, comment, false);
+        eprintln!("[rule_upsert] 子包处理结果: {:?}", result);
+        if let RuleEdit::Ok = result {
+            clean_empty_lines(&mut lines);
+            return file_write(config_path, &lines);
+        }
+        return result;
+    }
+
+    // ★ 原有子包判断保留（兼容旧格式）
     if pkg.contains(':') {
-        eprintln!("[rule_upsert] 进入子包分支");
+        eprintln!("[rule_upsert] 进入子包分支 (pkg 包含 ':')");
         let parts: Vec<&str> = pkg.split(':').collect();
         if parts.len() == 2 {
             let main_pkg = parts[0];
@@ -1005,6 +1027,7 @@ pub fn rule_upsert(
         return RuleEdit::Ok;
     }
 
+    // ---- 以下是主包规则处理（thread 不以 ':' 开头，pkg 不含 ':'） ----
     eprintln!("[rule_upsert] 进入主包分支");
     let mut new_rules = Vec::new();
     for r in &cfg.rules {
@@ -1135,14 +1158,13 @@ pub fn rule_upsert(
     }
     eprintln!("[rule_upsert] 找到 {} 个旧块", ranges.len());
 
-    // ---- ★ 扩展范围以包含前置注释行（但不跨越空行） ----
+    // ---- 扩展范围以包含前置注释行（但不跨越空行） ----
     for (start, _) in &mut ranges {
         let mut s = *start;
         while s > 0 {
             let prev = s - 1;
             let trimmed = lines[prev].trim();
             if trimmed.is_empty() {
-                // 遇到空行停止，不包含该空行
                 break;
             }
             if trimmed.starts_with('#') || trimmed.starts_with("//") {
