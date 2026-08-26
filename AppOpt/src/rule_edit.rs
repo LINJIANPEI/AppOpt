@@ -993,7 +993,6 @@ pub fn rule_upsert(
             if !cpus.is_empty() && validate_cpus(cpus, &cfg.topo).is_none() {
                 return RuleEdit::Malformed;
             }
-            // 在子包分支中，解析 comment（Option<&str>）
             let result =
                 write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, comment, false);
             eprintln!("[rule_upsert] 子包处理结果: {:?}", result);
@@ -1136,13 +1135,17 @@ pub fn rule_upsert(
     }
     eprintln!("[rule_upsert] 找到 {} 个旧块", ranges.len());
 
-    // ---- ★ 扩展范围以包含前置注释行 ----
+    // ---- ★ 扩展范围以包含前置注释行（但不跨越空行） ----
     for (start, _) in &mut ranges {
         let mut s = *start;
         while s > 0 {
             let prev = s - 1;
             let trimmed = lines[prev].trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            if trimmed.is_empty() {
+                // 遇到空行停止，不包含该空行
+                break;
+            }
+            if trimmed.starts_with('#') || trimmed.starts_with("//") {
                 s = prev;
             } else {
                 break;
