@@ -629,7 +629,6 @@
         .grp-head {
             display: flex;
             align-items: flex-start;
-            /* 顶部对齐 */
             gap: 8px;
             padding: 14px 16px;
             cursor: pointer;
@@ -660,7 +659,7 @@
             transform: rotate(90deg);
         }
 
-        /* 应用名（注释）—— 大号粗体，左对齐 */
+        /* 应用名（注释）—— 大号粗体 */
         .grp-comment {
             font-weight: 700;
             font-size: 16px;
@@ -670,14 +669,13 @@
             border-radius: 0;
             flex: 1 1 100%;
             order: 1;
-            /* 在包名之前 */
             margin-bottom: 2px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
 
-        /* 包名（右侧）—— 灰色小字，放在应用名下方 */
+        /* 包名 —— 灰色小字，放在应用名下方 */
         .grp-name {
             flex: 1 1 100%;
             min-width: 0;
@@ -693,6 +691,7 @@
             font-weight: 400;
             order: 2;
             max-width: 100%;
+            display: block;
         }
 
         .grp-name marquee {
@@ -707,8 +706,8 @@
             font-weight: 400;
         }
 
-        .grp-name .static {
-            display: inline-block;
+        .grp-name-static {
+            display: block;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -717,6 +716,9 @@
             font-size: 12px;
             opacity: 0.8;
             font-weight: 400;
+            padding: 0 10px;
+            border-radius: 12px;
+            background: rgba(148, 163, 184, 0.15);
         }
 
         .grp-count {
@@ -780,6 +782,19 @@
             color: var(--sub);
             font-size: 12px;
             font-weight: 400;
+        }
+
+        .rule-comment {
+            color: var(--sub);
+            font-size: 11px;
+            opacity: 0.7;
+            background: var(--stat-bg);
+            padding: 0 6px;
+            border-radius: 8px;
+            white-space: nowrap;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .rule-add {
@@ -969,27 +984,6 @@
             margin-bottom: 16px;
         }
 
-        .modal input {
-            text-align: left;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            padding: 10px 14px;
-            font-size: 14px;
-            width: 100%;
-            margin-bottom: 10px;
-        }
-
-        .modal input:focus {
-            border-color: var(--blue);
-            background: var(--input-focus);
-        }
-
-        .modal .sg-wrap {
-            text-align: left;
-        }
-
-        /* 新增：应用名输入框样式 */
         .modal .field-group {
             margin-bottom: 10px;
             text-align: left;
@@ -1001,6 +995,26 @@
             color: var(--sub);
             margin-bottom: 4px;
             font-weight: 500;
+        }
+
+        .modal input {
+            text-align: left;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            font-size: 14px;
+            width: 100%;
+            margin-bottom: 0;
+        }
+
+        .modal input:focus {
+            border-color: var(--blue);
+            background: var(--input-focus);
+        }
+
+        .modal .sg-wrap {
+            text-align: left;
         }
 
         .modal-actions {
@@ -1097,12 +1111,18 @@
             align-items: center;
             gap: 8px;
             margin-bottom: 6px;
+            flex-wrap: wrap;
         }
 
         .tr-head input {
             flex: 1;
             min-width: 0;
             margin-bottom: 0;
+        }
+
+        .tr-head .rr-comment {
+            flex: 0.6;
+            min-width: 60px;
         }
 
         .tr-tag {
@@ -1455,27 +1475,17 @@
                 margin-left: 4px;
                 padding-left: 8px;
             }
+
+            .tr-head .rr-comment {
+                flex: 1;
+                min-width: 50px;
+            }
         }
 
         @media(min-width:600px) {
             .core-grid {
                 grid-template-columns: 1fr 1fr;
             }
-        }
-
-        .grp-name-static {
-            display: block;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 100%;
-            color: #94a3b8;
-            font-size: 12px;
-            opacity: 0.8;
-            font-weight: 400;
-            padding: 0 10px;
-            border-radius: 12px;
-            background: rgba(148, 163, 184, 0.15);
         }
     </style>
 </head>
@@ -1685,7 +1695,6 @@
     <div id="modal-rule" class="modal-bg" hidden>
         <div class="modal">
             <h3 id="mr-title">添加应用</h3>
-            <!-- 新增应用名输入框 -->
             <div class="field-group">
                 <label for="mr-appname">📝 应用名（可选）</label>
                 <input id="mr-appname" placeholder="例如：微信">
@@ -1890,11 +1899,20 @@
             } catch (e) { toast(e.message); }
         }
 
-        // 新布局：应用名（comment）在上，包名在下
+        function checkOverflow() {
+            document.querySelectorAll('.grp-name-static').forEach(el => {
+                if (el.scrollWidth > el.clientWidth) {
+                    const text = el.textContent;
+                    el.innerHTML = `<marquee behavior="scroll" direction="left" scrollamount="3">${text}</marquee>`;
+                    el.style.background = 'rgba(148,163,184,0.15)';
+                    el.style.padding = '0 10px';
+                    el.style.borderRadius = '12px';
+                }
+            });
+        }
+
         function grpInner(g, gi) {
             const commentHtml = g.comment ? `<span class="grp-comment">${esc(g.comment)}</span>` : '';
-            const pkgText = esc(g.pkg);
-            const isLong = g.pkg.length > 12;
             const pkgHtml = `<span class="grp-name-static" title="${esc(g.pkg)}">${esc(g.pkg)}</span>`;
 
             let html = `
@@ -1902,7 +1920,7 @@
           <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
           <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
             ${commentHtml}
-            <span class="grp-name">${pkgHtml}</span>
+            ${pkgHtml}
           </div>
           <span class="grp-count">${(g.items ? g.items.length : 0) + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
           <div class="grp-actions">
@@ -1916,9 +1934,11 @@
                 for (const it of g.items) {
                     const isPkgRule = !it.thread;
                     const displayName = isPkgRule ? '<span class="rule-sub">包级默认</span>' : esc(it.thread);
+                    const commentTag = it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : '';
                     html += `
             <div class="rule-row">
               <span class="rule-name">${displayName}</span>
+              ${commentTag}
               ${chipGroupHtml(it.spec)}
               <button class="icon-btn" data-edit="main:${gi}:${it.thread || ''}" title="编辑">${ICO_EDIT}</button>
               <button class="icon-btn danger" data-del="main:${gi}:${it.thread || ''}" title="删除">${ICO_TRASH}</button>
@@ -1942,9 +1962,11 @@
               </div>
               <div class="sub-inner">`;
                     if (pkgRule) {
+                        const commentTag = pkgRule.comment ? `<span class="rule-comment">${esc(pkgRule.comment)}</span>` : '';
                         html += `
                 <div class="rule-row">
                   <span class="rule-name"><span class="rule-sub">包级默认</span></span>
+                  ${commentTag}
                   ${chipGroupHtml(pkgRule.spec)}
                   <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
                   <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
@@ -1956,9 +1978,11 @@
                 </div>`;
                     }
                     for (const it of threadRules) {
+                        const commentTag = it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : '';
                         html += `
                 <div class="rule-row">
                   <span class="rule-name">${esc(it.thread)}</span>
+                  ${commentTag}
                   ${chipGroupHtml(it.spec)}
                   <button class="icon-btn" data-edit="sub:${gi}:${sub}:${it.thread}" title="编辑线程规则">${ICO_EDIT}</button>
                   <button class="icon-btn danger" data-del="sub:${gi}:${sub}:${it.thread}" title="删除线程规则">${ICO_TRASH}</button>
@@ -2013,23 +2037,13 @@
                 }
                 tip.innerHTML = f ? '无匹配应用' : '<span class="empty-icon">📭</span>暂无规则<br>点击右上角「添加」创建第一条规则';
             } else tip?.remove();
-            setTimeout(checkOverflow, 50); // 延迟确保 DOM 渲染完成
+            setTimeout(checkOverflow, 50);
         }
-        function checkOverflow() {
-            document.querySelectorAll('.grp-name-static').forEach(el => {
-                if (el.scrollWidth > el.clientWidth) {
-                    const text = el.textContent;
-                    el.innerHTML = `<marquee behavior="scroll" direction="left" scrollamount="3">${text}</marquee>`;
-                    el.style.background = 'rgba(148,163,184,0.15)';
-                    el.style.padding = '0 10px';
-                    el.style.borderRadius = '12px';
-                }
-            });
-        }
+
         $('r-filter').addEventListener('input', renderRules);
 
         // ============================================================
-        //  规则列表事件（略作调整，配合新布局）
+        //  规则列表事件
         // ============================================================
         $('r-list').addEventListener('click', e => {
             const ea = e.target.closest('[data-editapp]');
@@ -2110,7 +2124,7 @@
         });
 
         // ============================================================
-        //  规则编辑弹窗（增加应用名输入）
+        //  规则编辑弹窗
         // ============================================================
         async function fetchTopo() {
             if (!topoCores) try {
@@ -2129,7 +2143,7 @@
             return { custom: true, customVal: spec };
         }
 
-        const mkRow = o => ({ thread: '', sem: [], all: false, custom: false, customVal: '', ...o });
+        const mkRow = o => ({ thread: '', sem: [], all: false, custom: false, customVal: '', comment: '', ...o });
 
         function specOf(r) {
             if (r.custom) return r.customVal.trim();
@@ -2180,6 +2194,7 @@
                     return `<div class="tree-row branch" data-ri="${i}">
                 <div class="tr-head sg-wrap">
                   <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
+                  <input class="rr-comment" placeholder="注释" value="${esc(r.comment || '')}">
                   <div class="sg-box" hidden></div>
                   ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
                 </div>
@@ -2234,6 +2249,7 @@
             const r = mrRows[+e.target.closest('[data-ri]')?.dataset.ri];
             if (!r) return;
             if (e.target.classList.contains('rr-thread')) r.thread = e.target.value.trim();
+            if (e.target.classList.contains('rr-comment')) r.comment = e.target.value.trim();
             if (e.target.classList.contains('rr-custom')) r.customVal = e.target.value;
         });
 
@@ -2282,7 +2298,7 @@
                 mrHadPkgRule = !!pkgItem;
                 mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
                 for (const it of g.items) {
-                    if (it.thread) mrRows.push(mkRow({ thread: it.thread, ...parseSpec(it.spec) }));
+                    if (it.thread) mrRows.push(mkRow({ thread: it.thread, comment: it.comment || '', ...parseSpec(it.spec) }));
                 }
             } else if (mode === 'edit-pkg') {
                 $('mr-title').textContent = '📦 包级默认规则';
@@ -2307,7 +2323,7 @@
                 appInput.value = g.comment || '';
                 const item = g.items.find(it => it.thread === thread);
                 mrOldThread = thread;
-                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+                const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
             } else if (mode === 'add-sub') {
@@ -2329,7 +2345,7 @@
                 $('mr-addrow').hidden = true;
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
-                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, ...(item ? parseSpec(item.spec) : {}) })];
+                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '🧵 添加子包线程规则';
                 const g = rulesData[gi];
@@ -2346,7 +2362,7 @@
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => it.thread === thread) : null;
                 mrOldThread = thread;
-                const row = mkRow({ thread: thread, ...(item ? parseSpec(item.spec) : {}) });
+                const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
             }
@@ -2372,16 +2388,19 @@
             const jobs = [];
             for (const r of mrRows) {
                 const spec = specOf(r);
-                if (r.pkgRow) { if (spec) jobs.push({ thread: '', cpus: spec }); continue; }
+                if (r.pkgRow) {
+                    if (spec) jobs.push({ thread: '', cpus: spec, comment: appName });
+                    continue;
+                }
                 if (!r.thread && !spec) continue;
                 if (!r.thread) return toast('请输入线程名');
                 if (!spec) return toast(r.custom ? '请输入自定义 CPU 范围，如 0-3' : '请选择 CPU 核心');
-                jobs.push({ thread: r.thread, cpus: spec });
+                jobs.push({ thread: r.thread, cpus: spec, comment: r.comment || '' });
             }
             if (!jobs.length) return toast('请至少配置一条规则');
             mrSaving = true;
             try {
-                // 对于非子包添加模式，统一处理
+                // 子包添加
                 if (mrMode === 'add-sub') {
                     let subInput = jobs[0].thread.trim();
                     if (!subInput.startsWith(':')) subInput = ':' + subInput;
@@ -2409,7 +2428,7 @@
                     for (const j of jobs) {
                         const threadName = j.thread.trim();
                         if (!threadName) return toast('请输入线程名');
-                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: appName });
+                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: j.comment });
                     }
                     toast('子包线程规则已添加');
                     loadRules();
@@ -2425,7 +2444,7 @@
                         if (mrOldThread && mrOldThread !== threadName) {
                             await api('/api/rule/del', { pkg: fullPkg, thread: mrOldThread });
                         }
-                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: appName });
+                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: j.comment });
                     }
                     toast('子包线程规则已更新');
                     loadRules();
@@ -2434,7 +2453,7 @@
                     return;
                 }
 
-                // 主包相关操作
+                // 主包相关
                 if (mrMode === 'edit-app') {
                     if (pkg !== mrOldPkg) await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
                     const cur = new Set(jobs.map(j => j.thread));
@@ -2444,17 +2463,23 @@
                 if (mrMode === 'edit-thread' && mrOldThread !== jobs[0].thread)
                     await api('/api/rule/del', { pkg, thread: mrOldThread });
 
-                // 保存规则（包括包级和线程），同时传递 comment
+                // 保存所有规则
                 for (let i = 0; i < jobs.length; i++) {
                     const j = jobs[i];
                     if (j.thread.startsWith(':')) continue;
+                    const isPkg = j.thread === '';
+                    const body = {
+                        pkg,
+                        thread: j.thread,
+                        cpus: j.cpus,
+                    };
+                    if (isPkg) {
+                        body.comment = appName; // 包级规则使用应用名
+                    } else {
+                        body.comment = j.comment || ''; // 线程规则使用各自的注释
+                    }
                     try {
-                        await api('/api/rule', {
-                            pkg,
-                            thread: j.thread,
-                            cpus: j.cpus,
-                            comment: appName
-                        });
+                        await api('/api/rule', body);
                     } catch (e) {
                         return toast(`第${i + 1}条（${j.thread || '包级'}）失败：${e.message}`);
                     }
@@ -2466,7 +2491,7 @@
         };
 
         // ============================================================
-        //  建议下拉（保持不变）
+        //  建议下拉
         // ============================================================
         function suggest_bind(input, box, opts = {}) {
             let seq = 0,
@@ -2542,7 +2567,7 @@
         });
 
         // ============================================================
-        //  确认删除（保持不变）
+        //  确认删除
         // ============================================================
         let confirmCb = null;
 
@@ -2570,7 +2595,7 @@
         };
 
         // ============================================================
-        //  设置页（保持不变）
+        //  设置页
         // ============================================================
         async function loadCfg() {
             try {
@@ -2609,7 +2634,7 @@
         $('c-file-save').onclick = () => saveField({ config_file: $('c-file').value.trim() });
 
         // ============================================================
-        //  主题管理（自动适应 + 手动切换）
+        //  主题管理
         // ============================================================
         const themeSelector = document.getElementById('theme-selector');
         const themeBtns = themeSelector.querySelectorAll('button');
@@ -2666,7 +2691,7 @@
         initTheme();
 
         // ============================================================
-        //  关于页（保持不变）
+        //  关于页
         // ============================================================
         $('c-about').onclick = async () => {
             $('page-about').classList.add('show');

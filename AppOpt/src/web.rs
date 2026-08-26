@@ -395,9 +395,13 @@ fn rule_api(req: &Request) -> (u16, String) {
             return err_json(400, "缺少 pkg 或 cpus 字段");
         };
         let thread = v["thread"].as_str().map(str::trim).unwrap_or("");
-        let comment = v["comment"].as_str().map(str::trim).unwrap_or(""); // 新增
+        // 解析 comment，只有存在且非空才传递
+        let comment = v.get("comment")
+            .and_then(|c| c.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         eprintln!(
-            "[rule_api] pkg='{}', thread='{}', cpus='{}', comment='{}'",
+            "[rule_api] pkg='{}', thread='{}', cpus='{}', comment={:?}",
             pkg, thread, cpus, comment
         );
 
@@ -421,7 +425,7 @@ fn rule_api(req: &Request) -> (u16, String) {
 
         let file = lock_ignore_poison(&CONFIG_FILE).clone();
         eprintln!("[rule_api] 调用 rule_upsert...");
-        let result = rule_upsert(&file, pkg, thread, cpus, comment, &cfg); // 传递 comment
+        let result = rule_upsert(&file, pkg, thread, cpus, comment.as_deref(), &cfg);
         eprintln!("[rule_api] rule_upsert 返回: {:?}", result);
 
         match result {

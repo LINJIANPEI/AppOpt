@@ -967,7 +967,7 @@ pub fn rule_upsert(
     pkg: &str,
     thread: &str,
     cpus: &str,
-    comment: &str,
+    comment: &str, // 改为 String
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
     use std::collections::HashSet;
@@ -1048,7 +1048,7 @@ pub fn rule_upsert(
             } else {
                 String::new()
             };
-            // ★ 构造新规则时保存 comment
+
             let new_rule = crate::config::AffinityRule {
                 pkg: pkg.to_string(),
                 thread: thread.to_string(),
@@ -1056,7 +1056,7 @@ pub fn rule_upsert(
                 cpuset_dir,
                 cpus: cpuset,
                 spec: cpus.to_string(),
-                comment: comment.to_string(), // 新增
+                comment: comment.to_string(), // 使用传入的 comment
             };
             new_rules.push(new_rule);
             eprintln!("[rule_upsert] 新规则已加入，总数={}", new_rules.len());
@@ -1513,7 +1513,7 @@ pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)>
     None
 }
 
-/// 根据 AppConfig 中的规则生成规范化的主包块（包含子包嵌套），并保留注释
+/// 根据 AppConfig 中的规则生成规范化的主包块（包含子包嵌套），并保留所有注释
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
     use std::collections::{BTreeMap, HashSet};
     let mut block = Vec::new();
@@ -1568,7 +1568,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         return block;
     }
 
-    // ---- 5. 生成主包第一行 ----
+    // ---- 5. 生成主包第一行（包级规则，带注释） ----
     let pkg_cpus: Vec<&str> = main_rules
         .iter()
         .filter(|r| r.thread.is_empty())
@@ -1580,7 +1580,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         .map(|&r| r)
         .collect();
 
-    // 包级规则取第一个
     let first_pkg_rule = main_rules.iter().find(|r| r.thread.is_empty());
     let spec_str = pkg_cpus.join(",");
     let first_line = if pkg_cpus.is_empty() {
@@ -1598,7 +1597,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     };
     block.push(first_line);
 
-    // ---- 6. 写入主包线程规则，带上行尾注释 ----
+    // ---- 6. 写入主包线程规则（带各自的注释） ----
     for rule in thread_rules {
         let mut line = format!("    {}={}", rule.thread, rule.spec);
         if !rule.comment.is_empty() {
@@ -1607,7 +1606,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         block.push(line);
     }
 
-    // ---- 7. 写入子包 ----
+    // ---- 7. 写入子包（保留包级和线程各自的注释） ----
     for (sub_name, sub_rules_vec) in sub_rules {
         let sub_cpus: Vec<&str> = sub_rules_vec
             .iter()
@@ -1620,7 +1619,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
             .map(|&r| r)
             .collect();
 
-        // 子包包级规则行，也带上注释
         let first_sub_rule = sub_rules_vec.iter().find(|r| r.thread.is_empty());
         let sub_first = if sub_cpus.is_empty() {
             format!("    :{} {{", sub_name)
@@ -1652,7 +1650,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     block.push("}".to_string());
     block
 }
-
 
 /// 规范化主包：删除所有顶格子包独立块，替换主包块为规范化新块，保留块外注释
 pub fn normalize_package_block(
