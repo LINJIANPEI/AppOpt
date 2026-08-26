@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
@@ -1452,7 +1452,6 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
 
 // ========== 新增规范化函数 ==========
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
-
     // ---- 子包节点结构 ----
     #[derive(Clone)]
     struct SubPkg {
