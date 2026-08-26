@@ -960,7 +960,6 @@ pub fn rule_upsert(
     use std::collections::HashSet;
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
 
-    // 读取文件
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
         .lines()
@@ -978,7 +977,7 @@ pub fn rule_upsert(
         if set.count() == 0 { None } else { Some(set) }
     }
 
-    // ---- 规范化参数 ----
+    // 规范化参数
     let (main_pkg, sub_thread) = if pkg.contains(':') {
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
@@ -992,33 +991,18 @@ pub fn rule_upsert(
         (pkg.to_string(), thread.to_string())
     };
 
-    let sub_name = if sub_thread.starts_with(':') {
-        sub_thread.trim_start_matches(':').to_string()
-    } else {
-        String::new()
-    };
-    let child_pkg = if !sub_name.is_empty() {
-        format!("{}:{}", main_pkg, sub_name)
-    } else {
-        String::new()
-    };
-
-    // ---- 构建新规则集合：删除旧目标规则，保留其他全部 ----
+    // 构建新规则集
     let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        // 情况1：当前要替换的规则（主包包级或子包包级）
+        // 1. 删除所有 pkg 为 main_pkg:子包 且 thread 为空的规则（历史遗留，统一清理）
+        if r.pkg.starts_with(&format!("{}:", main_pkg)) && r.thread.is_empty() {
+            continue;
+        }
+        // 2. 删除主包下要替换的规则（主包包级或子包包级）
         if r.pkg == main_pkg && r.thread == sub_thread {
             continue;
         }
-        // 情况2：若操作子包，还要删除可能存在的旧子包内部包级规则（pkg=child_pkg, thread=""）
-        if !child_pkg.is_empty() && r.pkg == child_pkg && r.thread.is_empty() {
-            continue;
-        }
-        // 情况3：删除历史遗留的、不带冒号的同名线程（如 MSF=e-core）
-        if !sub_name.is_empty() && r.pkg == main_pkg && r.thread == sub_name {
-            continue;
-        }
-        // ★ 保留所有其他规则，包括子包内部线程规则
+        // 3. 保留其他所有规则（包括主包线程规则、其他子包规则、其他主包规则等）
         new_rules.push(r.clone());
     }
 
@@ -1062,7 +1046,7 @@ pub fn rule_upsert(
         return RuleEdit::Ok;
     }
 
-    // ---- 构建新配置 ----
+    // 构建新配置
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
@@ -1076,10 +1060,9 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // ---- 生成新主包块 ----
+    // 生成新主包块
     let new_block = build_package_block(&main_pkg, &new_cfg);
     if new_block.is_empty() {
-        // 如果没有内容，删除整个主包块
         if let Some((start, end)) = find_package_range(&lines, &main_pkg) {
             lines.drain(start..=end);
         }
@@ -1087,9 +1070,9 @@ pub fn rule_upsert(
         return file_write(config_path, &lines);
     }
 
-    // ---- 替换旧主包块 ----
+    // 替换旧块
     if let Some((start, end)) = find_package_range(&lines, &main_pkg) {
-        // 检查范围是否包含其他顶层包（防止误删）
+        // 安全检查：确保范围内没有其他顶层包
         let block_text = &lines[start..=end];
         let has_other_top = block_text.iter().enumerate().any(|(offset, line)| {
             if offset == 0 {
@@ -1107,10 +1090,8 @@ pub fn rule_upsert(
             eprintln!("警告: 主包范围误包含其他顶层包，拒绝替换");
             return RuleEdit::Malformed;
         }
-        // 替换
         lines.splice(start..=end, new_block);
     } else {
-        // 主包不存在，直接插入
         if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
             lines.push(String::new());
         }
@@ -1119,8 +1100,7 @@ pub fn rule_upsert(
     }
 
     clean_empty_lines(&mut lines);
-    let result = file_write(config_path, &lines);
-    result
+    file_write(config_path, &lines)
 }
 
 /// 清理空块（若块内只有注释或空行，则删除整个块）
