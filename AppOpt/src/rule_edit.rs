@@ -1598,128 +1598,72 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     block
 }
 
-pub fn normalize_package_block(
-    lines: &mut Vec<String>,
-    pkg: &str,
-    cfg: &crate::config::AppConfig,
-) -> bool {
+fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
-
-    // 1. 收集所有主包块（以 pkg 开头的顶格行）
-    ranges.extend(find_all_package_ranges(lines, pkg));
-
-    // 2. 收集所有独立子包块（以 "pkg:" 开头的顶格行，例如 com.example:sub=cpus）
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
-            // 获取完整块范围（子包可能带有 =cpus 或 { }）
-            let block_name = trimmed.split('=').next().unwrap_or(trimmed);
-            if let Some((s, e)) = find_package_range(lines, block_name) {
-                ranges.push((s, e));
-                i = e + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    // 3. 扩展每个范围：向前包含连续的顶格注释，向后包含孤立的顶格 }
-    let mut extended_ranges = Vec::new();
-    for (start, end) in ranges {
-        let mut s = start;
-        let mut e = end;
-
-        // 向前扩展：连续的顶格注释行（# 开头，无缩进）
-        while s > 0 {
-            let prev = s - 1;
-            let trimmed = lines[prev].trim();
-            if trimmed.is_empty() {
-                break;
-            }
-            if lines[prev].starts_with('#')
-                && !lines[prev].starts_with(' ')
-                && !lines[prev].starts_with('\t')
-            {
-                s = prev;
-            } else {
-                break;
-            }
-        }
-
-        // 向后扩展：孤立的顶格 } 行（无缩进，且不是其他块的一部分）
-        let mut next = e + 1;
-        while next < lines.len() {
-            let trimmed = lines[next].trim();
-            if trimmed == "}" && !lines[next].starts_with(' ') && !lines[next].starts_with('\t') {
-                e = next;
-                next += 1;
-            } else if trimmed.is_empty() {
-                // 遇到空行停止，防止误删其他块间的空行
-                break;
-            } else {
-                break;
-            }
-        }
-
-        extended_ranges.push((s, e));
-    }
-
-    // 4. 合并重叠范围（如果有多个块相邻或重叠）
-    if !extended_ranges.is_empty() {
-        extended_ranges.sort_by_key(|(s, _)| *s);
-        let mut merged = Vec::new();
-        let mut cur = extended_ranges[0];
-        for (s, e) in extended_ranges.iter().skip(1) {
-            if *s <= cur.1 + 1 {
-                cur.1 = cur.1.max(*e);
-            } else {
-                merged.push(cur);
-                cur = (*s, *e);
-            }
-        }
-        merged.push(cur);
-        extended_ranges = merged;
-    }
-
-    // 5. 删除所有扩展后的范围（从后往前删，保持索引有效）
-    for (start, end) in extended_ranges.iter().rev() {
-        lines.drain(*start..=*end);
-    }
-
-    // 6. 生成新块
-    let new_block = build_package_block(pkg, cfg);
-    if new_block.is_empty() {
-        // 无规则，已删除全部
-        return true;
-    }
-
-    // 7. 插入新块（在第一个旧块位置，或文件末尾）
-    let insert_pos = if !extended_ranges.is_empty() {
-        extended_ranges[0].0
-    } else {
-        lines.len()
-    };
-
-    // 确保插入前有空行
-    if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
-        lines.insert(insert_pos, String::new());
-        let actual_pos = insert_pos + 1;
-        let block_len = new_block.len();
-        lines.splice(actual_pos..actual_pos, new_block);
-        if actual_pos + block_len < lines.len() && !lines[actual_pos + block_len].trim().is_empty()
+        if is_top_level
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with("//")
         {
-            lines.insert(actual_pos + block_len, String::new());
-        }
-    } else {
-        let block_len = new_block.len();
-        lines.splice(insert_pos..insert_pos, new_block);
-        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
-        {
-            lines.insert(insert_pos + block_len, String::new());
+            let line_pkg = trimmed
+                .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
+                .next()
+                .unwrap_or("");
+            if line_pkg == pkg {
+                let start = i;
+                let has_brace = trimmed.contains('{');
+                if !has_brace {
+                    ranges.push((start, start));
+                    i += 1;
+                    continue;
+                }
+                let mut depth = 0;
+                let mut j = i;
+                while j < lines.len() {
+                    let t = lines[j].trim();
+                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                        j += 1;
+                        continue;
+                    }
+                    if j > i {
+                        let is_new_top = !lines[j].starts_with(' ')
+                            && !lines[j].starts_with('\t')
+                            && !t.is_empty()
+                            && !t.starts_with('#')
+                            && !t.starts_with("//");
+                        if is_new_top {
+                            ranges.push((start, j - 1));
+                            i = j;
+                            break;
+                        }
+                    }
+                    for ch in t.chars() {
+                        if ch == '{' {
+                            depth += 1;
+                        } else if ch == '}' {
+                            depth -= 1;
+                        }
+                    }
+                    if depth == 0 && j > i {
+                        ranges.push((start, j));
+                        i = j + 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                if i == start {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
         }
     }
-
-    true
+    ranges
 }
