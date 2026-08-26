@@ -1483,15 +1483,16 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
 
 // ========== 新增规范化函数 ==========
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
-    // ---- 子包节点结构 ----
+    use std::collections::BTreeMap;
+
     #[derive(Clone)]
     struct SubPkg {
-        pkg_rule: Option<crate::config::AffinityRule>, // 包级规则（thread 为空，spec 非空）
-        threads: Vec<crate::config::AffinityRule>,     // 线程规则（thread 不以 ':' 开头）
-        subs: BTreeMap<String, SubPkg>,                // 子包（key 为子包名）
+        pkg_rule: Option<crate::config::AffinityRule>,
+        threads: Vec<crate::config::AffinityRule>,
+        subs: BTreeMap<String, SubPkg>,
     }
 
-    // ---- 递归构建子包树 ----
+    // 递归构建子包树，同时支持外部和内部规则
     fn build_sub_pkg_tree(
         parent_pkg: &str,
         cfg: &crate::config::AppConfig,
@@ -1504,7 +1505,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         let mut threads: Vec<crate::config::AffinityRule> = Vec::new();
         let mut subs: BTreeMap<String, SubPkg> = BTreeMap::new();
 
-        // 收集直接属于 parent_pkg 的规则
+        // 收集直接属于 parent_pkg 的规则（外部形式）
         for rule in cfg.rules.iter().filter(|r| r.pkg == parent_pkg) {
             if rule.thread.is_empty() {
                 pkg_rule = Some(rule.clone());
@@ -1516,7 +1517,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
                         threads: Vec::new(),
                         subs: BTreeMap::new(),
                     });
-                    // 该规则本身就是子包的包级规则
                     entry.pkg_rule = Some(rule.clone());
                 }
             } else {
@@ -1524,36 +1524,71 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
             }
         }
 
-        // 递归处理子包的内部规则（pkg = parent_pkg:子包名）
+        // 收集内部子包规则（pkg = parent_pkg:子包名）
+        for rule in cfg
+            .rules
+            .iter()
+            .filter(|r| r.pkg.starts_with(&format!("{}:", parent_pkg)))
+        {
+            if let Some(stripped) = rule.pkg.strip_prefix(&format!("{}:", parent_pkg)) {
+                let sub_name = stripped.trim();
+                if !sub_name.is_empty() && rule.thread.is_empty() {
+                    // 内部形式的包级规则
+                    let entry = subs.entry(sub_name.to_string()).or_insert_with(|| SubPkg {
+                        pkg_rule: None,
+                        threads: Vec::new(),
+                        subs: BTreeMap::new(),
+                    });
+                    // 如果外部已有包级规则，跳过；否则使用内部规则
+                    if entry.pkg_rule.is_none() {
+                        entry.pkg_rule = Some(rule.clone());
+                    }
+                } else if !sub_name.is_empty()
+                    && !rule.thread.is_empty()
+                    && !rule.thread.starts_with(':')
+                {
+                    // 内部子包的线程规则
+                    let entry = subs.entry(sub_name.to_string()).or_insert_with(|| SubPkg {
+                        pkg_rule: None,
+                        threads: Vec::new(),
+                        subs: BTreeMap::new(),
+                    });
+                    entry.threads.push(rule.clone());
+                }
+            }
+        }
+
+        // 递归处理子包的内部规则（深度遍历）
         let sub_names: Vec<String> = subs.keys().cloned().collect();
         for sub_name in sub_names {
             let child_pkg = format!("{}:{}", parent_pkg, sub_name);
             let (child_pkg_rule, child_threads, child_subs) = build_sub_pkg_tree(&child_pkg, cfg);
             let entry = subs.get_mut(&sub_name).unwrap();
-            // 递归返回的包级规则优先（可能包含更完整的 spec）
-            if let Some(rule) = child_pkg_rule {
-                entry.pkg_rule = Some(rule);
+            if entry.pkg_rule.is_none() {
+                entry.pkg_rule = child_pkg_rule;
             }
-            entry.threads = child_threads;
-            entry.subs = child_subs;
+            entry.threads.extend(child_threads);
+            // 合并子子包
+            for (k, v) in child_subs {
+                entry.subs.entry(k).or_insert(v);
+            }
         }
 
         (pkg_rule, threads, subs)
     }
 
-    // ---- 构建主包树 ----
     let (main_pkg_rule, main_threads, main_subs) = build_sub_pkg_tree(pkg, cfg);
 
     let mut block = Vec::new();
 
-    // ---- 主包独立注释 ----
+    // 主包独立注释
     if let Some(rule) = &main_pkg_rule {
         if !rule.comment.is_empty() {
             block.push(format!("# {}", rule.comment));
         }
     }
 
-    // ---- 主包第一行 ----
+    // 主包第一行
     let spec_str = main_pkg_rule
         .as_ref()
         .map(|r| r.spec.as_str())
@@ -1565,7 +1600,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     };
     block.push(first_line);
 
-    // ---- 主包线程规则（缩进 4） ----
+    // 主包线程规则（缩进 4）
     for rule in &main_threads {
         let mut line = format!("    {}={}", rule.thread, rule.spec);
         if !rule.comment.is_empty() {
@@ -1574,7 +1609,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         block.push(line);
     }
 
-    // ---- 递归生成子包 ----
+    // 递归生成子包
     fn generate_sub_pkg(sub_name: &str, sub: &SubPkg, indent: usize, block: &mut Vec<String>) {
         let indent_str = "    ".repeat(indent);
         let inner_indent = "    ".repeat(indent + 1);
@@ -1586,7 +1621,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
             }
         }
 
-        // 决定生成单行还是块
         let has_pkg_cpus = sub.pkg_rule.as_ref().map_or(false, |r| !r.spec.is_empty());
         let has_content = !sub.threads.is_empty() || !sub.subs.is_empty();
 
@@ -1595,7 +1629,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
             let spec = sub.pkg_rule.as_ref().unwrap().spec.as_str();
             block.push(format!("{}:{}={}", indent_str, sub_name, spec));
         } else {
-            // 有内容或需要开块
             let sub_first = if has_pkg_cpus {
                 let spec = sub.pkg_rule.as_ref().unwrap().spec.as_str();
                 format!("{}:{}={} {{", indent_str, sub_name, spec)
@@ -1604,7 +1637,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
             };
             block.push(sub_first);
 
-            // 线程规则（缩进 +1）
             for rule in &sub.threads {
                 let mut line = format!("{}{}={}", inner_indent, rule.thread, rule.spec);
                 if !rule.comment.is_empty() {
@@ -1613,24 +1645,20 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
                 block.push(line);
             }
 
-            // 递归生成子包的子包
             for (child_name, child_sub) in &sub.subs {
                 generate_sub_pkg(child_name, child_sub, indent + 1, block);
             }
 
-            // 闭合块
             block.push(format!("{}}}", indent_str));
         }
     }
 
-    // 生成所有顶级子包（缩进 1）
     for (sub_name, sub) in &main_subs {
         generate_sub_pkg(sub_name, sub, 1, &mut block);
     }
 
-    // 主包闭合
     block.push("}".to_string());
-    block.push(String::new()); // 末尾空行
+    block.push(String::new());
 
     block
 }
