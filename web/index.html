@@ -1692,7 +1692,7 @@
         // ============================================================
         const $ = id => document.getElementById(id);
         const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
+        let mrOldSubThreads = [];
         function fmtUp(s) {
             s = +s || 0;
             const d = Math.floor(s / 86400),
@@ -2098,8 +2098,9 @@
         function renderRows() {
             const box = $('mr-rows'),
                 tree = isTree();
-            // 对于添加线程 / 编辑线程模式，隐藏行内注释框（rr-comment）
-            const hideComment = mrMode === 'edit-thread' || mrMode === 'edit-sub-thread' || mrMode === 'add-thread' || mrMode === 'add-sub-thread';
+            // 对于添加线程 / 编辑线程 / 添加子进程，隐藏行内注释框（rr-comment）
+            // 添加子进程（add-sub）也不需要尾行注释
+            const hideComment = mrMode === 'edit-thread' || mrMode === 'edit-sub-thread' || mrMode === 'add-thread' || mrMode === 'add-sub-thread' || mrMode === 'add-sub';
             box.innerHTML = mrRows.map((r, i) => {
                 if (r.pkgRow === true) {
                     return `<div class="tree-row" data-ri="${i}">
@@ -2108,7 +2109,7 @@
                         <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
                     </div>`;
                 } else {
-                    // 若为添加/编辑线程模式，不显示 rr-comment
+                    // 若为添加/编辑线程/添加子进程模式，不显示 rr-comment
                     const commentInput = hideComment ? '' :
                         `<input class="rr-comment" placeholder="行尾注释（可选）" value="${esc(r.comment || '')}" style="flex:0.6; min-width:60px;">`;
                     return `<div class="tree-row branch" data-ri="${i}">
@@ -2195,7 +2196,6 @@
             appInput.value = '';
             $('mr-addrow').hidden = !tree;
 
-            // 判断是否为线程编辑/添加模式，以便统一布局
             const isThreadMode = mode === 'edit-thread' || mode === 'edit-sub-thread' || mode === 'add-thread' || mode === 'add-sub-thread';
 
             if (mode === 'add-pkg') {
@@ -2206,18 +2206,24 @@
                 appInput.value = '';
                 appInput.placeholder = '例如：微信';
                 mrRows = [mkRow({ pkgRow: true })];
+                mrOldPkg = '';
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = -1;
+                mrOldSubThreads = [];
             } else if (mode === 'edit-app') {
                 $('mr-title').textContent = '✏️ 编辑应用';
                 label.textContent = '📝 应用名（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
-                pkgInput.readOnly = true;
+                pkgInput.readOnly = false;
                 appInput.value = g.comment || '';
-                mrOldAppName = g.comment || '';
                 mrOldPkg = g.pkg;
                 mrOldThreads = new Set(g.items.filter(it => it.thread).map(it => it.thread));
+                mrHadPkgRule = g.items.some(it => !it.thread);
+                mrOldGi = gi;
+                mrOldSubThreads = [];
                 const pkgItem = g.items.find(it => !it.thread);
-                mrHadPkgRule = !!pkgItem;
                 mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
                 for (const it of g.items) {
                     if (it.thread) mrRows.push(mkRow({ thread: it.thread, comment: it.comment || '', ...parseSpec(it.spec) }));
@@ -2227,20 +2233,29 @@
                 label.textContent = '📝 应用名（可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
-                pkgInput.readOnly = true;
+                pkgInput.readOnly = false;
                 appInput.value = g.comment || '';
                 const item = g.items.find(it => !it.thread);
                 mrRows = [mkRow({ pkgRow: true, ...(item ? parseSpec(item.spec) : {}) })];
+                mrOldPkg = g.pkg;
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = gi;
+                mrOldSubThreads = [];
             } else if (mode === 'add-thread') {
                 $('mr-title').textContent = '🧵 添加线程规则';
-                // 改为“注释”，与编辑线程一致
                 label.textContent = '📝 注释';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
-                appInput.value = '';                     // 清空，不继承应用注释
+                appInput.value = '';
                 appInput.placeholder = '输入线程注释（可选）';
                 mrRows = [mkRow({})];
+                mrOldPkg = g.pkg;
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = gi;
+                mrOldSubThreads = [];
             } else if (mode === 'edit-thread') {
                 $('mr-title').textContent = '🧵 编辑线程规则';
                 label.textContent = '📝 注释';
@@ -2251,6 +2266,11 @@
                 appInput.value = item?.comment || '';
                 appInput.placeholder = '输入线程注释（可选）';
                 mrOldThread = thread;
+                mrOldPkg = g.pkg;
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = gi;
+                mrOldSubThreads = [];
                 const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
@@ -2263,6 +2283,11 @@
                 appInput.value = '';
                 $('mr-addrow').hidden = true;
                 mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
+                mrOldPkg = g.pkg;
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = gi;
+                mrOldSubThreads = [];
                 toast('请输入 :子进程，如 :push，并选择 CPU');
             } else if (mode === 'edit-sub') {
                 $('mr-title').textContent = '📂 编辑子进程核心规则';
@@ -2270,25 +2295,34 @@
                 const g = rulesData[gi];
                 const fullPkg = g.pkg + ':' + sub;
                 pkgInput.value = fullPkg;
-                pkgInput.readOnly = true;
+                pkgInput.readOnly = false;   // ✅ 允许修改子包名
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
                 appInput.value = item?.comment || '';
                 $('mr-addrow').hidden = true;
+                // 保存旧线程规则（用于重命名迁移）
+                mrOldSubThreads = subData ? subData.items.filter(it => it.thread) : [];
                 mrRows = [mkRow({
-                    pkgRow: true, thread: ':' + sub, comment: item?.comment || '', ...(item ? parseSpec(item.spec) :
-                        {})
+                    pkgRow: true, thread: ':' + sub, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {})
                 })];
+                mrOldPkg = fullPkg;
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = gi;
             } else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '🧵 添加子进程线程规则';
-                // 改为“注释”，与编辑子进程线程一致
                 label.textContent = '📝 注释';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
-                appInput.value = '';                     // 清空，不继承子进程注释
+                appInput.value = '';
                 appInput.placeholder = '输入线程注释（可选）';
                 mrRows = [mkRow({})];
+                mrOldPkg = g.pkg + ':' + sub;
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = gi;
+                mrOldSubThreads = [];
             } else if (mode === 'edit-sub-thread') {
                 $('mr-title').textContent = '🧵 编辑子进程线程规则';
                 label.textContent = '📝 注释';
@@ -2300,6 +2334,11 @@
                 appInput.value = item?.comment || '';
                 appInput.placeholder = '输入线程注释（可选）';
                 mrOldThread = thread;
+                mrOldPkg = g.pkg + ':' + sub;
+                mrOldThreads = new Set();
+                mrHadPkgRule = false;
+                mrOldGi = gi;
+                mrOldSubThreads = [];
                 const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
@@ -2318,38 +2357,18 @@
         $('mr-cancel').onclick = () => $('modal-rule').hidden = true;
 
         let mrSaving = false;
+
         $('mr-save').onclick = async () => {
             if (mrSaving) return;
             const pkg = $('mr-pkg').value.trim();
-            const appName = $('mr-appname').value.trim(); // 编辑/添加线程时此处为线程注释
-            if (!$('mr-pkg').readOnly && !pkg) return toast('请输入应用包名');
+            const appName = $('mr-appname').value.trim();
 
-            // ---- 线程（添加/编辑）走单独逻辑，使用顶部注释 ----
-            if (mrMode === 'edit-thread' || mrMode === 'edit-sub-thread' || mrMode === 'add-thread' || mrMode === 'add-sub-thread') {
-                const row = mrRows[0];
-                const spec = specOf(row);
-                if (!row.thread) return toast('请输入线程名');
-                if (!spec) return toast(row.custom ? '请输入自定义 CPU 范围，如 0-3' : '请选择 CPU 核心');
-                // 若线程名变更，先删除旧线程（编辑模式）
-                if (mrOldThread && mrOldThread !== row.thread) {
-                    try { await api('/api/rule/del', { pkg, thread: mrOldThread }); } catch (e) {
-                        return toast('删除旧线程失败：' + e.message);
-                    }
-                }
-                try {
-                    await api('/api/rule', { pkg, thread: row.thread, cpus: spec, comment: appName });
-                    toast('✅ 线程规则已保存');
-                    loadRules();
-                    $('modal-rule').hidden = true;
-                    mrSaving = false;
-                    return;
-                } catch (e) {
-                    toast(e.message);
-                    mrSaving = false; return;
-                }
+            if (!$('mr-pkg').readOnly && !pkg) {
+                toast('请输入应用包名');
+                return;
             }
 
-            // ---- 其他模式（应用级、子进程级）原有逻辑 ----
+            // ---- 构建 jobs（规则列表） ----
             const jobs = [];
             for (const r of mrRows) {
                 const spec = specOf(r);
@@ -2358,78 +2377,238 @@
                     continue;
                 }
                 if (!r.thread && !spec) continue;
-                if (!r.thread) return toast('请输入线程名');
-                if (!spec) return toast(r.custom ? '请输入自定义 CPU 范围，如 0-3' : '请选择 CPU 核心');
+                if (!r.thread) {
+                    toast('请输入线程名');
+                    return;
+                }
+                if (!spec) {
+                    toast(r.custom ? '请输入自定义 CPU 范围，如 0-3' : '请选择 CPU 核心');
+                    return;
+                }
                 jobs.push({ thread: r.thread, cpus: spec, comment: r.comment || '' });
             }
-            if (!jobs.length) return toast('请至少配置一条规则');
+
+            if (!jobs.length) {
+                toast('请至少配置一条规则');
+                return;
+            }
+
             mrSaving = true;
-            try {
-                if (mrMode === 'add-sub') {
-                    let subInput = jobs[0].thread.trim();
-                    if (!subInput.startsWith(':')) subInput = ':' + subInput;
-                    const subName = subInput.substring(1).trim();
-                    if (!subName) return toast('请输入子进程');
-                    const fullPkg = pkg + ':' + subName;
-                    await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus, comment: appName });
+
+            // ======= 分支1：编辑默认核心（包级规则） =======
+            if (mrMode === 'edit-pkg') {
+                const row = mrRows[0];
+                const spec = specOf(row);
+                if (!spec) {
+                    toast('请选择或输入 CPU 核心');
+                    mrSaving = false;
+                    return;
+                }
+                if (pkg !== mrOldPkg) {
+                    try {
+                        await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
+                    } catch (e) {
+                        toast('重命名失败: ' + e.message);
+                        mrSaving = false;
+                        return;
+                    }
+                }
+                try {
+                    await api('/api/rule', {
+                        pkg: pkg,
+                        thread: '',
+                        cpus: spec,
+                        comment: appName
+                    });
+                    toast('✅ 默认核心已更新');
+                    loadRules();
+                    $('modal-rule').hidden = true;
+                } catch (e) {
+                    toast(e.message);
+                }
+                mrSaving = false;
+                return;
+            }
+
+            // ======= 分支2：线程级编辑（单条线程，包括子进程线程） =======
+            if (mrMode === 'edit-thread' || mrMode === 'edit-sub-thread' ||
+                mrMode === 'add-thread' || mrMode === 'add-sub-thread') {
+                const row = mrRows[0];
+                const spec = specOf(row);
+                if (!row.thread) {
+                    toast('请输入线程名');
+                    mrSaving = false;
+                    return;
+                }
+                if (!spec) {
+                    toast(row.custom ? '请输入自定义 CPU 范围，如 0-3' : '请选择 CPU 核心');
+                    mrSaving = false;
+                    return;
+                }
+                if (mrOldThread && mrOldThread !== row.thread) {
+                    try {
+                        await api('/api/rule/del', { pkg, thread: mrOldThread });
+                    } catch (e) {
+                        toast('删除旧线程失败：' + e.message);
+                        mrSaving = false;
+                        return;
+                    }
+                }
+                try {
+                    await api('/api/rule', {
+                        pkg,
+                        thread: row.thread,
+                        cpus: spec,
+                        comment: appName
+                    });
+                    toast('✅ 线程规则已保存');
+                    loadRules();
+                    $('modal-rule').hidden = true;
+                } catch (e) {
+                    toast(e.message);
+                }
+                mrSaving = false;
+                return;
+            }
+
+            // ======= 分支3：添加子进程 =======
+            if (mrMode === 'add-sub') {
+                let subInput = jobs[0].thread.trim();
+                if (!subInput.startsWith(':')) subInput = ':' + subInput;
+                const subName = subInput.substring(1).trim();
+                if (!subName) {
+                    toast('请输入子进程名');
+                    mrSaving = false;
+                    return;
+                }
+                const fullPkg = pkg + ':' + subName;
+                try {
+                    await api('/api/rule', {
+                        pkg: fullPkg,
+                        thread: '',
+                        cpus: jobs[0].cpus,
+                        comment: appName
+                    });
                     toast('子进程已添加');
                     loadRules();
                     $('modal-rule').hidden = true;
-                    mrSaving = false;
-                    return;
+                } catch (e) {
+                    toast(e.message);
                 }
-                if (mrMode === 'edit-sub') {
-                    const fullPkg = pkg;
-                    await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus, comment: appName });
-                    toast('子进程已更新');
-                    loadRules();
-                    $('modal-rule').hidden = true;
-                    mrSaving = false;
-                    return;
-                }
-                if (mrMode === 'add-sub-thread') {
-                    // 已被上面的线程分支捕获，但保留兜底
-                    const fullPkg = pkg;
-                    for (const j of jobs) {
-                        const threadName = j.thread.trim();
-                        if (!threadName) return toast('请输入线程名');
-                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: j.comment });
-                    }
-                    toast('子进程线程规则已添加');
-                    loadRules();
-                    $('modal-rule').hidden = true;
-                    mrSaving = false;
-                    return;
-                }
-                if (mrMode === 'edit-sub-thread') {
-                    // 已被线程分支捕获，但保留兜底
-                    const fullPkg = pkg;
-                    for (const j of jobs) {
-                        const threadName = j.thread.trim();
-                        if (!threadName) return toast('请输入线程名');
-                        if (mrOldThread && mrOldThread !== threadName) {
-                            await api('/api/rule/del', { pkg: fullPkg, thread: mrOldThread });
-                        }
-                        await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: j.comment });
-                    }
-                    await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus, comment: appName });
-                    toast('子进程线程规则已更新');
-                    loadRules();
-                    $('modal-rule').hidden = true;
+                mrSaving = false;
+                return;
+            }
+
+            // ======= 分支4：编辑子进程包级规则（支持修改子包名） =======
+            if (mrMode === 'edit-sub') {
+                const fullPkg = pkg;  // 可能是新包名
+                const row = mrRows[0];
+                const spec = specOf(row);
+                if (!spec) {
+                    toast('请选择或输入 CPU 核心');
                     mrSaving = false;
                     return;
                 }
 
-                // 主包相关操作
-                if (mrMode === 'edit-app') {
-                    if (pkg !== mrOldPkg) await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
-                    const cur = new Set(jobs.map(j => j.thread));
-                    for (const th of mrOldThreads)
-                        if (!cur.has(th)) await api('/api/rule/del', { pkg, thread: th });
-                    if (mrHadPkgRule && !cur.has('')) await api('/api/rule/del', { pkg, thread: '' });
+                // 如果包名变化，执行子包重命名
+                if (pkg !== mrOldPkg) {
+                    // 验证主包名是否一致
+                    const oldMain = mrOldPkg.split(':').slice(0, -1).join(':');
+                    const newMain = pkg.split(':').slice(0, -1).join(':');
+                    if (oldMain !== newMain) {
+                        toast('不支持跨主包子包重命名');
+                        mrSaving = false;
+                        return;
+                    }
+
+                    // 获取旧子包的线程规则（从 mrOldSubThreads）
+                    const oldThreads = mrOldSubThreads || [];
+
+                    try {
+                        // 1. 删除整个旧子包
+                        await api('/api/rule/del', { pkg: mrOldPkg, all: true });
+
+                        // 2. 创建新子包包级规则
+                        await api('/api/rule', {
+                            pkg: pkg,
+                            thread: '',
+                            cpus: spec,
+                            comment: appName
+                        });
+
+                        // 3. 重新添加所有旧线程规则
+                        for (const th of oldThreads) {
+                            await api('/api/rule', {
+                                pkg: pkg,
+                                thread: th.thread,
+                                cpus: th.spec,
+                                comment: th.comment || ''
+                            });
+                        }
+
+                        toast('子进程重命名并更新成功');
+                        loadRules();
+                        $('modal-rule').hidden = true;
+                    } catch (e) {
+                        toast(e.message);
+                    }
+                    mrSaving = false;
+                    return;
                 }
-                if (mrMode === 'edit-thread' && mrOldThread !== jobs[0].thread)
-                    await api('/api/rule/del', { pkg, thread: mrOldThread });
+
+                // 包名未变，直接更新包级规则
+                try {
+                    await api('/api/rule', {
+                        pkg: fullPkg,
+                        thread: '',
+                        cpus: spec,
+                        comment: appName
+                    });
+                    toast('子进程已更新');
+                    loadRules();
+                    $('modal-rule').hidden = true;
+                } catch (e) {
+                    toast(e.message);
+                }
+                mrSaving = false;
+                return;
+            }
+
+            // ======= 分支5：编辑整个应用（edit-app） =======
+            if (mrMode === 'edit-app') {
+                if (pkg !== mrOldPkg) {
+                    try {
+                        await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
+                    } catch (e) {
+                        toast('重命名失败: ' + e.message);
+                        mrSaving = false;
+                        return;
+                    }
+                }
+
+                const cur = new Set(jobs.map(j => j.thread));
+
+                for (const th of mrOldThreads) {
+                    if (!cur.has(th)) {
+                        try {
+                            await api('/api/rule/del', { pkg, thread: th });
+                        } catch (e) {
+                            toast('删除旧线程失败: ' + e.message);
+                            mrSaving = false;
+                            return;
+                        }
+                    }
+                }
+
+                if (mrHadPkgRule && !cur.has('')) {
+                    try {
+                        await api('/api/rule/del', { pkg, thread: '' });
+                    } catch (e) {
+                        toast('删除旧包规则失败: ' + e.message);
+                        mrSaving = false;
+                        return;
+                    }
+                }
 
                 for (let i = 0; i < jobs.length; i++) {
                     const j = jobs[i];
@@ -2442,15 +2621,48 @@
                             comment: j.thread === '' ? appName : j.comment
                         });
                     } catch (e) {
-                        return toast(`第${i + 1}条（${j.thread || '应用'}）失败：${e.message}`);
+                        toast(`第 ${i + 1} 条规则保存失败：${e.message}`);
+                        mrSaving = false;
+                        return;
+                    }
+                }
+
+                $('modal-rule').hidden = true;
+                toast('✅ 应用更新成功');
+                loadRules();
+                mrSaving = false;
+                return;
+            }
+
+            // ======= 分支6：添加新应用（add-pkg） =======
+            if (mrMode === 'add-pkg') {
+                for (let i = 0; i < jobs.length; i++) {
+                    const j = jobs[i];
+                    if (j.thread.startsWith(':')) continue;
+                    try {
+                        await api('/api/rule', {
+                            pkg,
+                            thread: j.thread,
+                            cpus: j.cpus,
+                            comment: j.thread === '' ? appName : j.comment
+                        });
+                    } catch (e) {
+                        toast(`第 ${i + 1} 条规则保存失败：${e.message}`);
+                        mrSaving = false;
+                        return;
                     }
                 }
                 $('modal-rule').hidden = true;
-                toast('✅ 已保存');
+                toast('✅ 应用已添加');
                 loadRules();
-            } catch (e) { toast(e.message); } finally { mrSaving = false; }
-        };
+                mrSaving = false;
+                return;
+            }
 
+            // ======= 未知模式 =======
+            toast('未知模式');
+            mrSaving = false;
+        };
         // ============================================================
         //  建议下拉
         // ============================================================

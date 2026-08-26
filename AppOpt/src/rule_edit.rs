@@ -1006,20 +1006,18 @@ pub fn rule_upsert(
     }
 
     // ---- 参数规范化 ----
+    // 核心修改：区分三种情况
+    // 1) pkg 包含 ':' -> 子包自身规则（即 pkg="主包:子包"，thread 为实际线程名或空）
+    // 2) thread 以 ':' 开头 -> 外部子包规则（主包中的 :子包=...）
+    // 3) 其他 -> 主包自身规则
     let (main_pkg, sub_thread, actual_thread) = if pkg.contains(':') {
-        let parts: Vec<&str> = pkg.splitn(2, ':').collect();
-        if parts.len() == 2 {
-            (
-                parts[0].to_string(),
-                format!(":{}", parts[1]),
-                thread.to_string(),
-            )
-        } else {
-            (pkg.to_string(), thread.to_string(), String::new())
-        }
+        // 子包自身规则（包括包级和线程级）
+        (pkg.to_string(), String::new(), thread.to_string())
     } else if thread.starts_with(':') {
+        // 外部子包规则（添加子进程时使用）
         (pkg.to_string(), thread.to_string(), String::new())
     } else {
+        // 主包规则
         (pkg.to_string(), String::new(), thread.to_string())
     };
 
@@ -1029,59 +1027,50 @@ pub fn rule_upsert(
         String::new()
     };
 
-    // ---- 构建新规则集合：激进删除所有可能的相关旧规则 ----
-    let mut new_rules = Vec::new();
+    // ---- 精确收集要删除的规则（仅针对目标本身） ----
+    let mut to_remove = HashSet::new();
 
+    // 1. 操作子包包级（sub_thread非空，actual_thread空）
+    if !sub_thread.is_empty() && actual_thread.is_empty() {
+        // 子包自身包级规则
+        to_remove.insert((main_pkg.clone(), String::new()));
+        // 同时删除可能残留的外部规则（主包中的 :子包=...）
+        to_remove.insert((main_pkg.clone(), sub_thread.clone()));
+    }
+    // 2. 操作主包线程（sub_thread空，actual_thread非空）
+    else if sub_thread.is_empty() && !actual_thread.is_empty() {
+        to_remove.insert((main_pkg.clone(), actual_thread.clone()));
+    }
+    // 3. 操作子包内部线程（sub_thread空，actual_thread非空，且 main_pkg 包含 ':'）
+    else if sub_thread.is_empty() && !actual_thread.is_empty() && main_pkg.contains(':') {
+        to_remove.insert((main_pkg.clone(), actual_thread.clone()));
+    }
+    // 4. 操作主包包级（两者都空）
+    else if sub_thread.is_empty() && actual_thread.is_empty() {
+        to_remove.insert((main_pkg.clone(), String::new()));
+    }
+
+    // ---- 构建新规则：跳过待删除的，保留所有其他 ----
+    let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        // 如果是子包操作（sub_thread非空），删除所有与这个子包相关的规则
-        // 包括外部子包包级（pkg=main_pkg, thread=sub_thread）
-        // 以及内部所有规则（pkg==child_pkg）
-        // 还有主包中可能残留的、与actual_thread相同的线程（防止历史遗留）
-        if !sub_thread.is_empty() {
-            // 删除外部子包包级
-            if r.pkg == main_pkg && r.thread == sub_thread {
-                continue;
-            }
-            // 删除所有内部子包规则（pkg==child_pkg）
-            if r.pkg == child_pkg {
-                continue;
-            }
-            // 如果操作的是内部线程（actual_thread非空），还要删除主包中同名的线程（可能历史残留）
-            if !actual_thread.is_empty() && r.pkg == main_pkg && r.thread == actual_thread {
-                continue;
-            }
-            // 其他规则保留
-            new_rules.push(r.clone());
-        } else {
-            // 主包操作（非子包）
-            if sub_thread.is_empty()
-                && !actual_thread.is_empty()
-                && r.pkg == main_pkg
-                && r.thread == actual_thread
-            {
-                continue;
-            }
-            if sub_thread.is_empty()
-                && actual_thread.is_empty()
-                && r.pkg == main_pkg
-                && r.thread.is_empty()
-            {
-                continue;
-            }
-            new_rules.push(r.clone());
+        if to_remove.contains(&(r.pkg.clone(), r.thread.clone())) {
+            continue;
         }
+        new_rules.push(r.clone());
     }
 
     // ---- 添加新规则 ----
     if !cpus.is_empty() {
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
-            let (new_pkg, new_thread) = if !sub_thread.is_empty() {
-                if actual_thread.is_empty() {
-                    (main_pkg.clone(), sub_thread.clone()) // 子包包级（外部）
-                } else {
-                    (child_pkg.clone(), actual_thread.clone()) // 子包内部线程
-                }
+            // 确定新规则的 pkg 和 thread
+            let (new_pkg, new_thread) = if !sub_thread.is_empty() && sub_thread.starts_with(':') {
+                // 外部子包规则（pkg=主包，thread=:子包）
+                (main_pkg.clone(), sub_thread.clone())
+            } else if main_pkg.contains(':') {
+                // 子包自身规则
+                (main_pkg.clone(), actual_thread.clone())
             } else {
+                // 主包规则
                 (main_pkg.clone(), actual_thread.clone())
             };
 
@@ -1113,7 +1102,7 @@ pub fn rule_upsert(
                 comment: final_comment,
             };
 
-            // 去重：移除已存在的相同 (pkg, thread)
+            // 从 new_rules 中移除可能已存在的相同 (pkg, thread)
             new_rules.retain(|r| !(r.pkg == new_pkg && r.thread == new_thread));
             new_rules.push(new_rule);
         } else {
@@ -1121,12 +1110,14 @@ pub fn rule_upsert(
         }
     }
 
-    // ---- 最终全局去重 ----
+    // ---- 全局去重 ----
     let mut seen = HashSet::new();
     new_rules.retain(|r| seen.insert((r.pkg.clone(), r.thread.clone())));
 
+    // 如果没有任何规则，删除整个主包
     if new_rules.is_empty() {
-        remove_all_package_blocks(&mut lines, &main_pkg);
+        let main_pkg_name = main_pkg.split(':').next().unwrap_or(&main_pkg);
+        remove_all_package_blocks(&mut lines, main_pkg_name);
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
@@ -1144,7 +1135,8 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    if normalize_package_block(&mut lines, &main_pkg, &new_cfg) {
+    let main_pkg_name = main_pkg.split(':').next().unwrap_or(&main_pkg);
+    if normalize_package_block(&mut lines, main_pkg_name, &new_cfg) {
         clean_empty_lines(&mut lines);
         file_write(config_path, &lines)
     } else {
@@ -1152,26 +1144,33 @@ pub fn rule_upsert(
     }
 }
 
-/// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_all_package_ranges(lines, pkg);
     for (start, end) in ranges.iter().rev() {
         let start_line = &lines[*start];
         let trimmed = start_line.trim();
-        if trimmed.ends_with('{') {
-            let has_cpus = trimmed.contains('=') && !trimmed.ends_with('{');
-            let mut has_content = false;
-            for idx in (*start + 1)..*end {
-                let inner = lines[idx].trim();
-                if !inner.is_empty() && !inner.starts_with('#') && !inner.starts_with("//") {
-                    has_content = true;
-                    break;
-                }
+        // 检查是否有包级规则（即行内含有 "=" 且后面没有 "{", 或者有 "{" 但第一行包含 "=" 且块内无内容）
+        // 更准确：检查该块是否定义了一个包级规则（以 "主包:子包=" 开头的行）
+        let has_pkg_rule = trimmed.contains('=');
+        let has_content = false; // 初始
+        let mut actual_has_content = false;
+        for idx in (*start + 1)..*end {
+            let inner = lines[idx].trim();
+            if !inner.is_empty() && !inner.starts_with('#') && !inner.starts_with("//") {
+                actual_has_content = true;
+                break;
             }
-            if !has_cpus && !has_content {
-                for idx in (*start..=*end).rev() {
-                    lines.remove(idx);
-                }
+        }
+        // 如果该块有包级规则（包含 "="），则不删除，无论是否有内容
+        // 但如果是空块（只有 "{}" 无内容），我们也不删除以保留包级规则
+        if has_pkg_rule && !actual_has_content {
+            // 保留这个空块，因为它有包级规则
+            continue;
+        }
+        // 否则，如果没有包级规则且无内容，则删除
+        if !has_pkg_rule && !actual_has_content {
+            for idx in (*start..=*end).rev() {
+                lines.remove(idx);
             }
         }
     }
@@ -1336,67 +1335,106 @@ pub fn rule_delete_pkg(config_path: &str, pkg: &str) -> RuleEdit {
 
 pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
+
+    // 1. 加载当前配置（从文件重新解析，避免缓存）
+    let mut tmp_mtime = -1;
+    let topo = {
+        let cfg_opt = crate::CURRENT_CONFIG.lock().unwrap();
+        cfg_opt
+            .as_ref()
+            .map(|c| c.topo.clone())
+            .unwrap_or_else(crate::cpuset::init_cpu_topo)
+    };
+    let cfg = match crate::config::load_config(path, &topo, &mut tmp_mtime) {
+        Some(c) => c,
+        None => return RuleEdit::IoErr,
+    };
+
+    // 2. 检查旧包是否存在
+    let old_exists = cfg
+        .rules
+        .iter()
+        .any(|r| r.pkg == old || r.pkg.starts_with(&format!("{}:", old)));
+    if !old_exists {
+        return RuleEdit::NotFound;
+    }
+
+    // 3. 检查新包是否已存在（不允许覆盖）
+    let new_exists = cfg
+        .rules
+        .iter()
+        .any(|r| r.pkg == new || r.pkg.starts_with(&format!("{}:", new)));
+    if new_exists {
+        return RuleEdit::Conflict;
+    }
+
+    // 4. 构建新规则列表：将所有旧包名替换为新包名
+    let mut new_rules = Vec::new();
+    let old_with_colon = format!("{}:", old);
+    let new_with_colon = format!("{}:", new);
+    for rule in cfg.rules {
+        let mut new_rule = rule.clone();
+        if rule.pkg == old {
+            new_rule.pkg = new.to_string();
+        } else if rule.pkg.starts_with(&old_with_colon) {
+            let suffix = &rule.pkg[old_with_colon.len()..];
+            new_rule.pkg = format!("{}{}", new_with_colon, suffix);
+        } else {
+            new_rules.push(rule);
+            continue;
+        }
+        // 更新线程模式（如果 thread 非空）
+        new_rule.thread_pattern =
+            std::ffi::CString::new(new_rule.thread.as_str()).unwrap_or_default();
+        new_rules.push(new_rule);
+    }
+
+    // 5. 重新构建 pkgs 和 has_thread_rules
+    let pkgs: std::collections::HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
+    let has_thread_rules: std::collections::HashSet<String> = new_rules
+        .iter()
+        .filter(|r| !r.thread.is_empty())
+        .map(|r| r.pkg.clone())
+        .collect();
+
+    let new_cfg = crate::config::AppConfig {
+        rules: new_rules,
+        pkgs,
+        has_thread_rules,
+        topo,
+    };
+
+    // 6. 读取现有文件内容
     let mut lines: Vec<String> = fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
         .map(String::from)
         .collect();
 
-    normalize_sub_pkgs(&mut lines, old);
-    if !target_scan(&lines, old).any_line() {
-        return RuleEdit::NotFound;
-    }
-    if target_scan(&lines, new).any_line() {
-        return RuleEdit::Conflict;
+    // 7. 提取主包名（用于定位块）
+    let main_pkg_old = old.split(':').next().unwrap_or(old);
+    let main_pkg_new = new.split(':').next().unwrap_or(new);
+
+    // 8. 删除所有以旧主包名开头的顶层块（包括主包和子包）
+    //    remove_all_package_blocks 返回第一个被删除块的起始索引（如果存在）
+    let insert_pos = remove_all_package_blocks(&mut lines, main_pkg_old).unwrap_or_else(|| {
+        // 如果没有找到旧块（可能因为文件格式问题），则插入到文件末尾
+        lines.len()
+    });
+
+    // 9. 构建新块的内容（基于新配置）
+    let new_block = build_package_block(main_pkg_new, &new_cfg);
+    if new_block.is_empty() {
+        // 没有规则，只删除旧块即可
+        clean_empty_lines(&mut lines);
+        return file_write(path, &lines);
     }
 
-    let old_parts: Vec<&str> = old.split(':').collect();
-    let new_parts: Vec<&str> = new.split(':').collect();
-    if old_parts.len() == 2 && new_parts.len() == 2 {
-        let old_main = old_parts[0];
-        let old_sub = old_parts[1];
-        let new_main = new_parts[0];
-        let new_sub = new_parts[1];
-        if old_main == new_main {
-            for line in &mut lines {
-                if let Some(rest) = line.trim().strip_prefix(&format!(":{}", old_sub)) {
-                    if rest.trim().starts_with('{') || rest.trim().starts_with('=') {
-                        let new_line =
-                            line.replace(&format!(":{}", old_sub), &format!(":{}", new_sub));
-                        *line = new_line;
-                    }
-                }
-            }
-            return file_write(path, &lines);
-        }
-    }
+    // 10. 在原来旧块的位置插入新块
+    lines.splice(insert_pos..insert_pos, new_block);
 
-    loop {
-        let t = target_scan(&lines, old);
-        let mut idxs: Vec<usize> = t.singles().map(|l| l.idx).collect();
-        if let Some(
-            PkgLine::Standalone(i)
-            | PkgLine::OpenInline(i)
-            | PkgLine::BareOpen(i)
-            | PkgLine::BarePending(i),
-        ) = t.pkg_line
-        {
-            idxs.push(i);
-        }
-        if idxs.is_empty() {
-            break;
-        }
-        for i in idxs {
-            if let Some(rest) = lines[i].trim().strip_prefix(old) {
-                let tail = match (new.contains('='), rest.trim()) {
-                    (true, "" | "=") => "=",
-                    (true, "{") => "= {",
-                    _ => rest,
-                };
-                lines[i] = format!("{}{}", new, tail);
-            }
-        }
-    }
+    // 11. 清理多余空行，写入文件
+    clean_empty_lines(&mut lines);
     file_write(path, &lines)
 }
 
@@ -1417,86 +1455,89 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         parent_pkg: &str,
         cfg: &crate::config::AppConfig,
     ) -> (
-        Option<crate::config::AffinityRule>, // 父包自身的包级规则
-        Vec<crate::config::AffinityRule>,    // 父包自身的线程规则
-        BTreeMap<String, SubPkg>,            // 子包树
+        Option<crate::config::AffinityRule>,
+        Vec<crate::config::AffinityRule>,
+        BTreeMap<String, SubPkg>,
     ) {
         let mut pkg_rule: Option<crate::config::AffinityRule> = None;
         let mut threads: Vec<crate::config::AffinityRule> = Vec::new();
         let mut subs: BTreeMap<String, SubPkg> = BTreeMap::new();
 
-        // 1. 收集直接属于 parent_pkg 的规则（pkg 完全相等）
+        // 第一步：收集直接属于 parent_pkg 的规则
         for rule in cfg.rules.iter().filter(|r| r.pkg == parent_pkg) {
             if rule.thread.is_empty() {
                 pkg_rule = Some(rule.clone());
             } else if rule.thread.starts_with(':') {
-                // 外部子包规则（thread = :子包名）
+                // 外部子包规则（主包中写 :子包=... 或 :子包 { ... }）
                 let sub_name = rule.thread.trim_start_matches(':').trim().to_string();
                 if !sub_name.is_empty() {
-                    let entry = subs.entry(sub_name).or_insert_with(|| SubPkg {
+                    let entry = subs.entry(sub_name.clone()).or_insert_with(|| SubPkg {
                         pkg_rule: None,
                         threads: Vec::new(),
                         subs: BTreeMap::new(),
                     });
-                    entry.pkg_rule = Some(rule.clone());
+                    // 外部规则可作为子包包级规则的候选，但不覆盖子包自身的包级规则
+                    if entry.pkg_rule.is_none() {
+                        // 克隆外部规则，但稍后需要将其 pkg 改为 child_pkg，thread 设为空
+                        entry.pkg_rule = Some(rule.clone());
+                    }
                 }
             } else {
                 threads.push(rule.clone());
             }
         }
 
-        // 2. 收集所有内部子包规则（pkg 为 parent_pkg:子包名）
-        let prefix = format!("{}:", parent_pkg);
-        let internal_rules: Vec<&crate::config::AffinityRule> = cfg
+        // 第二步：从所有规则中找出以 parent_pkg: 开头的子包（即使没有外部规则）
+        let child_prefix = format!("{}:", parent_pkg);
+        let sub_names_from_rules: std::collections::HashSet<String> = cfg
             .rules
             .iter()
-            .filter(|r| r.pkg.starts_with(&prefix) && r.pkg != parent_pkg)
+            .filter_map(|r| {
+                if r.pkg.starts_with(&child_prefix) && r.pkg != parent_pkg {
+                    r.pkg.strip_prefix(&child_prefix).map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
             .collect();
 
-        // 按子包名分组
-        let mut internal_map: BTreeMap<String, Vec<&crate::config::AffinityRule>> = BTreeMap::new();
-        for rule in internal_rules {
-            // 提取子包名（去掉前缀）
-            let sub_name = rule.pkg.trim_start_matches(&prefix).to_string();
-            if !sub_name.is_empty() {
-                internal_map.entry(sub_name).or_default().push(rule);
+        for sub_name in sub_names_from_rules {
+            if !subs.contains_key(&sub_name) {
+                subs.insert(
+                    sub_name.clone(),
+                    SubPkg {
+                        pkg_rule: None,
+                        threads: Vec::new(),
+                        subs: BTreeMap::new(),
+                    },
+                );
             }
         }
 
-        // 将内部规则合并到对应的子包中
-        for (sub_name, rules) in internal_map {
-            let entry = subs.entry(sub_name.clone()).or_insert_with(|| SubPkg {
-                pkg_rule: None,
-                threads: Vec::new(),
-                subs: BTreeMap::new(),
-            });
-            for rule in rules {
-                if rule.thread.is_empty() {
-                    // 子包包级规则
-                    entry.pkg_rule = Some((*rule).clone());
-                } else {
-                    // 子包内部线程规则
-                    entry.threads.push((*rule).clone());
-                }
-            }
-        }
-
-        // 3. 递归处理每个子包的内部结构（即子包的子包）
-        // 注意：子包的子包可能以 "parent_pkg:子包名:孙子名" 形式存在，但在我们的数据结构中，
-        // 递归调用时，父包变为 "parent_pkg:子包名"，从而自动处理更深层。
+        // 第三步：递归处理每个子包
         let sub_names: Vec<String> = subs.keys().cloned().collect();
         for sub_name in sub_names {
             let child_pkg = format!("{}:{}", parent_pkg, sub_name);
             let (child_pkg_rule, child_threads, child_subs) = build_sub_pkg_tree(&child_pkg, cfg);
+
             let entry = subs.get_mut(&sub_name).unwrap();
-            // 递归返回的包级规则优先（可能包含更完整的 spec）
+
+            // 子包的包级规则：优先使用 child_pkg_rule（即 pkg == child_pkg 且 thread 为空）
             if let Some(rule) = child_pkg_rule {
                 entry.pkg_rule = Some(rule);
+            } else if let Some(external_rule) = entry.pkg_rule.take() {
+                // 外部规则存在，但没有子包自身的包级规则，则将外部规则转换为子包的包级规则
+                let mut rule = external_rule.clone();
+                rule.pkg = child_pkg.clone();
+                rule.thread = String::new();
+                rule.thread_pattern = std::ffi::CString::new("").unwrap_or_default();
+                entry.pkg_rule = Some(rule);
             }
-            // 追加递归返回的线程规则（通常由内部线程规则产生，但可能重复，需去重？简单追加）
-            // 为避免重复，可先合并去重，但这里线程名唯一，直接扩展
+
+            // 合并子包的线程规则
             entry.threads.extend(child_threads);
-            // 合并子包
+
+            // 合并子包的子包
             for (child_sub, child_sub_data) in child_subs {
                 entry.subs.insert(child_sub, child_sub_data);
             }
@@ -1504,7 +1545,6 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
 
         (pkg_rule, threads, subs)
     }
-
     // ---- 构建主包树 ----
     let (main_pkg_rule, main_threads, main_subs) = build_sub_pkg_tree(pkg, cfg);
 

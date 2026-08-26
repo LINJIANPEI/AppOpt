@@ -400,7 +400,7 @@ fn rule_api(req: &Request) -> (u16, String) {
             .get("comment")
             .and_then(|c| c.as_str())
             .map(str::trim)
-            .filter(|s| !s.is_empty());
+            .map(|s| s.to_string()); // 保留空字符串
         eprintln!(
             "[rule_api] pkg='{}', thread='{}', cpus='{}', comment={:?}",
             pkg, thread, cpus, comment
