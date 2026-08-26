@@ -967,7 +967,7 @@ pub fn rule_upsert(
     pkg: &str,
     thread: &str,
     cpus: &str,
-    comment: &str, // 改为 String
+    comment: Option<&str>, // ← 改为 Option
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
     use std::collections::HashSet;
@@ -1006,11 +1006,6 @@ pub fn rule_upsert(
             if !cpus.is_empty() && validate_cpus(cpus, &cfg.topo).is_none() {
                 return RuleEdit::Malformed;
             }
-            // 子包操作：调用 write_sub_pkg_block（原有逻辑，不涉及 comment 传递，因为只更新规则，comment 保存在主包级规则中）
-            // 但此处我们仅处理包级和线程的 upsert，子包操作在下方统一处理，但为了兼容，我们先保留原有调用，但需要传递 comment？
-            // 实际上 write_sub_pkg_block 不直接操作 AffinityRule，它只写配置文件，所以 comment 应该通过 rule_api 传递到主包级规则中。
-            // 但是子包块中的包级规则也可能有 comment，目前仅支持主包组 comment，所以这里忽略子包的 comment。
-            // 为了简化，我们在子包处理中不处理 comment，因为子包 comment 是独立的（但前端未提供，所以传空）
             let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, cpus, false);
             eprintln!("[rule_upsert] 子包处理结果: {:?}", result);
             if let RuleEdit::Ok = result {
@@ -1048,7 +1043,21 @@ pub fn rule_upsert(
             } else {
                 String::new()
             };
-
+            // ★ 确定最终注释
+            let final_comment = if let Some(c) = comment {
+                c.to_string()
+            } else {
+                // 尝试从旧规则继承注释
+                if let Some(old) = cfg
+                    .rules
+                    .iter()
+                    .find(|r| r.pkg == pkg && r.thread == thread)
+                {
+                    old.comment.clone()
+                } else {
+                    String::new()
+                }
+            };
             let new_rule = crate::config::AffinityRule {
                 pkg: pkg.to_string(),
                 thread: thread.to_string(),
@@ -1056,7 +1065,7 @@ pub fn rule_upsert(
                 cpuset_dir,
                 cpus: cpuset,
                 spec: cpus.to_string(),
-                comment: comment.to_string(), // 使用传入的 comment
+                comment: final_comment,
             };
             new_rules.push(new_rule);
             eprintln!("[rule_upsert] 新规则已加入，总数={}", new_rules.len());
@@ -1078,7 +1087,6 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // ================= 核心修改：简化查找旧块 =================
     eprintln!("[rule_upsert] 开始查找旧块");
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut first_start = None;
@@ -1140,7 +1148,6 @@ pub fn rule_upsert(
     }
     eprintln!("[rule_upsert] 找到 {} 个旧块", ranges.len());
 
-    // ========== 生成新块 ==========
     eprintln!("[rule_upsert] 开始生成新块");
     let new_block = build_package_block(pkg, &new_cfg);
     eprintln!("[rule_upsert] 新块行数={}", new_block.len());
