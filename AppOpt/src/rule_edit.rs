@@ -1094,47 +1094,81 @@ pub fn rule_upsert(
         if set.count() == 0 { None } else { Some(set) }
     }
 
-    let (main_pkg, sub_thread) = if pkg.contains(':') {
+    // 判断是操作子包内部的线程还是子包包级规则
+    let (main_pkg, sub_thread, actual_thread) = if pkg.contains(':') {
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
-            (parts[0].to_string(), format!(":{}", parts[1]))
+            // pkg 是 "主包:子包"
+            if !thread.is_empty() {
+                // 子包内部的线程规则：pkg 保持不变，thread 为线程名
+                (pkg.to_string(), String::new(), thread.to_string())
+            } else {
+                // 子包的包级规则：转换为外部形式
+                (
+                    parts[0].to_string(),
+                    format!(":{}", parts[1]),
+                    String::new(),
+                )
+            }
         } else {
-            (pkg.to_string(), thread.to_string())
+            (pkg.to_string(), thread.to_string(), String::new())
         }
     } else if thread.starts_with(':') {
-        (pkg.to_string(), thread.to_string())
+        // 外部子包包级规则
+        (pkg.to_string(), thread.to_string(), String::new())
     } else {
-        (pkg.to_string(), thread.to_string())
+        // 主包线程或主包包级
+        (pkg.to_string(), String::new(), thread.to_string())
     };
 
-    let sub_name = if sub_thread.starts_with(':') {
-        sub_thread.trim_start_matches(':').to_string()
+    // 确定要删除的旧规则标识：pkg 和 thread（用于过滤）
+    let (delete_pkg, delete_thread) = if !sub_thread.is_empty() {
+        // 子包包级规则
+        (main_pkg.clone(), sub_thread.clone())
+    } else if !actual_thread.is_empty() && !pkg.contains(':') {
+        // 主包线程规则
+        (main_pkg.clone(), actual_thread.clone())
+    } else if !actual_thread.is_empty() && pkg.contains(':') {
+        // 子包内部线程规则：pkg 是完整子包名，thread 是线程名
+        (pkg.to_string(), actual_thread.clone())
     } else {
-        String::new()
-    };
-    let child_pkg = if !sub_name.is_empty() {
-        format!("{}:{}", main_pkg, sub_name)
-    } else {
-        String::new()
+        // 主包或子包包级规则，thread 为空
+        (main_pkg.clone(), String::new())
     };
 
+    // 构建新规则集合：删除旧目标规则，保留其他
     let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        if r.pkg == main_pkg && r.thread == sub_thread {
+        if r.pkg == delete_pkg && r.thread == delete_thread {
             continue;
         }
-        if !child_pkg.is_empty() && r.pkg == child_pkg {
-            continue;
-        }
-        if !sub_name.is_empty() && r.pkg == main_pkg && r.thread == sub_name {
+        // 额外清理：如果操作的是子包内部线程，还要删除可能存在的同名旧线程（避免残留）
+        if !actual_thread.is_empty()
+            && pkg.contains(':')
+            && r.pkg == pkg
+            && r.thread == actual_thread
+        {
             continue;
         }
         new_rules.push(r.clone());
     }
 
+    // 添加新规则
     if !cpus.is_empty() {
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
-            let cpuset_dir = if sub_thread.is_empty() {
+            // 确定新规则的 pkg 和 thread
+            let (new_pkg, new_thread) = if !sub_thread.is_empty() {
+                // 子包包级规则（外部形式）
+                (main_pkg.clone(), sub_thread.clone())
+            } else if !actual_thread.is_empty() && pkg.contains(':') {
+                // 子包内部线程：pkg 保持完整子包名
+                (pkg.to_string(), actual_thread.clone())
+            } else {
+                // 主包线程或包级
+                (main_pkg.clone(), actual_thread.clone())
+            };
+
+            let cpuset_dir = if new_thread.is_empty() {
                 crate::cpuset::ensure_cpuset_dir(&cpuset, &cfg.topo)
             } else {
                 String::new()
@@ -1142,10 +1176,11 @@ pub fn rule_upsert(
             let final_comment = if let Some(c) = comment {
                 c.to_string()
             } else {
+                // 尝试从旧规则继承注释
                 if let Some(old) = cfg
                     .rules
                     .iter()
-                    .find(|r| r.pkg == main_pkg && r.thread == sub_thread)
+                    .find(|r| r.pkg == new_pkg && r.thread == new_thread)
                 {
                     old.comment.clone()
                 } else {
@@ -1153,9 +1188,9 @@ pub fn rule_upsert(
                 }
             };
             let new_rule = crate::config::AffinityRule {
-                pkg: main_pkg.clone(),
-                thread: sub_thread.clone(),
-                thread_pattern: std::ffi::CString::new(sub_thread.as_str()).unwrap_or_default(),
+                pkg: new_pkg.clone(),
+                thread: new_thread.clone(),
+                thread_pattern: std::ffi::CString::new(new_thread.as_str()).unwrap_or_default(),
                 cpuset_dir,
                 cpus: cpuset,
                 spec: cpus.to_string(),
