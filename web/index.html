@@ -7,9 +7,6 @@
     <meta name="theme-color" content="#0f172a" id="theme-color">
     <title>AppOpt</title>
     <style>
-        /* ============================================================
-           主题变量：浅色 / 深色（通过 body.dark / body.light 控制）
-           ============================================================ */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -20,7 +17,6 @@
             display: none !important;
         }
 
-        /* 默认深色（fallback） */
         :root {
             --bg: #0f172a;
             --glass-bg: rgba(30, 41, 59, 0.55);
@@ -53,7 +49,6 @@
             --radius-sm: 10px;
         }
 
-        /* 浅色主题 */
         body.light {
             --bg: #f1f5f9;
             --glass-bg: rgba(255, 255, 255, 0.65);
@@ -117,7 +112,6 @@
             border-color: rgba(0, 0, 0, 0.06);
         }
 
-        /* 基础样式 */
         body {
             font-family: system-ui, -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
             background: var(--bg);
@@ -202,7 +196,6 @@
             border-radius: 8px;
         }
 
-        /* 卡片 */
         .card {
             background: var(--glass-bg);
             backdrop-filter: blur(24px);
@@ -239,7 +232,6 @@
             background: var(--border);
         }
 
-        /* 行 */
         .row {
             display: flex;
             justify-content: space-between;
@@ -273,7 +265,6 @@
             font-size: 13px;
         }
 
-        /* 徽章 */
         .badge {
             padding: 3px 12px;
             border-radius: 999px;
@@ -294,7 +285,6 @@
             color: var(--blue);
         }
 
-        /* 统计 */
         .grid2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -333,7 +323,6 @@
             font-weight: 450;
         }
 
-        /* Chip（核心标签） */
         .chip {
             display: inline-flex;
             align-items: center;
@@ -401,7 +390,6 @@
             gap: 4px;
         }
 
-        /* 核心分层 */
         .core-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -439,7 +427,6 @@
             color: var(--sub);
         }
 
-        /* 标签栏 */
         .tabbar {
             display: flex;
             height: 60px;
@@ -532,7 +519,6 @@
             }
         }
 
-        /* 顶部栏 */
         .bar {
             display: flex;
             align-items: center;
@@ -608,7 +594,6 @@
             box-shadow: 0 2px 12px rgba(239, 68, 68, 0.3);
         }
 
-        /* 规则分组 */
         .grp {
             background: var(--glass-bg);
             backdrop-filter: blur(24px);
@@ -659,7 +644,6 @@
             transform: rotate(90deg);
         }
 
-        /* 应用名（注释）—— 大号粗体，左对齐 */
         .grp-comment {
             font-weight: 700;
             font-size: 16px;
@@ -675,7 +659,6 @@
             text-overflow: ellipsis;
         }
 
-        /* 包名（右侧）—— 灰色小字，放在应用名下方 */
         .grp-name-static {
             display: block;
             white-space: nowrap;
@@ -778,6 +761,14 @@
             max-width: 120px;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+
+        .sub-comment {
+            color: var(--sub);
+            font-size: 12px;
+            opacity: 0.7;
+            padding: 4px 0 0 14px;
+            font-style: italic;
         }
 
         .rule-add {
@@ -1479,7 +1470,6 @@
                     <div class="row"><span class="label">运行时长</span><span class="value mono" id="s-up">-</span></div>
                     <div class="row"><span class="label">版本</span><span class="value mono" id="s-ver">-</span></div>
                 </div>
-
                 <div class="card">
                     <div class="card-title">📋 规则</div>
                     <div class="grid2">
@@ -1494,7 +1484,6 @@
                     </div>
                     <div class="hint warn" id="s-pf" hidden style="color:var(--orange)"></div>
                 </div>
-
                 <div class="card">
                     <div class="card-title">📊 进程</div>
                     <div class="grid3">
@@ -1516,7 +1505,6 @@
                         </div>
                     </div>
                 </div>
-
                 <div class="card" id="s-card-cores">
                     <div class="card-title">🧠 核心分层</div>
                     <div class="core-grid">
@@ -1555,7 +1543,6 @@
                         <button data-theme="light">浅色</button>
                     </div>
                 </div>
-
                 <div class="card">
                     <div class="card-title">🎯 工作模式</div>
                     <div class="seg" id="seg-mode">
@@ -1566,26 +1553,22 @@
                     <div class="hint" id="c-mode-active">当前生效: -</div>
                     <div class="hint warn" id="c-ebpf-hint" hidden>⚠️ 此设备内核不支持 eBPF，强制 eBPF 时将保持 Proc 轮询</div>
                 </div>
-
                 <div class="card">
                     <div class="card-title">⏱️ 扫描参数</div>
                     <div class="field"><input id="c-interval" type="number" min="1" max="3600"><button class="btn"
                             id="c-interval-save">保存</button></div>
                     <div class="hint">检查间隔（秒），影响 /proc 扫描与配置轮询频率</div>
                 </div>
-
                 <div class="card">
                     <div class="card-title">📁 cpuset</div>
                     <div class="field"><input id="c-cpuset"><button class="btn" id="c-cpuset-save">保存</button></div>
                     <div class="hint">BASE_CPUSET 目录名（当前 <span id="c-cpuset-on">未知</span>），修改后规则将重建亲和性目录并重新加载</div>
                 </div>
-
                 <div class="card">
                     <div class="card-title">📄 规则配置文件</div>
                     <div class="field"><input id="c-file"><button class="btn" id="c-file-save">保存</button></div>
                     <div class="hint">修改后立即迁移监听并加载新文件，原文件保留</div>
                 </div>
-
                 <div class="card">
                     <div class="card-title">ℹ️ 关于</div>
                     <button class="entry" id="c-about">关于 AppOpt <svg viewBox="0 0 24 24">
@@ -1603,8 +1586,7 @@
                     <path d="M12 16L16 12" />
                     <circle cx="12" cy="16" r="1.2" fill="currentColor" stroke="none" />
                     <path d="M6 20h12" />
-                </svg>
-                状态
+                </svg> 状态
             </button>
             <button class="tab" data-tab="rules">
                 <svg viewBox="0 0 24 24">
@@ -1612,8 +1594,7 @@
                     <circle cx="4" cy="6" r="1" fill="currentColor" stroke="none" />
                     <circle cx="4" cy="12" r="1" fill="currentColor" stroke="none" />
                     <circle cx="4" cy="18" r="1" fill="currentColor" stroke="none" />
-                </svg>
-                规则
+                </svg> 规则
             </button>
             <button class="tab" data-tab="settings">
                 <svg viewBox="0 0 24 24">
@@ -1621,8 +1602,7 @@
                     <circle cx="5" cy="6" r="2" />
                     <circle cx="12" cy="9" r="2" />
                     <circle cx="19" cy="10" r="2" />
-                </svg>
-                设置
+                </svg> 设置
             </button>
         </nav>
 
@@ -1673,9 +1653,9 @@
     <div id="modal-rule" class="modal-bg" hidden>
         <div class="modal">
             <h3 id="mr-title">添加应用</h3>
-            <!-- 应用名（包级注释） -->
+            <!-- 包级注释输入框 -->
             <div class="field-group">
-                <label for="mr-appname">📝 应用名（可选，将作为块上方注释）</label>
+                <label for="mr-appname" id="mr-appname-label">📝 包级注释（独立行，可选）</label>
                 <input id="mr-appname" placeholder="例如：微信">
             </div>
             <div class="field-group">
@@ -1715,29 +1695,21 @@
 
         function fmtUp(s) {
             s = +s || 0;
-            const d = Math.floor(s / 86400),
-                h = Math.floor(s % 86400 / 3600),
-                m = Math.floor(s % 3600 / 60);
+            const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
             return d > 0 ? d + '天' + h + '小时' : h > 0 ? h + '小时' + m + '分' : m > 0 ? m + '分' : '刚刚';
         }
-
         const modeLabel = m => m === 'ebpf' ? 'eBPF 事件驱动' : 'Proc 轮询';
 
         // ============================================================
         //  API
         // ============================================================
         async function api(path, body) {
-            const opts = body !== undefined ? {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            } : {};
+            const opts = body !== undefined ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {};
             const r = await fetch(path, opts);
             const d = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(d.err || ('HTTP ' + r.status));
             return d;
         }
-
         function toast(m) {
             const t = $('toast');
             t.textContent = m;
@@ -1749,26 +1721,14 @@
         // ============================================================
         //  核心类型映射
         // ============================================================
-        const CORE_NAMES = {
-            'e-core': '小核',
-            'p-core': '中核',
-            'hp-core': '大核',
-            'all-core': '全部'
-        };
+        const CORE_NAMES = { 'e-core': '小核', 'p-core': '中核', 'hp-core': '大核', 'all-core': '全部' };
         const CORE_KEYS = ['e-core', 'p-core', 'hp-core'];
-
-        function coreDisplay(spec) {
-            if (spec === 'all-core') return '全部';
-            if (CORE_KEYS.includes(spec)) return CORE_NAMES[spec] || spec;
-            return spec;
-        }
+        function coreDisplay(spec) { if (spec === 'all-core') return '全部'; if (CORE_KEYS.includes(spec)) return CORE_NAMES[spec] || spec; return spec; }
 
         // ============================================================
         //  状态页
         // ============================================================
-        let activeTab = 'status',
-            statTimer = null;
-
+        let activeTab = 'status', statTimer = null;
         document.querySelectorAll('.tab').forEach(b => {
             b.onclick = () => {
                 const t = b.dataset.tab;
@@ -1776,30 +1736,15 @@
                 activeTab = t;
                 document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
                 ['status', 'rules', 'settings'].forEach(n => $('tab-' + n).hidden = n !== t);
-                if (t === 'status') startStat();
-                else stopStat();
+                if (t === 'status') startStat(); else stopStat();
                 if (t === 'rules') loadRules();
                 if (t === 'settings') loadCfg();
             };
         });
-
-        function startStat() {
-            stopStat();
-            refreshStat();
-            statTimer = setInterval(refreshStat, 3000);
-        }
-
-        function stopStat() {
-            if (statTimer) {
-                clearInterval(statTimer);
-                statTimer = null
-            }
-        }
-
+        function startStat() { stopStat(); refreshStat(); statTimer = setInterval(refreshStat, 3000); }
+        function stopStat() { if (statTimer) { clearInterval(statTimer); statTimer = null } }
         let topoCores = null;
-
         function topoOf(d) { return { e: d.e_core || '', p: d.p_core || '', hp: d.hp_core || '' }; }
-
         async function refreshStat() {
             if (document.hidden) return;
             try {
@@ -1818,10 +1763,7 @@
                 $('s-threads').textContent = d.threads;
                 $('s-procs').textContent = d.total_procs;
                 $('s-cores').textContent = d.cores;
-                const e = d.e_core || '无',
-                    p = d.p_core || '无',
-                    hp = d.hp_core || '无',
-                    all = d.all_core || '-';
+                const e = d.e_core || '无', p = d.p_core || '无', hp = d.hp_core || '无', all = d.all_core || '-';
                 $('s-ecore').textContent = e;
                 $('s-pcore').textContent = p;
                 $('s-hcore').textContent = hp;
@@ -1831,85 +1773,58 @@
                 $('s-card-cores').hidden = !vis.length;
             } catch (e) { }
         }
-
-        function semanticVisible() {
-            if (!topoCores) return CORE_KEYS;
-            const t = topoCores,
-                multi = t.e && t.hp && t.e !== t.hp;
-            return multi ? CORE_KEYS : [];
-        }
+        function semanticVisible() { if (!topoCores) return CORE_KEYS; const t = topoCores, multi = t.e && t.hp && t.e !== t.hp; return multi ? CORE_KEYS : []; }
 
         // ============================================================
         //  规则页 —— 核心拆分显示
         // ============================================================
         let rulesData = [];
 
-        function chipCls(s) {
-            if (s === 'e-core') return 'e';
-            if (s === 'p-core') return 'p';
-            if (s === 'hp-core') return 'h';
-            if (s === 'all-core') return 'c';
-            return 'c';
-        }
+        function chipCls(s) { if (s === 'e-core') return 'e'; if (s === 'p-core') return 'p'; if (s === 'hp-core') return 'h'; if (s === 'all-core') return 'c'; return 'c'; }
+        function chipHtml(s) { const label = coreDisplay(s); return `<span class="chip ${chipCls(s)} sm">${esc(label)}</span>`; }
+        function chipGroupHtml(spec) { if (!spec) return ''; const parts = spec.split(',').map(s => s.trim()).filter(Boolean); if (parts.length === 0) return ''; return `<span class="chip-group">${parts.map(p => chipHtml(p)).join('')}</span>`; }
 
-        function chipHtml(s) {
-            const label = coreDisplay(s);
-            return `<span class="chip ${chipCls(s)} sm">${esc(label)}</span>`;
-        }
-
-        function chipGroupHtml(spec) {
-            if (!spec) return '';
-            const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
-            if (parts.length === 0) return '';
-            return `<span class="chip-group">${parts.map(p => chipHtml(p)).join('')}</span>`;
-        }
-
-        const ICO_EDIT =
-            '<svg viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5z"/></svg>';
-        const ICO_TRASH =
-            '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg>';
+        const ICO_EDIT = '<svg viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5z"/></svg>';
+        const ICO_TRASH = '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg>';
 
         async function loadRules() {
             fetchTopo();
-            try {
-                const d = await api('/api/rules');
-                rulesData = d.rules || [];
-                renderRules();
-            } catch (e) { toast(e.message); }
+            try { const d = await api('/api/rules'); rulesData = d.rules || []; renderRules(); } catch (e) { toast(e.message); }
         }
 
         function grpInner(g, gi) {
+            // 主包独立注释
             const commentHtml = g.comment ? `<span class="grp-comment">${esc(g.comment)}</span>` : '';
             const pkgText = esc(g.pkg);
             const pkgHtml = `<span class="grp-name-static" title="${esc(g.pkg)}">${pkgText}</span>`;
 
             let html = `
-        <div class="grp-head">
-          <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-          <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
-            ${commentHtml}
-            ${pkgHtml}
-          </div>
-          <span class="grp-count">${(g.items ? g.items.length : 0) + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
-          <div class="grp-actions">
-            <button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
-            <button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
-          </div>
-        </div>
-        <div class="grp-body"><div class="grp-inner">`;
+            <div class="grp-head">
+              <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+              <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+                ${commentHtml}
+                ${pkgHtml}
+              </div>
+              <span class="grp-count">${(g.items ? g.items.length : 0) + (g.subs ? Object.values(g.subs).reduce((s, d) => s + d.items.length, 0) : 0)}</span>
+              <div class="grp-actions">
+                <button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
+                <button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
+              </div>
+            </div>
+            <div class="grp-body"><div class="grp-inner">`;
 
             if (g.items) {
                 for (const it of g.items) {
                     const isPkgRule = !it.thread;
                     const displayName = isPkgRule ? '<span class="rule-sub">包级默认</span>' : esc(it.thread);
                     html += `
-            <div class="rule-row">
-              <span class="rule-name">${displayName}</span>
-              ${it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : ''}
-              ${chipGroupHtml(it.spec)}
-              <button class="icon-btn" data-edit="main:${gi}:${it.thread || ''}" title="编辑">${ICO_EDIT}</button>
-              <button class="icon-btn danger" data-del="main:${gi}:${it.thread || ''}" title="删除">${ICO_TRASH}</button>
-            </div>`;
+                    <div class="rule-row">
+                      <span class="rule-name">${displayName}</span>
+                      ${it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : ''}
+                      ${chipGroupHtml(it.spec)}
+                      <button class="icon-btn" data-edit="main:${gi}:${it.thread || ''}" title="编辑">${ICO_EDIT}</button>
+                      <button class="icon-btn danger" data-del="main:${gi}:${it.thread || ''}" title="删除">${ICO_TRASH}</button>
+                    </div>`;
                 }
             }
 
@@ -1919,51 +1834,51 @@
                     const subDisplay = sub.startsWith(':') ? sub : ':' + sub;
                     const threadRules = data.items.filter(it => it.thread);
                     const total = (pkgRule ? 1 : 0) + threadRules.length;
+                    // 子包独立注释（如果存在）
+                    const subCommentHtml = pkgRule && pkgRule.comment ? `<div class="sub-comment"># ${esc(pkgRule.comment)}</div>` : '';
                     html += `
-            <div class="sub-group">
-              <div class="sub-head">
-                <span class="sub-label">${esc(subDisplay)}</span>
-                <span class="grp-count">${total}</span>
-                <button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子包包级规则">${ICO_EDIT}</button>
-                <button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子包">${ICO_TRASH}</button>
-              </div>
-              <div class="sub-inner">`;
+                    <div class="sub-group">
+                      ${subCommentHtml}
+                      <div class="sub-head">
+                        <span class="sub-label">${esc(subDisplay)}</span>
+                        <span class="grp-count">${total}</span>
+                        <button class="icon-btn" data-editsub="${gi}:${sub}" title="编辑子包包级规则">${ICO_EDIT}</button>
+                        <button class="icon-btn danger" data-delsub="${gi}:${sub}" title="删除整个子包">${ICO_TRASH}</button>
+                      </div>
+                      <div class="sub-inner">`;
                     if (pkgRule) {
                         html += `
-                <div class="rule-row">
-                  <span class="rule-name"><span class="rule-sub">包级默认</span></span>
-                  ${pkgRule.comment ? `<span class="rule-comment">${esc(pkgRule.comment)}</span>` : ''}
-                  ${chipGroupHtml(pkgRule.spec)}
-                  <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
-                  <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
-                </div>`;
+                        <div class="rule-row">
+                          <span class="rule-name"><span class="rule-sub">包级默认</span></span>
+                          ${pkgRule.comment ? `<span class="rule-comment">${esc(pkgRule.comment)}</span>` : ''}
+                          ${chipGroupHtml(pkgRule.spec)}
+                          <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
+                          <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
+                        </div>`;
                     } else {
-                        html += `
-                <div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">
-                  无包级规则，可编辑子包添加
-                </div>`;
+                        html += `<div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">无包级规则，可编辑子包添加</div>`;
                     }
                     for (const it of threadRules) {
                         html += `
-                <div class="rule-row">
-                  <span class="rule-name">${esc(it.thread)}</span>
-                  ${it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : ''}
-                  ${chipGroupHtml(it.spec)}
-                  <button class="icon-btn" data-edit="sub:${gi}:${sub}:${it.thread}" title="编辑线程规则">${ICO_EDIT}</button>
-                  <button class="icon-btn danger" data-del="sub:${gi}:${sub}:${it.thread}" title="删除线程规则">${ICO_TRASH}</button>
-                </div>`;
+                        <div class="rule-row">
+                          <span class="rule-name">${esc(it.thread)}</span>
+                          ${it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : ''}
+                          ${chipGroupHtml(it.spec)}
+                          <button class="icon-btn" data-edit="sub:${gi}:${sub}:${it.thread}" title="编辑线程规则">${ICO_EDIT}</button>
+                          <button class="icon-btn danger" data-del="sub:${gi}:${sub}:${it.thread}" title="删除线程规则">${ICO_TRASH}</button>
+                        </div>`;
                     }
                     html += `
-                <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包线程规则</button>
-              </div>
-            </div>`;
+                        <button class="rule-add" data-addsubthread="${gi}:${sub}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包线程规则</button>
+                      </div>
+                    </div>`;
                 }
             }
 
             html += `
-            <button class="rule-add" data-addthread="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加线程规则</button>
-            <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包</button>
-          </div></div>`;
+                <button class="rule-add" data-addthread="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加线程规则</button>
+                <button class="rule-add" data-addsub="${gi}"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加子包</button>
+              </div></div>`;
             return html;
         }
 
@@ -1982,11 +1897,7 @@
             let ref = box.firstChild;
             rulesData.forEach((g, gi) => {
                 let el = live.get(g.pkg);
-                if (!el) {
-                    el = document.createElement('div');
-                    el.className = 'grp';
-                    el.dataset.pkg = g.pkg;
-                }
+                if (!el) { el = document.createElement('div'); el.className = 'grp'; el.dataset.pkg = g.pkg; }
                 el.innerHTML = grpInner(g, gi);
                 el.hidden = !shown.has(gi);
                 if (el !== ref) box.insertBefore(el, ref);
@@ -1995,15 +1906,9 @@
             live.forEach((el, p) => { if (!pkgs.has(p)) el.remove(); });
             let tip = box.querySelector('.empty');
             if (!idx.length) {
-                if (!tip) {
-                    tip = document.createElement('div');
-                    tip.className = 'empty';
-                    box.appendChild(tip);
-                }
+                if (!tip) { tip = document.createElement('div'); tip.className = 'empty'; box.appendChild(tip); }
                 tip.innerHTML = f ? '无匹配应用' : '<span class="empty-icon">📭</span>暂无规则<br>点击右上角「添加」创建第一条规则';
             } else tip?.remove();
-
-            // 检测包名溢出，动态添加滚动
             setTimeout(checkOverflow, 50);
         }
 
@@ -2022,7 +1927,7 @@
         $('r-filter').addEventListener('input', renderRules);
 
         // ============================================================
-        //  规则列表事件
+        //  规则列表事件（保持不变）
         // ============================================================
         $('r-list').addEventListener('click', e => {
             const ea = e.target.closest('[data-editapp]');
@@ -2047,14 +1952,11 @@
                 const parts = eb.dataset.edit.split(':');
                 const type = parts[0];
                 if (type === 'main') {
-                    const gi = +parts[1],
-                        thread = parts[2] || '';
+                    const gi = +parts[1], thread = parts[2] || '';
                     if (thread === '') openRuleModal('edit-pkg', gi);
                     else openRuleModal('edit-thread', gi, '', thread);
                 } else if (type === 'sub') {
-                    const gi = +parts[1],
-                        sub = parts[2],
-                        thread = parts[3] || '';
+                    const gi = +parts[1], sub = parts[2], thread = parts[3] || '';
                     if (thread === '') openRuleModal('edit-sub', gi, sub);
                     else openRuleModal('edit-sub-thread', gi, sub, thread);
                 }
@@ -2066,18 +1968,12 @@
                 const parts = db.dataset.del.split(':');
                 const type = parts[0];
                 if (type === 'main') {
-                    const gi = +parts[1],
-                        thread = parts[2] || '';
+                    const gi = +parts[1], thread = parts[2] || '';
                     const g = rulesData[gi];
                     const item = g.items.find(it => it.thread === thread);
-                    if (item) confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, {
-                        pkg: g.pkg, thread: thread ||
-                            ''
-                    });
+                    if (item) confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: thread || '' });
                 } else if (type === 'sub') {
-                    const gi = +parts[1],
-                        sub = parts[2],
-                        thread = parts[3] || '';
+                    const gi = +parts[1], sub = parts[2], thread = parts[3] || '';
                     const g = rulesData[gi];
                     const fullPkg = g.pkg + ':' + sub;
                     if (thread) confirmDel(`子包 :${sub} 的线程 ${thread}`, { pkg: fullPkg, thread: thread });
@@ -2092,7 +1988,6 @@
                 openRuleModal('edit-sub', +gi, sub);
                 return;
             }
-
             const dsb = e.target.closest('[data-delsub]');
             if (dsb) {
                 const [gi, sub] = dsb.dataset.delsub.split(':');
@@ -2103,14 +1998,9 @@
         });
 
         // ============================================================
-        //  规则编辑弹窗
+        //  规则编辑弹窗（完整版，支持子包注释）
         // ============================================================
-        async function fetchTopo() {
-            if (!topoCores) try {
-                const d = await api('/api/status');
-                topoCores = topoOf(d);
-            } catch (e) { }
-        }
+        async function fetchTopo() { if (!topoCores) try { const d = await api('/api/status'); topoCores = topoOf(d); } catch (e) { } }
 
         function parseSpec(spec) {
             if (!spec || !spec.trim()) return { sem: [], all: false, custom: false, customVal: '' };
@@ -2123,19 +2013,11 @@
         }
 
         const mkRow = o => ({ thread: '', sem: [], all: false, custom: false, customVal: '', comment: '', ...o });
-
-        function specOf(r) {
-            if (r.custom) return r.customVal.trim();
-            if (r.all) return 'all-core';
-            return r.sem.join(',');
-        }
+        function specOf(r) { if (r.custom) return r.customVal.trim(); if (r.all) return 'all-core'; return r.sem.join(','); }
 
         const CHIP_BTNS = [
-            ['e-core', '🟢 小核'],
-            ['p-core', '🔵 中核'],
-            ['hp-core', '🟣 大核'],
-            ['all-core', '⚪ 全部'],
-            ['自定义', '✏️ 自定义']
+            ['e-core', '🟢 小核'], ['p-core', '🔵 中核'], ['hp-core', '🟣 大核'],
+            ['all-core', '⚪ 全部'], ['自定义', '✏️ 自定义']
         ].map(([c, t]) => `<button data-core="${c}" title="${t}">${t}</button>`).join('');
 
         function applyRowTopo(el) {
@@ -2145,44 +2027,38 @@
                 b.hidden = c === '自定义' || c === 'all-core' ? !vis.length : !vis.includes(c);
             });
         }
-
         function updateRowChips(el, r) {
             el.querySelectorAll('.core-chips button').forEach(b => {
                 const c = b.dataset.core;
-                const on = c === '自定义' ? r.custom :
-                    c === 'all-core' ? r.all :
-                        (!r.custom && !r.all && r.sem.includes(c));
+                const on = c === '自定义' ? r.custom : c === 'all-core' ? r.all : (!r.custom && !r.all && r.sem.includes(c));
                 b.classList.toggle('on', on);
             });
             el.querySelector('.rr-custom').hidden = !r.custom;
         }
 
         let mrRows = [];
-
         function renderRows() {
-            const box = $('mr-rows'),
-                tree = isTree();
+            const box = $('mr-rows'), tree = isTree();
             box.innerHTML = mrRows.map((r, i) => {
                 if (r.pkgRow === true) {
                     return `<div class="tree-row" data-ri="${i}">
-                <div class="tr-head"><span class="tr-tag">📦 包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
-                <div class="core-chips">${CHIP_BTNS}</div>
-                <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
-              </div>`;
+                        <div class="tr-head"><span class="tr-tag">📦 包级默认</span><span class="tr-sub">全部线程 · 可选</span></div>
+                        <div class="core-chips">${CHIP_BTNS}</div>
+                        <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
+                    </div>`;
                 } else {
                     return `<div class="tree-row branch" data-ri="${i}">
-                <div class="tr-head sg-wrap">
-                  <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
-                  <input class="rr-comment" placeholder="行尾注释（可选）" value="${esc(r.comment || '')}" style="flex:0.6; min-width:60px;">
-                  <div class="sg-box" hidden></div>
-                  ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
-                </div>
-                <div class="core-chips">${CHIP_BTNS}</div>
-                <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
-              </div>`;
+                        <div class="tr-head sg-wrap">
+                            <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
+                            <input class="rr-comment" placeholder="行尾注释（可选）" value="${esc(r.comment || '')}" style="flex:0.6; min-width:60px;">
+                            <div class="sg-box" hidden></div>
+                            ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
+                        </div>
+                        <div class="core-chips">${CHIP_BTNS}</div>
+                        <input class="rr-custom" placeholder="CPU 范围，如 0-3,6" value="${esc(r.customVal || '')}" hidden>
+                    </div>`;
                 }
             }).join('');
-
             mrRows.forEach((r, i) => {
                 const el = box.children[i];
                 if (!el) return;
@@ -2191,35 +2067,23 @@
                 if (r.pkgRow !== true) {
                     const input = el.querySelector('.rr-thread');
                     const sgBox = el.querySelector('.sg-box');
-                    if (input && sgBox) {
-                        suggest_bind(input, sgBox, { thread: true, onpick: v => r.thread = v.trim() });
-                    }
+                    if (input && sgBox) suggest_bind(input, sgBox, { thread: true, onpick: v => r.thread = v.trim() });
                 }
             });
         }
 
         $('mr-rows').addEventListener('click', e => {
             const del = e.target.closest('.rr-del');
-            if (del) {
-                mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1);
-                renderRows(); return;
-            }
+            if (del) { mrRows.splice(+del.closest('[data-ri]').dataset.ri, 1); renderRows(); return; }
             const b = e.target.closest('.core-chips button');
             if (!b) return;
-            const el = b.closest('[data-ri]'),
-                r = mrRows[+el.dataset.ri],
-                c = b.dataset.core;
-            if (c === '自定义') {
-                r.custom = !r.custom;
-                r.all = false;
-            } else if (c === 'all-core') {
-                r.all = !r.all;
-                r.custom = false; if (!r.all) r.sem = [];
-            } else {
+            const el = b.closest('[data-ri]'), r = mrRows[+el.dataset.ri], c = b.dataset.core;
+            if (c === '自定义') { r.custom = !r.custom; r.all = false; }
+            else if (c === 'all-core') { r.all = !r.all; r.custom = false; if (!r.all) r.sem = []; }
+            else {
                 const base = r.custom || r.all ? [] : r.sem;
                 r.sem = base.includes(c) ? base.filter(x => x !== c) : [...base, c];
-                r.custom = false;
-                r.all = false;
+                r.custom = false; r.all = false;
             }
             updateRowChips(el, r);
         });
@@ -2232,17 +2096,9 @@
             if (e.target.classList.contains('rr-custom')) r.customVal = e.target.value;
         });
 
-        $('mr-addrow').onclick = () => {
-            mrRows.push(mkRow({}));
-            renderRows(); const m = $('mr-addrow').closest('.modal');
-            m.scrollTop = m.scrollHeight;
-        };
+        $('mr-addrow').onclick = () => { mrRows.push(mkRow({})); renderRows(); const m = $('mr-addrow').closest('.modal'); m.scrollTop = m.scrollHeight; };
 
-        let mrMode = 'add-pkg',
-            mrOldThread = '',
-            mrOldPkg = '',
-            mrOldThreads = new Set(),
-            mrHadPkgRule = false;
+        let mrMode = 'add-pkg', mrOldThread = '', mrOldPkg = '', mrOldThreads = new Set(), mrHadPkgRule = false;
         let mrOldAppName = '';
 
         const isTree = () => mrMode === 'add-pkg' || mrMode === 'edit-app';
@@ -2253,6 +2109,7 @@
             mrOldThread = '';
             const pkgInput = $('mr-pkg');
             const appInput = $('mr-appname');
+            const label = document.getElementById('mr-appname-label');
             const tree = isTree();
             pkgInput.readOnly = !tree;
             appInput.value = '';
@@ -2260,12 +2117,14 @@
 
             if (mode === 'add-pkg') {
                 $('mr-title').textContent = '➕ 添加应用';
+                label.textContent = '📝 包级注释（独立行，可选）';
                 pkgInput.value = '';
                 pkgInput.readOnly = false;
                 appInput.value = '';
                 mrRows = [mkRow({ pkgRow: true })];
             } else if (mode === 'edit-app') {
                 $('mr-title').textContent = '✏️ 编辑应用';
+                label.textContent = '📝 包级注释（独立行，可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -2277,14 +2136,11 @@
                 mrHadPkgRule = !!pkgItem;
                 mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
                 for (const it of g.items) {
-                    if (it.thread) mrRows.push(mkRow({
-                        thread: it.thread,
-                        comment: it.comment || '',
-                        ...parseSpec(it.spec)
-                    }));
+                    if (it.thread) mrRows.push(mkRow({ thread: it.thread, comment: it.comment || '', ...parseSpec(it.spec) }));
                 }
             } else if (mode === 'edit-pkg') {
                 $('mr-title').textContent = '📦 包级默认规则';
+                label.textContent = '📝 包级注释（独立行，可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -2293,6 +2149,7 @@
                 mrRows = [mkRow({ pkgRow: true, ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-thread') {
                 $('mr-title').textContent = '🧵 添加线程规则';
+                label.textContent = '📝 包级注释（独立行，可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
@@ -2300,65 +2157,62 @@
                 mrRows = [mkRow({})];
             } else if (mode === 'edit-thread') {
                 $('mr-title').textContent = '🧵 编辑线程规则';
+                label.textContent = '📝 包级注释（独立行，可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
                 appInput.value = g.comment || '';
                 const item = g.items.find(it => it.thread === thread);
                 mrOldThread = thread;
-                const row = mkRow({
-                    thread: thread,
-                    comment: item?.comment || '',
-                    ...(item ? parseSpec(item.spec) : {})
-                });
+                const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
             } else if (mode === 'add-sub') {
                 $('mr-title').textContent = '📂 添加子包';
+                label.textContent = '📝 子包注释（独立行，可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg;
                 pkgInput.readOnly = true;
-                appInput.value = g.comment || '';
+                appInput.value = '';
                 $('mr-addrow').hidden = true;
                 mrRows = [mkRow({ thread: ':', custom: false, sem: [], pkgRow: false })];
                 toast('请输入 :子包名，如 :push，并选择 CPU');
             } else if (mode === 'edit-sub') {
                 $('mr-title').textContent = '📂 编辑子包包级规则';
+                label.textContent = '📝 子包注释（独立行，可选）';
                 const g = rulesData[gi];
                 const fullPkg = g.pkg + ':' + sub;
                 pkgInput.value = fullPkg;
                 pkgInput.readOnly = true;
-                appInput.value = g.comment || '';
-                $('mr-addrow').hidden = true;
+                // 取子包包级规则注释
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
-                mrRows = [mkRow({
-                    pkgRow: true,
-                    thread: ':' + sub,
-                    comment: item?.comment || '',
-                    ...(item ? parseSpec(item.spec) : {})
-                })];
+                appInput.value = item?.comment || '';
+                $('mr-addrow').hidden = true;
+                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) })];
             } else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '🧵 添加子包线程规则';
+                label.textContent = '📝 子包注释（独立行，可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
-                appInput.value = g.comment || '';
+                // 取子包包级注释
+                const subData = g.subs && g.subs[sub];
+                const pkgItem = subData ? subData.items.find(it => !it.thread) : null;
+                appInput.value = pkgItem?.comment || '';
                 mrRows = [mkRow({})];
             } else if (mode === 'edit-sub-thread') {
                 $('mr-title').textContent = '🧵 编辑子包线程规则';
+                label.textContent = '📝 子包注释（独立行，可选）';
                 const g = rulesData[gi];
                 pkgInput.value = g.pkg + ':' + sub;
                 pkgInput.readOnly = true;
-                appInput.value = g.comment || '';
                 const subData = g.subs && g.subs[sub];
+                const pkgItem = subData ? subData.items.find(it => !it.thread) : null;
+                appInput.value = pkgItem?.comment || '';
                 const item = subData ? subData.items.find(it => it.thread === thread) : null;
                 mrOldThread = thread;
-                const row = mkRow({
-                    thread: thread,
-                    comment: item?.comment || '',
-                    ...(item ? parseSpec(item.spec) : {})
-                });
+                const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
                 row.thread = thread;
                 mrRows = [row];
             }
@@ -2375,17 +2229,16 @@
         $('mr-cancel').onclick = () => $('modal-rule').hidden = true;
 
         let mrSaving = false;
-
         $('mr-save').onclick = async () => {
             if (mrSaving) return;
             const pkg = $('mr-pkg').value.trim();
-            const appName = $('mr-appname').value.trim();
+            const appName = $('mr-appname').value.trim(); // 包级注释
             if (!$('mr-pkg').readOnly && !pkg) return toast('请输入应用包名');
             const jobs = [];
             for (const r of mrRows) {
                 const spec = specOf(r);
                 if (r.pkgRow) {
-                    if (spec) jobs.push({ thread: '', cpus: spec, comment: appName });
+                    if (spec) jobs.push({ thread: '', cpus: spec, comment: appName }); // 包级规则使用 appName
                     continue;
                 }
                 if (!r.thread && !spec) continue;
@@ -2396,7 +2249,7 @@
             if (!jobs.length) return toast('请至少配置一条规则');
             mrSaving = true;
             try {
-                // 处理子包相关模式
+                // 子包添加/编辑分支
                 if (mrMode === 'add-sub') {
                     let subInput = jobs[0].thread.trim();
                     if (!subInput.startsWith(':')) subInput = ':' + subInput;
@@ -2442,6 +2295,8 @@
                         }
                         await api('/api/rule', { pkg: fullPkg, thread: threadName, cpus: j.cpus, comment: j.comment });
                     }
+                    // 同时更新子包包级注释（如果有变化）
+                    await api('/api/rule', { pkg: fullPkg, thread: '', cpus: jobs[0].cpus, comment: appName });
                     toast('子包线程规则已更新');
                     loadRules();
                     $('modal-rule').hidden = true;
@@ -2449,7 +2304,7 @@
                     return;
                 }
 
-                // 编辑应用：删除多余规则
+                // 主包相关操作
                 if (mrMode === 'edit-app') {
                     if (pkg !== mrOldPkg) await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
                     const cur = new Set(jobs.map(j => j.thread));
@@ -2459,7 +2314,6 @@
                 if (mrMode === 'edit-thread' && mrOldThread !== jobs[0].thread)
                     await api('/api/rule/del', { pkg, thread: mrOldThread });
 
-                // 保存规则（包级 + 线程）
                 for (let i = 0; i < jobs.length; i++) {
                     const j = jobs[i];
                     if (j.thread.startsWith(':')) continue;
@@ -2484,20 +2338,11 @@
         //  建议下拉（保持不变）
         // ============================================================
         function suggest_bind(input, box, opts = {}) {
-            let seq = 0,
-                hl = -1,
-                items = [],
-                tm = null;
-            const hide = () => {
-                seq++;
-                box.dataset.closed = '1';
-                box.hidden = true;
-                hl = -1;
-            };
+            let seq = 0, hl = -1, items = [], tm = null;
+            const hide = () => { seq++; box.dataset.closed = '1'; box.hidden = true; hl = -1; };
             const render = () => {
                 if (!items.length) { hide(); return; }
-                box.innerHTML = items.map((it, i) =>
-                    `<div class="sg-item${i === hl ? ' hl' : ''}" data-i="${i}">${esc(it)}</div>`).join('');
+                box.innerHTML = items.map((it, i) => `<div class="sg-item${i === hl ? ' hl' : ''}" data-i="${i}">${esc(it)}</div>`).join('');
                 box.hidden = false;
                 if (hl >= 0) box.children[hl]?.scrollIntoView({ block: 'nearest' });
             };
@@ -2516,73 +2361,45 @@
                     render();
                 } catch (e) { }
             };
-            input.addEventListener('input', () => {
-                clearTimeout(tm);
-                tm = setTimeout(fetch_list, 250);
-            });
-            const pick = v => {
-                input.value = v;
-                opts.onpick?.(v);
-                hide();
-            };
+            input.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(fetch_list, 250); });
+            const pick = v => { input.value = v; opts.onpick?.(v); hide(); };
             input.addEventListener('keydown', e => {
                 if (box.hidden || !items.length) return;
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     e.preventDefault();
                     hl = (hl + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
                     render();
-                } else if (e.key === 'Enter' && hl >= 0) {
-                    e.preventDefault();
-                    pick(items[hl]);
-                } else if (e.key === 'Escape') hide();
+                } else if (e.key === 'Enter' && hl >= 0) { e.preventDefault(); pick(items[hl]); }
+                else if (e.key === 'Escape') hide();
             });
-            box.addEventListener('click', e => {
-                const it = e.target.closest('.sg-item');
-                if (it) pick(items[+it.dataset.i]);
-            });
-            input.addEventListener('blur', () => setTimeout(() => {
-                if (document.activeElement !== input && !box.hidden) hide();
-            }, 150));
+            box.addEventListener('click', e => { const it = e.target.closest('.sg-item'); if (it) pick(items[+it.dataset.i]); });
+            input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input && !box.hidden) hide(); }, 150));
         }
-        const sgClose = b => {
-            b.hidden = true;
-            b.dataset.closed = '1';
-        };
+        const sgClose = b => { b.hidden = true; b.dataset.closed = '1'; };
         const closeThreadSuggest = () => document.querySelectorAll('#mr-rows .sg-box:not([hidden])').forEach(sgClose);
         suggest_bind($('mr-pkg'), $('sg-pkg'), { onpick: closeThreadSuggest });
         $('mr-pkg').addEventListener('input', closeThreadSuggest);
         document.addEventListener('pointerdown', e => {
-            if (!e.target.closest('.sg-wrap'))
-                document.querySelectorAll('.sg-box:not([hidden])').forEach(sgClose);
+            if (!e.target.closest('.sg-wrap')) document.querySelectorAll('.sg-box:not([hidden])').forEach(sgClose);
         });
 
         // ============================================================
         //  确认删除（保持不变）
         // ============================================================
         let confirmCb = null;
-
         function confirmDel(msg, body) {
             $('mc-msg').textContent = msg;
             confirmCb = async () => {
-                try {
-                    await api('/api/rule/del', body);
-                    toast('已删除');
-                    loadRules();
-                } catch (e) { toast(e.message); }
+                try { await api('/api/rule/del', body); toast('已删除'); loadRules(); } catch (e) { toast(e.message); }
             };
             $('modal-confirm').hidden = false;
         }
-
         function delPkg(gi) {
             const g = rulesData[gi];
             confirmDel(`删除 ${g.pkg} 的全部 ${g.items.length} 条规则`, { pkg: g.pkg, all: true });
         }
-
         $('mc-cancel').onclick = () => $('modal-confirm').hidden = true;
-        $('mc-ok').onclick = () => {
-            $('modal-confirm').hidden = true;
-            confirmCb && confirmCb();
-        };
+        $('mc-ok').onclick = () => { $('modal-confirm').hidden = true; confirmCb && confirmCb(); };
 
         // ============================================================
         //  设置页（保持不变）
@@ -2590,8 +2407,7 @@
         async function loadCfg() {
             try {
                 const d = await api('/api/config');
-                document.querySelectorAll('#seg-mode button').forEach(b => b.classList.toggle('on', +b.dataset.mode === d
-                    .mode));
+                document.querySelectorAll('#seg-mode button').forEach(b => b.classList.toggle('on', +b.dataset.mode === d.mode));
                 $('c-mode-active').textContent = '当前生效: ' + modeLabel(d.mode_active);
                 $('c-ebpf-hint').hidden = d.ebpf_available;
                 $('c-interval').value = d.interval;
@@ -2600,25 +2416,14 @@
                 $('c-cpuset-on').textContent = d.cpuset_enabled ? '已启用' : '不可用';
             } catch (e) { toast(e.message); }
         }
-
         document.querySelectorAll('#seg-mode button').forEach(b => {
             b.onclick = async () => {
-                try {
-                    await api('/api/config', { mode: +b.dataset.mode });
-                    toast('已切换');
-                    loadCfg();
-                } catch (e) { toast(e.message); }
+                try { await api('/api/config', { mode: +b.dataset.mode }); toast('已切换'); loadCfg(); } catch (e) { toast(e.message); }
             };
         });
-
         async function saveField(body) {
-            try {
-                await api('/api/config', body);
-                toast('已保存');
-                loadCfg();
-            } catch (e) { toast(e.message); }
+            try { await api('/api/config', body); toast('已保存'); loadCfg(); } catch (e) { toast(e.message); }
         }
-
         $('c-interval-save').onclick = () => saveField({ interval: Math.max(1, +$('c-interval').value || 0) });
         $('c-cpuset-save').onclick = () => saveField({ cpuset_name: $('c-cpuset').value.trim() });
         $('c-file-save').onclick = () => saveField({ config_file: $('c-file').value.trim() });
@@ -2628,46 +2433,29 @@
         // ============================================================
         const themeSelector = document.getElementById('theme-selector');
         const themeBtns = themeSelector.querySelectorAll('button');
-
-        function getSystemTheme() {
-            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        }
-
+        function getSystemTheme() { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
         function applyTheme(theme) {
             const isDark = theme === 'dark';
             document.body.classList.toggle('light', !isDark);
             document.body.classList.toggle('dark', isDark);
             const meta = document.getElementById('theme-color');
             if (meta) meta.content = isDark ? '#0f172a' : '#f1f5f9';
-            themeBtns.forEach(btn => {
-                btn.classList.toggle('on', btn.dataset.theme === theme);
-            });
+            themeBtns.forEach(btn => btn.classList.toggle('on', btn.dataset.theme === theme));
             localStorage.setItem('theme', theme);
         }
-
-        function resolveTheme(mode) {
-            if (mode === 'auto') return getSystemTheme();
-            return mode;
-        }
-
+        function resolveTheme(mode) { if (mode === 'auto') return getSystemTheme(); return mode; }
         function initTheme() {
             const saved = localStorage.getItem('theme') || 'auto';
-            themeBtns.forEach(btn => {
-                btn.classList.toggle('on', btn.dataset.theme === saved);
-            });
+            themeBtns.forEach(btn => btn.classList.toggle('on', btn.dataset.theme === saved));
             const effective = resolveTheme(saved);
             applyTheme(effective);
             localStorage.setItem('theme', saved);
             const media = window.matchMedia('(prefers-color-scheme: dark)');
             media.addEventListener('change', () => {
                 const currentMode = localStorage.getItem('theme') || 'auto';
-                if (currentMode === 'auto') {
-                    const newEffective = resolveTheme('auto');
-                    applyTheme(newEffective);
-                }
+                if (currentMode === 'auto') { const newEffective = resolveTheme('auto'); applyTheme(newEffective); }
             });
         }
-
         themeBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 const mode = btn.dataset.theme;
@@ -2677,7 +2465,6 @@
                 themeBtns.forEach(b => b.classList.toggle('on', b === btn));
             });
         });
-
         initTheme();
 
         // ============================================================
@@ -2685,10 +2472,7 @@
         // ============================================================
         $('c-about').onclick = async () => {
             $('page-about').classList.add('show');
-            try {
-                const d = await api('/api/status');
-                $('a-ver').textContent = 'v' + d.version;
-            } catch (e) { }
+            try { const d = await api('/api/status'); $('a-ver').textContent = 'v' + d.version; } catch (e) { }
         };
         $('about-back').onclick = () => $('page-about').classList.remove('show');
 
