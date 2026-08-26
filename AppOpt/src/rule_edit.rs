@@ -1027,7 +1027,7 @@ pub fn rule_upsert(
     comment: Option<&str>,
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
-    use std::collections::HashSet; // 移入函数内部，消除全局警告
+    use std::collections::HashSet;
 
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
 
@@ -1152,36 +1152,13 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // ---- 生成新主包块 ----
-    let new_block = build_package_block(&main_pkg, &new_cfg);
-
-    // ---- 删除所有同名旧块 ----
-    let ranges = find_all_package_ranges(&lines, &main_pkg);
-    if !ranges.is_empty() {
-        for (start, end) in ranges.iter().rev() {
-            lines.drain(*start..=*end);
-        }
+    // ---- 使用 normalize_package_block 统一替换 ----
+    if normalize_package_block(&mut lines, &main_pkg, &new_cfg) {
+        clean_empty_lines(&mut lines);
+        file_write(config_path, &lines)
+    } else {
+        RuleEdit::Malformed
     }
-
-    // ---- 插入新块 ----
-    if !new_block.is_empty() {
-        // 如果文件末尾没有空行，先补一个
-        if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
-            lines.push(String::new());
-        }
-        let insert_pos = ranges.first().map(|(s, _)| *s).unwrap_or(lines.len());
-        let block_len = new_block.len(); // ★ 先保存长度，避免 move 后使用
-        lines.splice(insert_pos..insert_pos, new_block);
-        // 确保块后有空行
-        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
-        {
-            lines.insert(insert_pos + block_len, String::new());
-        }
-    }
-
-    clean_empty_lines(&mut lines);
-    let result = file_write(config_path, &lines);
-    result
 }
 
 /// 清理空块（若块内只有注释或空行，则删除整个块）
@@ -1704,100 +1681,61 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     block
 }
 
-/// 规范化主包：删除所有顶格子包独立块，替换主包块为规范化新块，保留块外注释
 pub fn normalize_package_block(
     lines: &mut Vec<String>,
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 1. 循环删除所有顶格的、以 "pkg:" 开头的独立子包块
-    let mut changed = true;
-    while changed {
-        changed = false;
-        let mut i = 0;
-        while i < lines.len() {
-            let trimmed = lines[i].trim();
-            let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-            if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
-                let pkg_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
-                if let Some((start, end)) = find_package_range(lines, pkg_name) {
-                    lines.drain(start..=end);
-                    changed = true;
-                    break;
-                }
+    // 1. 删除所有顶格的、以 "pkg:" 开头的独立子包块（旧残留）
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
+            if let Some((s, e)) =
+                find_package_range(lines, trimmed.split('=').next().unwrap_or(trimmed))
+            {
+                lines.drain(s..=e);
+                continue;
             }
-            i += 1;
         }
+        i += 1;
     }
 
-    // 2. 查找主包范围
-    let (start, end) = match find_package_range(lines, pkg) {
-        Some((s, e)) if s <= e && e < lines.len() => (s, e),
-        Some(_) => {
-            eprintln!("警告: 主包 {} 范围无效，跳过规范化", pkg);
-            return false;
-        }
-        None => {
-            // 主包不存在，直接插入新块
-            let new_block = build_package_block(pkg, cfg);
-            if new_block.is_empty() {
-                return false;
-            }
-            if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
-                lines.push(String::new());
-            }
-            lines.extend(new_block);
-            lines.push(String::new());
-            return true;
-        }
-    };
+    // 2. 找到所有主包块（包括单行和块）
+    let ranges = find_all_package_ranges(lines, pkg);
+    // 删除所有旧块
+    for (start, end) in ranges.iter().rev() {
+        lines.drain(*start..=*end);
+    }
 
     // 3. 生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
-        lines.drain(start..=end);
-        return true;
+        return true; // 无规则，已删除全部
     }
 
-    // 4. 替换旧块为新块
-    let block_len = new_block.len();
-    lines.splice(start..=end, new_block);
+    // 4. 插入新块（在第一个旧块位置，或文件末尾）
+    let insert_pos = ranges.first().map(|(s, _)| *s).unwrap_or(lines.len());
 
-    // 5. 删除主包块之后多余的残留行（缩进的非注释行和顶格的 '}'）
-    let block_end = start + block_len;
-    if block_end < lines.len() {
-        let mut remove_indices = Vec::new();
-        let mut j = block_end;
-        while j < lines.len() {
-            let line = &lines[j];
-            let trimmed = line.trim();
-            // 删除条件：缩进的非注释行，或者顶格的单独的 '}'
-            let is_indented = line.starts_with(' ') || line.starts_with('\t');
-            let is_sole_brace = trimmed == "}" && !is_indented;
-            if (is_indented
-                && !trimmed.is_empty()
-                && !trimmed.starts_with('#')
-                && !trimmed.starts_with("//"))
-                || is_sole_brace
-            {
-                remove_indices.push(j);
-                j += 1;
-            } else {
-                // 遇到空行、注释或顶格非 '}' 行，停止删除
-                break;
-            }
+    // 保证插入前有空行
+    if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
+        lines.insert(insert_pos, String::new());
+        // 插入空行后，实际插入位置后移一位
+        let actual_pos = insert_pos + 1;
+        let block_len = new_block.len();
+        lines.splice(actual_pos..actual_pos, new_block);
+        if actual_pos + block_len < lines.len() && !lines[actual_pos + block_len].trim().is_empty()
+        {
+            lines.insert(actual_pos + block_len, String::new());
         }
-        for &idx in remove_indices.iter().rev() {
-            lines.remove(idx);
+    } else {
+        let block_len = new_block.len();
+        lines.splice(insert_pos..insert_pos, new_block);
+        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
+        {
+            lines.insert(insert_pos + block_len, String::new());
         }
-    }
-
-    // 6. 确保块后有空行
-    let new_block_end = start + block_len;
-    if new_block_end < lines.len() && !lines[new_block_end].trim().is_empty() {
-        lines.insert(new_block_end, String::new());
-    } else if new_block_end == lines.len() {
-        lines.push(String::new());
     }
 
     true
