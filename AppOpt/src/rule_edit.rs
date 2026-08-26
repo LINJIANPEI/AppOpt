@@ -871,6 +871,7 @@ fn write_sub_pkg_block(
     }
 }
 
+/// 查找文件中所有名为 pkg 的顶层块范围（包括单行规则），返回 (start, end) 列表
 fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut i = 0;
@@ -882,6 +883,7 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
             && !trimmed.starts_with('#')
             && !trimmed.starts_with("//")
         {
+            // 提取行首的包名（忽略 =、{、空格、: 等）
             let line_pkg = trimmed
                 .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
                 .next()
@@ -890,10 +892,12 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                 let start = i;
                 let has_brace = trimmed.contains('{');
                 if !has_brace {
+                    // 单行规则（如 pkg=cpus）
                     ranges.push((start, start));
                     i += 1;
                     continue;
                 }
+                // 块模式：查找匹配的 '}'
                 let mut depth = 0;
                 let mut j = i;
                 while j < lines.len() {
@@ -902,6 +906,7 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                         j += 1;
                         continue;
                     }
+                    // 检查是否遇到了新的顶层包（顶格且不是当前行）
                     if j > i {
                         let is_new_top = !lines[j].starts_with(' ')
                             && !lines[j].starts_with('\t')
@@ -914,6 +919,7 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                             break;
                         }
                     }
+                    // 计算括号深度
                     for ch in t.chars() {
                         if ch == '{' {
                             depth += 1;
@@ -929,6 +935,7 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                     j += 1;
                 }
                 if i == start {
+                    // 未找到闭合，跳过该行
                     i += 1;
                 }
             } else {
@@ -1686,86 +1693,103 @@ pub fn normalize_package_block(
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 1. 收集所有主包块范围（包括单行）
+    // 1. 收集所有旧块范围（主包块）
     let mut ranges = find_all_package_ranges(lines, pkg);
-    // 扩展范围：将每个块前面的连续注释行包含进去
-    for (start, end) in &mut ranges {
-        let mut s = *start;
+    // 扩展范围：向前包含顶格注释，向后包含孤立的 }
+    let mut extended_ranges = Vec::new();
+    for (start, end) in ranges {
+        let mut s = start;
+        let mut e = end;
+
+        // 向前扩展：连续的顶格注释行（# 开头，无缩进）
         while s > 0 {
             let prev = s - 1;
             let trimmed = lines[prev].trim();
             if trimmed.is_empty() {
-                // 空行不扩展，避免跨空行删除远处的注释
                 break;
             }
-            if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            if lines[prev].starts_with('#')
+                && !lines[prev].starts_with(' ')
+                && !lines[prev].starts_with('\t')
+            {
                 s = prev;
             } else {
                 break;
             }
         }
-        *start = s;
-    }
-    // 按结束位置降序排序，方便删除
-    ranges.sort_by_key(|(_, end)| *end);
-    ranges.reverse();
 
-    // 2. 删除所有旧块（及其前面的注释）
-    for (start, end) in ranges {
-        lines.drain(start..=end);
-    }
-
-    // 3. 删除孤立的 "}" 行（缩进的或顶格的，但不在块内的）
-    //    简单方法：删除所有单独的 "}" 行（顶格且内容仅为 "}"）
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed == "}" && !lines[i].starts_with(' ') && !lines[i].starts_with('\t') {
-            lines.remove(i);
-            // 不增加 i，继续检查同一位置
-        } else {
-            i += 1;
-        }
-    }
-
-    // 4. 清理连续空行（保留一个）
-    clean_empty_lines(lines);
-
-    // 5. 生成新块
-    let new_block = build_package_block(pkg, cfg);
-    if new_block.is_empty() {
-        return true;
-    }
-
-    // 6. 确定插入位置：如果没有其他顶层包，插入到文件开头；否则插入到第一个顶层包之前（或末尾）
-    //    为了简单，插入到文件末尾（但可能会打乱顺序），我们最好找到第一个顶层包位置
-    let mut insert_pos = lines.len();
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
-            // 检查是否为顶层（顶格）
-            if !line.starts_with(' ') && !line.starts_with('\t') {
-                insert_pos = i;
+        // 向后扩展：孤立的顶格 } 行（无缩进）
+        let mut next = e + 1;
+        while next < lines.len() {
+            let trimmed = lines[next].trim();
+            if trimmed == "}" && !lines[next].starts_with(' ') && !lines[next].starts_with('\t') {
+                e = next;
+                next += 1;
+            } else if trimmed.is_empty() {
+                // 遇到空行停止，防止误删
+                break;
+            } else {
                 break;
             }
         }
+
+        extended_ranges.push((s, e));
     }
 
-    // 如果插入位置不是0，前面可能缺少空行，我们确保有空行
+    // 合并重叠范围（如果多个块相邻或重叠）
+    if !extended_ranges.is_empty() {
+        extended_ranges.sort_by_key(|(s, _)| *s);
+        let mut merged = Vec::new();
+        let mut cur = extended_ranges[0];
+        for (s, e) in extended_ranges.iter().skip(1) {
+            if *s <= cur.1 + 1 {
+                cur.1 = cur.1.max(*e);
+            } else {
+                merged.push(cur);
+                cur = (*s, *e);
+            }
+        }
+        merged.push(cur);
+        extended_ranges = merged;
+    }
+
+    // 2. 删除所有扩展后的旧块（从后往前删）
+    for (start, end) in extended_ranges.iter().rev() {
+        lines.drain(*start..=*end);
+    }
+
+    // 3. 生成新块
+    let new_block = build_package_block(pkg, cfg);
+    if new_block.is_empty() {
+        // 无规则，已删除全部
+        return true;
+    }
+
+    // 4. 插入新块（在第一个旧块位置，或文件末尾）
+    let insert_pos = if !extended_ranges.is_empty() {
+        extended_ranges[0].0
+    } else {
+        lines.len()
+    };
+
+    // 保证插入前有空行
     if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
         lines.insert(insert_pos, String::new());
-        insert_pos += 1;
+        let actual_pos = insert_pos + 1;
+        let block_len = new_block.len();
+        lines.splice(actual_pos..actual_pos, new_block);
+        if actual_pos + block_len < lines.len() && !lines[actual_pos + block_len].trim().is_empty()
+        {
+            lines.insert(actual_pos + block_len, String::new());
+        }
+    } else {
+        let block_len = new_block.len();
+        lines.splice(insert_pos..insert_pos, new_block);
+        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
+        {
+            lines.insert(insert_pos + block_len, String::new());
+        }
     }
-
-    let block_len = new_block.len();
-    lines.splice(insert_pos..insert_pos, new_block);
-    // 确保块后有空行
-    if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty() {
-        lines.insert(insert_pos + block_len, String::new());
-    }
-
-    // 再次清理空行
-    clean_empty_lines(lines);
 
     true
 }
