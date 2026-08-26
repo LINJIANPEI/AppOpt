@@ -1005,6 +1005,7 @@ pub fn rule_upsert(
         if set.count() == 0 { None } else { Some(set) }
     }
 
+    // ---- 参数规范化 ----
     let (main_pkg, sub_thread, actual_thread) = if pkg.contains(':') {
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
@@ -1028,16 +1029,15 @@ pub fn rule_upsert(
         String::new()
     };
 
-    // ---- 构建新规则集合 ----
+    // ---- 构建新规则集合：删除所有与目标相关的旧规则 ----
     let mut new_rules = Vec::new();
 
     for r in &cfg.rules {
-        // 跳过所有与目标相关的旧规则
-        // 情况1：外部子包包级 (pkg==main_pkg, thread==sub_thread)
+        // 条件1：外部子包包级 (pkg==main_pkg, thread==sub_thread)
         if !sub_thread.is_empty() && r.pkg == main_pkg && r.thread == sub_thread {
             continue;
         }
-        // 情况2：主包线程 (pkg==main_pkg, thread==actual_thread, sub_thread为空)
+        // 条件2：主包线程 (pkg==main_pkg, thread==actual_thread) 且 sub_thread 为空（即操作主包线程）
         if sub_thread.is_empty()
             && !actual_thread.is_empty()
             && r.pkg == main_pkg
@@ -1045,7 +1045,7 @@ pub fn rule_upsert(
         {
             continue;
         }
-        // 情况3：子包内部线程 (pkg==child_pkg, thread==actual_thread)
+        // 条件3：子包内部线程 (pkg==child_pkg, thread==actual_thread)
         if !sub_thread.is_empty()
             && !actual_thread.is_empty()
             && r.pkg == child_pkg
@@ -1053,7 +1053,15 @@ pub fn rule_upsert(
         {
             continue;
         }
-        // 情况4：主包包级 (sub_thread空且actual_thread空)
+        // ★ 条件4：额外删除可能误存在的主包线程 (pkg==main_pkg, thread==actual_thread) 当操作子包内部线程时
+        if !sub_thread.is_empty()
+            && !actual_thread.is_empty()
+            && r.pkg == main_pkg
+            && r.thread == actual_thread
+        {
+            continue;
+        }
+        // 条件5：主包包级 (sub_thread空且actual_thread空)
         if sub_thread.is_empty()
             && actual_thread.is_empty()
             && r.pkg == main_pkg
@@ -1061,21 +1069,21 @@ pub fn rule_upsert(
         {
             continue;
         }
-        // 情况5：可能残留的其他形式，例如 pkg==main_pkg && thread==actual_thread 但 actual_thread 可能与子包同名？不处理。
+        // 其他规则保留
         new_rules.push(r.clone());
     }
 
-    // ---- 添加新规则 ----
+    // ---- 添加新规则（去重） ----
     if !cpus.is_empty() {
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
             let (new_pkg, new_thread) = if !sub_thread.is_empty() {
                 if actual_thread.is_empty() {
-                    (main_pkg.clone(), sub_thread.clone())
+                    (main_pkg.clone(), sub_thread.clone()) // 子包包级
                 } else {
-                    (child_pkg.clone(), actual_thread.clone())
+                    (child_pkg.clone(), actual_thread.clone()) // 子包内部线程
                 }
             } else {
-                (main_pkg.clone(), actual_thread.clone())
+                (main_pkg.clone(), actual_thread.clone()) // 主包操作
             };
 
             let cpuset_dir = if new_thread.is_empty() {
@@ -1114,16 +1122,18 @@ pub fn rule_upsert(
         }
     }
 
-    // ---- 最终去重（全局） ----
+    // ---- 最终全局去重 ----
     let mut seen = HashSet::new();
     new_rules.retain(|r| seen.insert((r.pkg.clone(), r.thread.clone())));
 
+    // ---- 如果没有规则，删除整个主包块 ----
     if new_rules.is_empty() {
         remove_all_package_blocks(&mut lines, &main_pkg);
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
 
+    // ---- 构建新配置并重建主包块 ----
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
