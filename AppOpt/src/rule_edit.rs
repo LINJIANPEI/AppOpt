@@ -986,7 +986,6 @@ pub fn rule_upsert(
 
     // ---- 规范化参数：如果是子包（pkg包含:或thread以:开头），统一转换为 主包 + :子包 形式 ----
     let (main_pkg, sub_thread) = if pkg.contains(':') {
-        // 传入的pkg是 "主包:子包" 格式，拆分为主包和 :子包
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
             (parts[0].to_string(), format!(":{}", parts[1]))
@@ -994,27 +993,42 @@ pub fn rule_upsert(
             (pkg.to_string(), thread.to_string())
         }
     } else if thread.starts_with(':') {
-        // thread 已经是 :子包 格式，pkg 是主包
         (pkg.to_string(), thread.to_string())
     } else {
-        // 普通主包或线程规则
         (pkg.to_string(), thread.to_string())
     };
 
-    // 使用规范化后的主包名和子包/线程名
-    let effective_pkg = main_pkg;
-    let effective_thread = sub_thread;
+    // ★ 提取子包名（不带冒号），用于清理误加的线程规则
+    let sub_name = if sub_thread.starts_with(':') {
+        sub_thread.trim_start_matches(':').to_string()
+    } else {
+        String::new()
+    };
+    // ★ 构建完整的子包内部包名（用于跳过子包内部的所有规则）
+    let child_pkg = if !sub_name.is_empty() {
+        format!("{}:{}", main_pkg, sub_name)
+    } else {
+        String::new()
+    };
 
     eprintln!(
-        "[rule_upsert] 规范化后: pkg='{}', thread='{}'",
-        effective_pkg, effective_thread
+        "[rule_upsert] 规范化后: pkg='{}', thread='{}', sub_name='{}', child_pkg='{}'",
+        main_pkg, sub_thread, sub_name, child_pkg
     );
 
     // ---- 构建新规则集合（删除旧的相同规则） ----
     let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        // 如果规则属于同一个主包且相同的 thread，则跳过（将被替换）
-        if r.pkg == effective_pkg && r.thread == effective_thread {
+        // 跳过主包下旧子包包级规则（pkg=主包, thread=:子包）
+        if r.pkg == main_pkg && r.thread == sub_thread {
+            continue;
+        }
+        // ★ 跳过子包内部的所有规则（pkg=主包:子包），无论thread是什么
+        if !child_pkg.is_empty() && r.pkg == child_pkg {
+            continue;
+        }
+        // ★ 避免遗留不带冒号的同名线程（如 MSF=e-core）
+        if !sub_name.is_empty() && r.pkg == main_pkg && r.thread == sub_name {
             continue;
         }
         new_rules.push(r.clone());
@@ -1024,7 +1038,7 @@ pub fn rule_upsert(
     if !cpus.is_empty() {
         eprintln!("[rule_upsert] 准备添加新规则，cpus={}", cpus);
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
-            let cpuset_dir = if effective_thread.is_empty() {
+            let cpuset_dir = if sub_thread.is_empty() {
                 crate::cpuset::ensure_cpuset_dir(&cpuset, &cfg.topo)
             } else {
                 String::new()
@@ -1036,7 +1050,7 @@ pub fn rule_upsert(
                 if let Some(old) = cfg
                     .rules
                     .iter()
-                    .find(|r| r.pkg == effective_pkg && r.thread == effective_thread)
+                    .find(|r| r.pkg == main_pkg && r.thread == sub_thread)
                 {
                     old.comment.clone()
                 } else {
@@ -1044,10 +1058,9 @@ pub fn rule_upsert(
                 }
             };
             let new_rule = crate::config::AffinityRule {
-                pkg: effective_pkg.clone(),
-                thread: effective_thread.clone(),
-                thread_pattern: std::ffi::CString::new(effective_thread.as_str())
-                    .unwrap_or_default(),
+                pkg: main_pkg.clone(),
+                thread: sub_thread.clone(),
+                thread_pattern: std::ffi::CString::new(sub_thread.as_str()).unwrap_or_default(),
                 cpuset_dir,
                 cpus: cpuset,
                 spec: cpus.to_string(),
@@ -1081,7 +1094,7 @@ pub fn rule_upsert(
 
     // ---- 生成新主包块 ----
     eprintln!("[rule_upsert] 开始生成新块");
-    let new_block = build_package_block(&effective_pkg, &new_cfg);
+    let new_block = build_package_block(&main_pkg, &new_cfg);
     eprintln!("[rule_upsert] 新块行数={}", new_block.len());
 
     // ---- 查找旧主包块范围 ----
@@ -1092,11 +1105,11 @@ pub fn rule_upsert(
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
         let is_pkg_line = is_top_level
-            && (trimmed == effective_pkg
-                || trimmed.starts_with(&format!("{} ", effective_pkg))
-                || trimmed.starts_with(&format!("{}=", effective_pkg))
-                || trimmed.starts_with(&format!("{}{{", effective_pkg))
-                || trimmed.starts_with(&format!("{}:", effective_pkg)));
+            && (trimmed == main_pkg
+                || trimmed.starts_with(&format!("{} ", main_pkg))
+                || trimmed.starts_with(&format!("{}=", main_pkg))
+                || trimmed.starts_with(&format!("{}{{", main_pkg))
+                || trimmed.starts_with(&format!("{}:", main_pkg)));
 
         if is_pkg_line {
             let start = i;
@@ -1210,6 +1223,7 @@ pub fn rule_upsert(
     eprintln!("[rule_upsert] file_write 结果: {:?}", result);
     result
 }
+
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
     let ranges = find_package_ranges(lines, pkg);

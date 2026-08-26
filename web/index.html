@@ -1653,7 +1653,7 @@
     <div id="modal-rule" class="modal-bg" hidden>
         <div class="modal">
             <h3 id="mr-title">添加应用</h3>
-            <!-- 包级注释输入框 -->
+            <!-- 应用注释输入框 -->
             <div class="field-group">
                 <label for="mr-appname" id="mr-appname-label">📝 应用名（可选）</label>
                 <input id="mr-appname" placeholder="例如：微信">
@@ -1852,11 +1852,11 @@
                           <span class="rule-name"><span class="rule-sub">默认核心</span></span>
                           ${pkgRule.comment ? `<span class="rule-comment">${esc(pkgRule.comment)}</span>` : ''}
                           ${chipGroupHtml(pkgRule.spec)}
-                          <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
-                          <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
+                          <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑应用规则">${ICO_EDIT}</button>
+                          <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除应用规则">${ICO_TRASH}</button>
                         </div>`;
                     } else {
-                        html += `<div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">无包级规则，可编辑子进程添加</div>`;
+                        html += `<div class="rule-row" style="color:var(--sub);font-size:12px;justify-content:center;padding:6px 0;">无应用规则，可编辑子进程添加</div>`;
                     }
                     for (const it of threadRules) {
                         html += `
@@ -1971,13 +1971,13 @@
                     const gi = +parts[1], thread = parts[2] || '';
                     const g = rulesData[gi];
                     const item = g.items.find(it => it.thread === thread);
-                    if (item) confirmDel((thread ? '线程 ' + thread : '包级规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: thread || '' });
+                    if (item) confirmDel((thread ? '线程 ' + thread : '应用规则') + ' · ' + g.pkg, { pkg: g.pkg, thread: thread || '' });
                 } else if (type === 'sub') {
                     const gi = +parts[1], sub = parts[2], thread = parts[3] || '';
                     const g = rulesData[gi];
                     const fullPkg = g.pkg + ':' + sub;
                     if (thread) confirmDel(`子进程 :${sub} 的线程 ${thread}`, { pkg: fullPkg, thread: thread });
-                    else confirmDel(`子进程 :${sub} 的包级规则`, { pkg: fullPkg, thread: '' });
+                    else confirmDel(`子进程 :${sub} 的应用规则`, { pkg: fullPkg, thread: '' });
                 }
                 return;
             }
@@ -2232,13 +2232,13 @@
         $('mr-save').onclick = async () => {
             if (mrSaving) return;
             const pkg = $('mr-pkg').value.trim();
-            const appName = $('mr-appname').value.trim(); // 包级注释
+            const appName = $('mr-appname').value.trim(); // 应用注释
             if (!$('mr-pkg').readOnly && !pkg) return toast('请输入应用包名');
             const jobs = [];
             for (const r of mrRows) {
                 const spec = specOf(r);
                 if (r.pkgRow) {
-                    if (spec) jobs.push({ thread: '', cpus: spec, comment: appName }); // 包级规则使用 appName
+                    if (spec) jobs.push({ thread: '', cpus: spec, comment: appName }); // 应用规则使用 appName
                     continue;
                 }
                 if (!r.thread && !spec) continue;
@@ -2325,7 +2325,7 @@
                             comment: j.thread === '' ? appName : j.comment
                         });
                     } catch (e) {
-                        return toast(`第${i + 1}条（${j.thread || '包级'}）失败：${e.message}`);
+                        return toast(`第${i + 1}条（${j.thread || '应用'}）失败：${e.message}`);
                     }
                 }
                 $('modal-rule').hidden = true;
