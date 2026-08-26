@@ -947,24 +947,30 @@ pub fn normalize_package_block(
     pkg: &str,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    // 1. 删除所有与 pkg 相关的顶层块（主包 + 独立子包）
-    remove_all_package_blocks(lines, pkg);
+    let first_pos = remove_all_package_blocks(lines, pkg);
 
-    // 2. 生成新块
     let new_block = build_package_block(pkg, cfg);
     if new_block.is_empty() {
         return true;
     }
 
-    // 3. 插入新块（在文件末尾）
-    let insert_pos = lines.len();
+    let insert_pos = first_pos.unwrap_or(lines.len());
     if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
-        lines.push(String::new());
-    }
-    let block_len = new_block.len();
-    lines.splice(insert_pos..insert_pos, new_block);
-    if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty() {
-        lines.insert(insert_pos + block_len, String::new());
+        lines.insert(insert_pos, String::new());
+        let actual_pos = insert_pos + 1;
+        let block_len = new_block.len();
+        lines.splice(actual_pos..actual_pos, new_block);
+        if actual_pos + block_len < lines.len() && !lines[actual_pos + block_len].trim().is_empty()
+        {
+            lines.insert(actual_pos + block_len, String::new());
+        }
+    } else {
+        let block_len = new_block.len();
+        lines.splice(insert_pos..insert_pos, new_block);
+        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
+        {
+            lines.insert(insert_pos + block_len, String::new());
+        }
     }
 
     true
@@ -999,22 +1005,21 @@ pub fn rule_upsert(
         if set.count() == 0 { None } else { Some(set) }
     }
 
-    // 判断是操作子包内部的线程还是子包包级规则
+    // ---- 参数规范化 ----
+    // 1. 如果 pkg 包含 ':'，则视为子包操作（可能是子包包级或子包内部线程）
+    // 2. 如果 thread 以 ':' 开头，则视为外部子包包级规则
+    // 3. 否则为主包操作
     let (main_pkg, sub_thread, actual_thread) = if pkg.contains(':') {
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
             // pkg 是 "主包:子包"
-            if !thread.is_empty() {
-                // 子包内部的线程规则：pkg 保持不变，thread 为线程名
-                (pkg.to_string(), String::new(), thread.to_string())
-            } else {
-                // 子包的包级规则：转换为外部形式
-                (
-                    parts[0].to_string(),
-                    format!(":{}", parts[1]),
-                    String::new(),
-                )
-            }
+            // 子包内部线程（thread 非空）或子包包级（thread 为空）
+            // 转换为外部形式：main_pkg = 主包, sub_thread = :子包, actual_thread = 线程名（可能为空）
+            (
+                parts[0].to_string(),
+                format!(":{}", parts[1]),
+                thread.to_string(),
+            )
         } else {
             (pkg.to_string(), thread.to_string(), String::new())
         }
@@ -1026,35 +1031,52 @@ pub fn rule_upsert(
         (pkg.to_string(), String::new(), thread.to_string())
     };
 
-    // 确定要删除的旧规则标识：pkg 和 thread（用于过滤）
-    let (delete_pkg, delete_thread) = if !sub_thread.is_empty() {
-        // 子包包级规则
-        (main_pkg.clone(), sub_thread.clone())
-    } else if !actual_thread.is_empty() && !pkg.contains(':') {
-        // 主包线程规则
-        (main_pkg.clone(), actual_thread.clone())
-    } else if !actual_thread.is_empty() && pkg.contains(':') {
-        // 子包内部线程规则：pkg 是完整子包名，thread 是线程名
-        (pkg.to_string(), actual_thread.clone())
+    // 构建新规则集合：删除旧目标规则，保留其他全部
+    let mut new_rules = Vec::new();
+
+    // 如果操作的是子包（外部或内部），我们需要删除旧的对应规则
+    // 删除条件：
+    //   - 如果 sub_thread 非空（即操作子包包级或子包内部线程），则删除所有 pkg == main_pkg && thread == sub_thread 的规则（外部子包包级）
+    //   - 如果 actual_thread 非空，则还需删除 pkg == main_pkg:子包 && thread == actual_thread 的内部线程规则（如果存在）
+    //   - 如果 sub_thread 为空且 actual_thread 非空，则删除主包线程规则（pkg == main_pkg && thread == actual_thread）
+    //   - 如果两者都为空，则删除主包包级规则（pkg == main_pkg && thread == ""）
+
+    let child_pkg = if !sub_thread.is_empty() && sub_thread.starts_with(':') {
+        format!("{}{}", main_pkg, sub_thread)
     } else {
-        // 主包或子包包级规则，thread 为空
-        (main_pkg.clone(), String::new())
+        String::new()
     };
 
-    // 构建新规则集合：删除旧目标规则，保留其他
-    let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        if r.pkg == delete_pkg && r.thread == delete_thread {
+        // 1. 如果 sub_thread 非空，跳过所有 pkg == main_pkg && thread == sub_thread 的规则（外部子包包级）
+        if !sub_thread.is_empty() && r.pkg == main_pkg && r.thread == sub_thread {
             continue;
         }
-        // 额外清理：如果操作的是子包内部线程，还要删除可能存在的同名旧线程（避免残留）
+        // 2. 如果 actual_thread 非空，跳过主包线程规则（pkg == main_pkg && thread == actual_thread）
         if !actual_thread.is_empty()
-            && pkg.contains(':')
-            && r.pkg == pkg
+            && sub_thread.is_empty()
+            && r.pkg == main_pkg
             && r.thread == actual_thread
         {
             continue;
         }
+        // 3. 如果 actual_thread 非空且 sub_thread 非空，跳过子包内部线程规则（pkg == child_pkg && thread == actual_thread）
+        if !actual_thread.is_empty()
+            && !child_pkg.is_empty()
+            && r.pkg == child_pkg
+            && r.thread == actual_thread
+        {
+            continue;
+        }
+        // 4. 如果 sub_thread 为空且 actual_thread 为空，跳过主包包级规则（pkg == main_pkg && thread == ""）
+        if sub_thread.is_empty()
+            && actual_thread.is_empty()
+            && r.pkg == main_pkg
+            && r.thread.is_empty()
+        {
+            continue;
+        }
+        // 5. 保留其他所有规则
         new_rules.push(r.clone());
     }
 
@@ -1062,14 +1084,20 @@ pub fn rule_upsert(
     if !cpus.is_empty() {
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
             // 确定新规则的 pkg 和 thread
+            // 如果 sub_thread 非空且 actual_thread 为空 → 子包包级（外部形式）
+            // 如果 sub_thread 非空且 actual_thread 非空 → 子包内部线程（保持内部形式：pkg=主包:子包, thread=线程名）
+            // 如果 sub_thread 为空且 actual_thread 非空 → 主包线程（pkg=main_pkg, thread=actual_thread）
+            // 如果两者都为空 → 主包包级（pkg=main_pkg, thread=""）
             let (new_pkg, new_thread) = if !sub_thread.is_empty() {
-                // 子包包级规则（外部形式）
-                (main_pkg.clone(), sub_thread.clone())
-            } else if !actual_thread.is_empty() && pkg.contains(':') {
-                // 子包内部线程：pkg 保持完整子包名
-                (pkg.to_string(), actual_thread.clone())
+                if actual_thread.is_empty() {
+                    // 子包包级（外部形式）
+                    (main_pkg.clone(), sub_thread.clone())
+                } else {
+                    // 子包内部线程（内部形式）
+                    (child_pkg.clone(), actual_thread.clone())
+                }
             } else {
-                // 主包线程或包级
+                // 主包操作
                 (main_pkg.clone(), actual_thread.clone())
             };
 
@@ -1078,10 +1106,10 @@ pub fn rule_upsert(
             } else {
                 String::new()
             };
+
             let final_comment = if let Some(c) = comment {
                 c.to_string()
             } else {
-                // 尝试从旧规则继承注释
                 if let Some(old) = cfg
                     .rules
                     .iter()
@@ -1092,6 +1120,7 @@ pub fn rule_upsert(
                     String::new()
                 }
             };
+
             let new_rule = crate::config::AffinityRule {
                 pkg: new_pkg.clone(),
                 thread: new_thread.clone(),
@@ -1107,15 +1136,14 @@ pub fn rule_upsert(
         }
     }
 
+    // 如果没有任何规则（例如删除了所有规则），则删除整个主包块
     if new_rules.is_empty() {
-        let ranges = find_all_package_ranges(&lines, &main_pkg);
-        for (start, end) in ranges.iter().rev() {
-            lines.drain(*start..=*end);
-        }
+        remove_all_package_blocks(&mut lines, &main_pkg);
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
 
+    // 构建新配置
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
@@ -1129,6 +1157,7 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
+    // 调用 normalize_package_block 重建主包块
     if normalize_package_block(&mut lines, &main_pkg, &new_cfg) {
         clean_empty_lines(&mut lines);
         file_write(config_path, &lines)
@@ -1743,91 +1772,104 @@ fn find_package_range_exact(lines: &[String], pkg: &str) -> Option<(usize, usize
     None
 }
 
-/// 删除文件中所有以 pkg 或 pkg: 开头的顶层块（包括注释和孤立 }）
-fn remove_all_package_blocks(lines: &mut Vec<String>, pkg: &str) {
-    let mut ranges = Vec::new();
-
-    // 使用 find_all_package_ranges 删除主包块（pkg 不含 ':'）
-    ranges.extend(find_all_package_ranges(lines, pkg));
-
-    // 遍历所有顶格行，删除以 "pkg:" 开头的块
+fn remove_all_package_blocks(lines: &mut Vec<String>, pkg: &str) -> Option<usize> {
+    let mut first_start = None;
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
-            // 提取块名（直到 '=', ' ', '{'）
-            let block_name = trimmed
+        if is_top_level
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with("//")
+        {
+            let line_pkg = trimmed
                 .split(|c| c == '=' || c == ' ' || c == '{')
                 .next()
-                .unwrap_or(trimmed)
+                .unwrap_or("")
                 .trim();
-            if block_name.starts_with(&format!("{}:", pkg)) {
-                if let Some((s, e)) = find_package_range_exact(lines, block_name) {
-                    ranges.push((s, e));
-                    i = e + 1;
-                    continue;
+            if line_pkg == pkg || line_pkg.starts_with(&format!("{}:", pkg)) {
+                let start = i;
+                let mut end = i;
+                if trimmed.contains('{') {
+                    let mut depth = 0;
+                    let mut j = i;
+                    while j < lines.len() {
+                        let t = lines[j].trim();
+                        if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                            j += 1;
+                            continue;
+                        }
+                        if j > i {
+                            let is_new_top = !lines[j].starts_with(' ')
+                                && !lines[j].starts_with('\t')
+                                && !t.is_empty()
+                                && !t.starts_with('#')
+                                && !t.starts_with("//");
+                            if is_new_top {
+                                end = j - 1;
+                                break;
+                            }
+                        }
+                        for ch in t.chars() {
+                            if ch == '{' {
+                                depth += 1;
+                            } else if ch == '}' {
+                                depth -= 1;
+                            }
+                        }
+                        if depth == 0 && j > i {
+                            end = j;
+                            break;
+                        }
+                        j += 1;
+                    }
+                } else {
+                    end = i;
                 }
+
+                let mut s = start;
+                while s > 0 {
+                    let prev = s - 1;
+                    let trimmed_prev = lines[prev].trim();
+                    if trimmed_prev.is_empty() {
+                        break;
+                    }
+                    if lines[prev].starts_with('#')
+                        && !lines[prev].starts_with(' ')
+                        && !lines[prev].starts_with('\t')
+                    {
+                        s = prev;
+                    } else {
+                        break;
+                    }
+                }
+                let mut e = end;
+                let mut next = e + 1;
+                while next < lines.len() {
+                    let trimmed_next = lines[next].trim();
+                    if trimmed_next == "}"
+                        && !lines[next].starts_with(' ')
+                        && !lines[next].starts_with('\t')
+                    {
+                        e = next;
+                        next += 1;
+                    } else if trimmed_next.is_empty() {
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+
+                if first_start.is_none() {
+                    first_start = Some(s);
+                }
+                lines.drain(s..=e);
+                i = s;
+                continue;
             }
         }
         i += 1;
     }
-
-    // 扩展范围：向前包含顶格注释，向后包含孤立的 }
-    let mut extended = Vec::new();
-    for (start, end) in ranges {
-        let mut s = start;
-        let mut e = end;
-
-        while s > 0 {
-            let prev = s - 1;
-            let trimmed = lines[prev].trim();
-            if trimmed.is_empty() {
-                break;
-            }
-            if lines[prev].starts_with('#')
-                && !lines[prev].starts_with(' ')
-                && !lines[prev].starts_with('\t')
-            {
-                s = prev;
-            } else {
-                break;
-            }
-        }
-
-        let mut next = e + 1;
-        while next < lines.len() {
-            let trimmed = lines[next].trim();
-            if trimmed == "}" && !lines[next].starts_with(' ') && !lines[next].starts_with('\t') {
-                e = next;
-                next += 1;
-            } else if trimmed.is_empty() {
-                break;
-            } else {
-                break;
-            }
-        }
-
-        extended.push((s, e));
-    }
-
-    // 合并重叠范围并删除
-    if !extended.is_empty() {
-        extended.sort_by_key(|(s, _)| *s);
-        let mut merged = Vec::new();
-        let mut cur = extended[0];
-        for (s, e) in extended.iter().skip(1) {
-            if *s <= cur.1 + 1 {
-                cur.1 = cur.1.max(*e);
-            } else {
-                merged.push(cur);
-                cur = (*s, *e);
-            }
-        }
-        merged.push(cur);
-
-        for (start, end) in merged.iter().rev() {
-            lines.drain(*start..=*end);
-        }
-    }
+    first_start
 }
