@@ -1663,7 +1663,8 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
         block.push(sub_first);
 
         // 子包线程规则（缩进 8 空格）
-        for rule in thread_rules {
+        // ★ 修复：使用 &thread_rules 避免移动所有权
+        for rule in &thread_rules {
             let mut line = format!("        {}={}", rule.thread, rule.spec);
             if !rule.comment.is_empty() {
                 line.push_str(&format!(" # {}", rule.comment));
