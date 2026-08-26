@@ -959,14 +959,13 @@ pub fn rule_upsert(
 ) -> RuleEdit {
     use std::collections::HashSet;
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
-    eprintln!("[rule_upsert] 已获取锁");
 
+    // 读取文件
     let mut lines: Vec<String> = fs::read_to_string(config_path)
         .unwrap_or_default()
         .lines()
         .map(String::from)
         .collect();
-    eprintln!("[rule_upsert] 读取文件，行数={}", lines.len());
 
     fn validate_cpus(
         cpus: &str,
@@ -976,15 +975,10 @@ pub fn rule_upsert(
             return None;
         }
         let set = crate::cpuset::parse_cpu_spec(cpus, topo);
-        if set.count() == 0 {
-            eprintln!("[rule_upsert] 无效 CPU 规格: {}", cpus);
-            None
-        } else {
-            Some(set)
-        }
+        if set.count() == 0 { None } else { Some(set) }
     }
 
-    // ---- 规范化参数：如果是子包（pkg包含:或thread以:开头），统一转换为 主包 + :子包 形式 ----
+    // ---- 规范化参数 ----
     let (main_pkg, sub_thread) = if pkg.contains(':') {
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
@@ -998,45 +992,38 @@ pub fn rule_upsert(
         (pkg.to_string(), thread.to_string())
     };
 
-    // ★ 提取子包名（不带冒号），用于清理误加的线程规则
     let sub_name = if sub_thread.starts_with(':') {
         sub_thread.trim_start_matches(':').to_string()
     } else {
         String::new()
     };
-    // ★ 构建完整的子包内部包名（用于跳过子包内部的所有规则）
     let child_pkg = if !sub_name.is_empty() {
         format!("{}:{}", main_pkg, sub_name)
     } else {
         String::new()
     };
 
-    eprintln!(
-        "[rule_upsert] 规范化后: pkg='{}', thread='{}', sub_name='{}', child_pkg='{}'",
-        main_pkg, sub_thread, sub_name, child_pkg
-    );
-
-    // ---- 构建新规则集合（删除旧的相同规则） ----
+    // ---- 构建新规则集合：删除旧目标规则，保留其他全部 ----
     let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        // 跳过主包下旧子包包级规则（pkg=主包, thread=:子包）
+        // 情况1：当前要替换的规则（主包包级或子包包级）
         if r.pkg == main_pkg && r.thread == sub_thread {
             continue;
         }
-        // ★ 跳过子包内部的所有规则（pkg=主包:子包），无论thread是什么
-        if !child_pkg.is_empty() && r.pkg == child_pkg {
+        // 情况2：若操作子包，还要删除可能存在的旧子包内部包级规则（pkg=child_pkg, thread=""）
+        if !child_pkg.is_empty() && r.pkg == child_pkg && r.thread.is_empty() {
             continue;
         }
-        // ★ 避免遗留不带冒号的同名线程（如 MSF=e-core）
+        // 情况3：删除历史遗留的、不带冒号的同名线程（如 MSF=e-core）
         if !sub_name.is_empty() && r.pkg == main_pkg && r.thread == sub_name {
             continue;
         }
+        // ★ 保留所有其他规则，包括子包内部线程规则
         new_rules.push(r.clone());
     }
 
-    // 如果 cpus 非空，添加新规则（使用规范化后的 pkg 和 thread）
+    // 添加新规则
     if !cpus.is_empty() {
-        eprintln!("[rule_upsert] 准备添加新规则，cpus={}", cpus);
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
             let cpuset_dir = if sub_thread.is_empty() {
                 crate::cpuset::ensure_cpuset_dir(&cpuset, &cfg.topo)
@@ -1046,7 +1033,6 @@ pub fn rule_upsert(
             let final_comment = if let Some(c) = comment {
                 c.to_string()
             } else {
-                // 尝试从旧规则继承注释（如果存在）
                 if let Some(old) = cfg
                     .rules
                     .iter()
@@ -1067,13 +1053,11 @@ pub fn rule_upsert(
                 comment: final_comment,
             };
             new_rules.push(new_rule);
-            eprintln!("[rule_upsert] 新规则已加入，总数={}", new_rules.len());
         } else {
             return RuleEdit::Malformed;
         }
     }
 
-    // 如果没有有效规则，直接返回
     if new_rules.is_empty() {
         return RuleEdit::Ok;
     }
@@ -1093,134 +1077,49 @@ pub fn rule_upsert(
     };
 
     // ---- 生成新主包块 ----
-    eprintln!("[rule_upsert] 开始生成新块");
     let new_block = build_package_block(&main_pkg, &new_cfg);
-    eprintln!("[rule_upsert] 新块行数={}", new_block.len());
-
-    // ---- 查找旧主包块范围 ----
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    let mut first_start = None;
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        let is_pkg_line = is_top_level
-            && (trimmed == main_pkg
-                || trimmed.starts_with(&format!("{} ", main_pkg))
-                || trimmed.starts_with(&format!("{}=", main_pkg))
-                || trimmed.starts_with(&format!("{}{{", main_pkg))
-                || trimmed.starts_with(&format!("{}:", main_pkg)));
-
-        if is_pkg_line {
-            let start = i;
-            let has_brace = trimmed.contains('{');
-            if has_brace {
-                let mut depth = 0;
-                let mut j = i;
-                while j < lines.len() {
-                    let t = lines[j].trim();
-                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
-                        j += 1;
-                        continue;
-                    }
-                    depth += t.matches('{').count() - t.matches('}').count();
-                    if depth == 0 && j > i {
-                        ranges.push((start, j));
-                        if first_start.is_none() {
-                            first_start = Some(start);
-                        }
-                        i = j + 1;
-                        break;
-                    }
-                    j += 1;
-                    if j - i > 10000 {
-                        eprintln!("[rule_upsert] 警告: 查找闭合时达到最大深度");
-                        break;
-                    }
-                }
-                if i == start {
-                    ranges.push((start, start));
-                    if first_start.is_none() {
-                        first_start = Some(start);
-                    }
-                    i = start + 1;
-                }
-            } else {
-                ranges.push((start, start));
-                if first_start.is_none() {
-                    first_start = Some(start);
-                }
-                i = start + 1;
-            }
-        } else {
-            i += 1;
+    if new_block.is_empty() {
+        // 如果没有内容，删除整个主包块
+        if let Some((start, end)) = find_package_range(&lines, &main_pkg) {
+            lines.drain(start..=end);
         }
-    }
-    eprintln!("[rule_upsert] 找到 {} 个旧块", ranges.len());
-
-    // ---- 扩展范围以包含前置注释行（但不跨越空行） ----
-    for (start, _) in &mut ranges {
-        let mut s = *start;
-        while s > 0 {
-            let prev = s - 1;
-            let trimmed = lines[prev].trim();
-            if trimmed.is_empty() {
-                break;
-            }
-            if trimmed.starts_with('#') || trimmed.starts_with("//") {
-                s = prev;
-            } else {
-                break;
-            }
-        }
-        *start = s;
+        clean_empty_lines(&mut lines);
+        return file_write(config_path, &lines);
     }
 
-    // ---- 删除旧块 ----
-    if ranges.is_empty() {
-        eprintln!("[rule_upsert] 无旧块，直接插入");
-        if new_block.is_empty() {
-            clean_empty_lines(&mut lines);
-            return file_write(config_path, &lines);
+    // ---- 替换旧主包块 ----
+    if let Some((start, end)) = find_package_range(&lines, &main_pkg) {
+        // 检查范围是否包含其他顶层包（防止误删）
+        let block_text = &lines[start..=end];
+        let has_other_top = block_text.iter().enumerate().any(|(offset, line)| {
+            if offset == 0 {
+                return false;
+            }
+            let trimmed = line.trim();
+            !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && !trimmed.is_empty()
+                && !trimmed.starts_with('#')
+                && !trimmed.starts_with("//")
+                && trimmed != "}"
+        });
+        if has_other_top {
+            eprintln!("警告: 主包范围误包含其他顶层包，拒绝替换");
+            return RuleEdit::Malformed;
         }
+        // 替换
+        lines.splice(start..=end, new_block);
+    } else {
+        // 主包不存在，直接插入
         if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
             lines.push(String::new());
         }
         lines.extend(new_block);
         lines.push(String::new());
-        clean_empty_lines(&mut lines);
-        return file_write(config_path, &lines);
-    }
-
-    eprintln!("[rule_upsert] 删除旧块...");
-    ranges.sort_by_key(|(_, end)| *end);
-    ranges.reverse();
-    for (start, end) in ranges {
-        if start <= end && end < lines.len() {
-            lines.drain(start..=end);
-        } else {
-            eprintln!(
-                "[rule_upsert] 警告: 跳过无效范围 start={}, end={}",
-                start, end
-            );
-        }
-    }
-
-    // ---- 插入新块 ----
-    if !new_block.is_empty() {
-        let insert_pos = first_start.unwrap_or(lines.len());
-        let pos = if insert_pos > lines.len() {
-            lines.len()
-        } else {
-            insert_pos
-        };
-        lines.splice(pos..pos, new_block);
-        eprintln!("[rule_upsert] 新块已插入在 pos={}", pos);
     }
 
     clean_empty_lines(&mut lines);
     let result = file_write(config_path, &lines);
-    eprintln!("[rule_upsert] file_write 结果: {:?}", result);
     result
 }
 
@@ -1510,36 +1409,79 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
 
 // ========== 新增规范化函数 ==========
 
+/// 查找主包 pkg 的完整范围（从包行到匹配的 '}'），返回 (start, end)
+/// 只匹配顶格行，不跨越其他顶层包（通过括号深度和空行判断）
 pub fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        let is_pkg_line = is_top_level
-            && (trimmed == pkg
-                || trimmed.starts_with(&format!("{} ", pkg))
-                || trimmed.starts_with(&format!("{}=", pkg))
-                || trimmed.starts_with(&format!("{}{{", pkg))
-                || trimmed.starts_with(&format!("{}:", pkg)));
-        if is_pkg_line {
-            let mut depth = 0;
-            let mut j = i;
-            while j < lines.len() {
-                let t = lines[j].trim();
-                if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+        // 检查是否为该包的顶格行（忽略空行和注释）
+        if is_top_level
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with("//")
+        {
+            // 匹配包名（后面可能跟着 '=', ' ', '{', 或 ':'）
+            let line_pkg = trimmed
+                .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
+                .next()
+                .unwrap_or("");
+            if line_pkg == pkg {
+                // 找到包行
+                let start = i;
+                let has_brace = trimmed.contains('{');
+                if !has_brace {
+                    // 单行规则，范围仅该行
+                    return Some((start, start));
+                }
+                // 块模式：查找匹配的 '}'
+                let mut depth = 0;
+                let mut j = i;
+                while j < lines.len() {
+                    let t = lines[j].trim();
+                    // 忽略空行和注释
+                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                        j += 1;
+                        continue;
+                    }
+                    // 检查是否是新的顶层包（顶格且不是当前包）
+                    if j > i {
+                        let is_new_top = !lines[j].starts_with(' ')
+                            && !lines[j].starts_with('\t')
+                            && !t.is_empty()
+                            && !t.starts_with('#')
+                            && !t.starts_with("//");
+                        if is_new_top {
+                            // 遇到了新的顶层包，说明当前块已结束（但尚未遇到 '}'）
+                            // 如果深度为0，则当前块结束于 j-1
+                            if depth == 0 {
+                                return Some((start, j - 1));
+                            }
+                            // 否则，新顶层包可能嵌套在当前块内？不可能，因为顶层包不会缩进。
+                            // 所以这里我们假定深度应该已经归零，否则说明括号不匹配，返回 None。
+                            return None;
+                        }
+                    }
+                    // 计算括号深度变化
+                    for ch in t.chars() {
+                        if ch == '{' {
+                            depth += 1;
+                        } else if ch == '}' {
+                            depth -= 1;
+                        }
+                    }
+                    if depth == 0 && j > i {
+                        return Some((start, j));
+                    }
                     j += 1;
-                    continue;
+                    if j - i > 10000 {
+                        break;
+                    }
                 }
-                depth += t.matches('{').count() - t.matches('}').count();
-                if depth == 0 && j > i {
-                    return Some((i, j));
-                }
-                j += 1;
-                if j - i > 10000 {
-                    break;
-                }
+                // 未找到闭合，返回 None
+                return None;
             }
-            return Some((i, i));
         }
         i += 1;
     }
