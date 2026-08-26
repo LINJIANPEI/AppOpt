@@ -1029,61 +1029,60 @@ pub fn rule_upsert(
         String::new()
     };
 
-    // ---- 构建新规则集合：删除所有与目标相关的旧规则 ----
+    // ---- 构建新规则集合：激进删除所有可能的相关旧规则 ----
     let mut new_rules = Vec::new();
 
     for r in &cfg.rules {
-        // 条件1：外部子包包级 (pkg==main_pkg, thread==sub_thread)
-        if !sub_thread.is_empty() && r.pkg == main_pkg && r.thread == sub_thread {
-            continue;
+        // 如果是子包操作（sub_thread非空），删除所有与这个子包相关的规则
+        // 包括外部子包包级（pkg=main_pkg, thread=sub_thread）
+        // 以及内部所有规则（pkg==child_pkg）
+        // 还有主包中可能残留的、与actual_thread相同的线程（防止历史遗留）
+        if !sub_thread.is_empty() {
+            // 删除外部子包包级
+            if r.pkg == main_pkg && r.thread == sub_thread {
+                continue;
+            }
+            // 删除所有内部子包规则（pkg==child_pkg）
+            if r.pkg == child_pkg {
+                continue;
+            }
+            // 如果操作的是内部线程（actual_thread非空），还要删除主包中同名的线程（可能历史残留）
+            if !actual_thread.is_empty() && r.pkg == main_pkg && r.thread == actual_thread {
+                continue;
+            }
+            // 其他规则保留
+            new_rules.push(r.clone());
+        } else {
+            // 主包操作（非子包）
+            if sub_thread.is_empty()
+                && !actual_thread.is_empty()
+                && r.pkg == main_pkg
+                && r.thread == actual_thread
+            {
+                continue;
+            }
+            if sub_thread.is_empty()
+                && actual_thread.is_empty()
+                && r.pkg == main_pkg
+                && r.thread.is_empty()
+            {
+                continue;
+            }
+            new_rules.push(r.clone());
         }
-        // 条件2：主包线程 (pkg==main_pkg, thread==actual_thread) 且 sub_thread 为空（即操作主包线程）
-        if sub_thread.is_empty()
-            && !actual_thread.is_empty()
-            && r.pkg == main_pkg
-            && r.thread == actual_thread
-        {
-            continue;
-        }
-        // 条件3：子包内部线程 (pkg==child_pkg, thread==actual_thread)
-        if !sub_thread.is_empty()
-            && !actual_thread.is_empty()
-            && r.pkg == child_pkg
-            && r.thread == actual_thread
-        {
-            continue;
-        }
-        // ★ 条件4：额外删除可能误存在的主包线程 (pkg==main_pkg, thread==actual_thread) 当操作子包内部线程时
-        if !sub_thread.is_empty()
-            && !actual_thread.is_empty()
-            && r.pkg == main_pkg
-            && r.thread == actual_thread
-        {
-            continue;
-        }
-        // 条件5：主包包级 (sub_thread空且actual_thread空)
-        if sub_thread.is_empty()
-            && actual_thread.is_empty()
-            && r.pkg == main_pkg
-            && r.thread.is_empty()
-        {
-            continue;
-        }
-        // 其他规则保留
-        new_rules.push(r.clone());
     }
 
-    // ---- 添加新规则（去重） ----
+    // ---- 添加新规则 ----
     if !cpus.is_empty() {
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
             let (new_pkg, new_thread) = if !sub_thread.is_empty() {
                 if actual_thread.is_empty() {
-                    (main_pkg.clone(), sub_thread.clone()) // 子包包级
+                    (main_pkg.clone(), sub_thread.clone()) // 子包包级（外部）
                 } else {
                     (child_pkg.clone(), actual_thread.clone()) // 子包内部线程
                 }
             } else {
-                (main_pkg.clone(), actual_thread.clone()) // 主包操作
+                (main_pkg.clone(), actual_thread.clone())
             };
 
             let cpuset_dir = if new_thread.is_empty() {
@@ -1126,14 +1125,12 @@ pub fn rule_upsert(
     let mut seen = HashSet::new();
     new_rules.retain(|r| seen.insert((r.pkg.clone(), r.thread.clone())));
 
-    // ---- 如果没有规则，删除整个主包块 ----
     if new_rules.is_empty() {
         remove_all_package_blocks(&mut lines, &main_pkg);
         clean_empty_lines(&mut lines);
         return file_write(config_path, &lines);
     }
 
-    // ---- 构建新配置并重建主包块 ----
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
