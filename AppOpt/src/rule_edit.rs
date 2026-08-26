@@ -949,25 +949,23 @@ pub fn normalize_package_block(
 ) -> bool {
     let mut ranges = Vec::new();
 
-    // 1. 收集所有主包块（以 pkg 开头的顶格行，使用 find_all_package_ranges）
+    // 1. 收集所有主包块（以 pkg 开头的顶格行）
     ranges.extend(find_all_package_ranges(lines, pkg));
 
     // 2. 收集所有独立子包块（以 "pkg:" 开头的顶格行）
-    //    使用 find_package_range 精确匹配完整子包名
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
         let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
         if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
-            // 提取完整的子包名（可能包含后续的 = 或 {）
+            // 提取完整的子包名（直到 '=', ' ', '{'）
             let block_name = trimmed
                 .split(|c| c == '=' || c == ' ' || c == '{')
                 .next()
                 .unwrap_or(trimmed)
                 .trim();
             if block_name.starts_with(&format!("{}:", pkg)) {
-                // 使用 find_package_range 精确查找该子包块
-                if let Some((s, e)) = find_package_range(lines, block_name) {
+                if let Some((s, e)) = find_package_range_exact(lines, block_name) {
                     ranges.push((s, e));
                     i = e + 1;
                     continue;
@@ -1776,6 +1774,67 @@ fn find_package_range(lines: &[String], pkg: &str) -> Option<(usize, usize)> {
                     j += 1;
                 }
                 return Some((start, i));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+/// 精确查找包名为 pkg（可含 ':'）的顶层块范围，返回 (start, end)
+fn find_package_range_exact(lines: &[String], pkg: &str) -> Option<(usize, usize)> {
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with("//")
+        {
+            // 提取包名：以 '=', ' ', '{' 为分隔符（不包含 ':'）
+            let line_pkg = trimmed
+                .split(|c| c == '=' || c == ' ' || c == '{')
+                .next()
+                .unwrap_or("");
+            if line_pkg == pkg {
+                let start = i;
+                let has_brace = trimmed.contains('{');
+                if !has_brace {
+                    return Some((start, start));
+                }
+                let mut depth = 0;
+                let mut j = i;
+                while j < lines.len() {
+                    let t = lines[j].trim();
+                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                        j += 1;
+                        continue;
+                    }
+                    if j > i {
+                        // 遇到新的顶层包（顶格且不是当前行）则结束
+                        let is_new_top = !lines[j].starts_with(' ')
+                            && !lines[j].starts_with('\t')
+                            && !t.is_empty()
+                            && !t.starts_with('#')
+                            && !t.starts_with("//");
+                        if is_new_top {
+                            return Some((start, j - 1));
+                        }
+                    }
+                    for ch in t.chars() {
+                        if ch == '{' {
+                            depth += 1;
+                        } else if ch == '}' {
+                            depth -= 1;
+                        }
+                    }
+                    if depth == 0 && j > i {
+                        return Some((start, j));
+                    }
+                    j += 1;
+                }
+                // 未找到闭合，返回从 start 到文件末尾
+                return Some((start, lines.len() - 1));
             }
         }
         i += 1;
