@@ -730,16 +730,14 @@ fn write_sub_pkg_block(
                 }
                 if let Some(idx) = pkg_rule_idx {
                     if is_block {
-                        // 转为独立块（去掉 =CPU）
-                        let line = &lines[idx];
-                        let comment_part = comment_at(line).map(|pos| &line[pos..]).unwrap_or("");
+                        // ★ 修复：克隆行，避免借用冲突
+                        let line = lines[idx].clone(); // 克隆，不使用引用
+                        let comment_part = comment_at(&line)
+                            .map(|pos| line[pos..].trim().to_string())
+                            .unwrap_or_default();
                         lines[idx] = format!("    :{} {{", sub);
-                        // 如果原行有注释，独立出来作为注释行
                         if !comment_part.is_empty() {
-                            let comment_text = comment_part.trim_start_matches('#').trim();
-                            if !comment_text.is_empty() {
-                                lines.insert(idx + 1, format!("    # {}", comment_text));
-                            }
+                            lines.insert(idx + 1, format!("    # {}", comment_part));
                         }
                     } else {
                         lines.remove(idx);
@@ -1311,7 +1309,7 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
         if parts.len() == 2 {
             let main_pkg = parts[0];
             let sub = parts[1];
-            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", false);
+            let result = write_sub_pkg_block(&mut lines, main_pkg, sub, thread, "", None, false);
             if let RuleEdit::Ok = result {
                 clean_empty_lines(&mut lines);
                 clean_empty_blocks(&mut lines, main_pkg);
