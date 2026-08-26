@@ -871,7 +871,6 @@ fn write_sub_pkg_block(
     }
 }
 
-/// 查找文件中所有名为 pkg 的顶层块范围（包括单行规则），返回 (start, end) 列表
 fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut i = 0;
@@ -883,7 +882,6 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
             && !trimmed.starts_with('#')
             && !trimmed.starts_with("//")
         {
-            // 提取行首的包名（忽略 =、{、空格、: 等）
             let line_pkg = trimmed
                 .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
                 .next()
@@ -892,12 +890,10 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                 let start = i;
                 let has_brace = trimmed.contains('{');
                 if !has_brace {
-                    // 单行规则（如 pkg=cpus）
                     ranges.push((start, start));
                     i += 1;
                     continue;
                 }
-                // 块模式：查找匹配的 '}'
                 let mut depth = 0;
                 let mut j = i;
                 while j < lines.len() {
@@ -906,7 +902,6 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                         j += 1;
                         continue;
                     }
-                    // 检查是否遇到了新的顶层包（顶格且不是当前行）
                     if j > i {
                         let is_new_top = !lines[j].starts_with(' ')
                             && !lines[j].starts_with('\t')
@@ -914,13 +909,11 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                             && !t.starts_with('#')
                             && !t.starts_with("//");
                         if is_new_top {
-                            // 当前块结束于 j-1
                             ranges.push((start, j - 1));
                             i = j;
                             break;
                         }
                     }
-                    // 计算括号深度
                     for ch in t.chars() {
                         if ch == '{' {
                             depth += 1;
@@ -936,7 +929,6 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
                     j += 1;
                 }
                 if i == start {
-                    // 未找到闭合，跳过该行
                     i += 1;
                 }
             } else {
@@ -1035,7 +1027,8 @@ pub fn rule_upsert(
     comment: Option<&str>,
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
-    use std::collections::HashSet;
+    use std::collections::HashSet; // 移入函数内部，消除全局警告
+
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
 
     let mut lines: Vec<String> = fs::read_to_string(config_path)
@@ -1176,14 +1169,13 @@ pub fn rule_upsert(
         if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
             lines.push(String::new());
         }
-        // 如果之前有旧块，插入到第一个旧块的位置；否则追加到末尾
         let insert_pos = ranges.first().map(|(s, _)| *s).unwrap_or(lines.len());
+        let block_len = new_block.len(); // ★ 先保存长度，避免 move 后使用
         lines.splice(insert_pos..insert_pos, new_block);
         // 确保块后有空行
-        if insert_pos + new_block.len() < lines.len()
-            && !lines[insert_pos + new_block.len()].trim().is_empty()
+        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
         {
-            lines.insert(insert_pos + new_block.len(), String::new());
+            lines.insert(insert_pos + block_len, String::new());
         }
     }
 
