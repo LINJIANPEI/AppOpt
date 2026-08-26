@@ -396,7 +396,8 @@ fn rule_api(req: &Request) -> (u16, String) {
         };
         let thread = v["thread"].as_str().map(str::trim).unwrap_or("");
         // 解析 comment，只有存在且非空才传递
-        let comment = v.get("comment")
+        let comment = v
+            .get("comment")
             .and_then(|c| c.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty());

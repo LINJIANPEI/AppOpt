@@ -871,7 +871,6 @@ fn write_sub_pkg_block(
     }
 }
 
-/// 查找文件中所有名为 pkg 的顶层块范围（包括单行规则），返回 (start, end) 列表
 fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut i = 0;
@@ -942,82 +941,198 @@ fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// 查找包的所有定义范围（包级行及其块）
-fn find_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
-    let pkg_prefix = format!("{}", pkg);
+// 如果已经有 find_all_package_ranges，请删除旧的，使用下面的版本
+fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
-            i += 1;
-            continue;
-        }
-        // 精确匹配包级行：行首（忽略前导空格）以 pkg_prefix 开头
-        // 但注意，块内线程行也可能以包名开头？实际上线程行不会以包名开头，因为线程名通常不同。
-        // 但在当前逻辑中，我们只处理行首（可能缩进）的匹配，但包级行通常顶格（无缩进）。
-        // 不过有些用户可能缩进，为了保险，我们检查是否以 pkg_prefix 开头，并且前面不是空格？
-        // 更好的：检查该行是否以 pkg_prefix 开头，且前面没有非空格字符（即顶格）。
-        // 但为了兼容，我们允许任意缩进，但后面要检查它是不是其他包。
-        // 现在我们先使用原逻辑，但后面加一个保护：如果遇到另一个顶格的包行，则提前结束。
-        if trimmed.starts_with(&pkg_prefix) {
-            let after = &trimmed[pkg_prefix.len()..];
-            if after.is_empty()
-                || after.starts_with('=')
-                || after.starts_with('{')
-                || after.starts_with(' ')
-            {
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with("//")
+        {
+            let line_pkg = trimmed
+                .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
+                .next()
+                .unwrap_or("");
+            if line_pkg == pkg {
                 let start = i;
-                let mut end = i;
-                // 检查是否为块开始（以 '{' 结尾）
-                let is_block = trimmed.ends_with('{') || after.trim_start().starts_with('{');
-                if is_block {
-                    let mut depth = 1;
-                    let mut j = i + 1;
-                    while j < lines.len() {
-                        let t = lines[j].trim();
-                        // 检查是否遇到了新的顶格包级行（即行首非空格且不以 # 开头）
-                        // 如果遇到了，说明当前块结束，但尚未找到匹配的 }，则强制结束
-                        let line_start = lines[j].chars().next().unwrap_or(' ');
-                        if !line_start.is_whitespace()
+                let has_brace = trimmed.contains('{');
+                if !has_brace {
+                    ranges.push((start, start));
+                    i += 1;
+                    continue;
+                }
+                let mut depth = 0;
+                let mut j = i;
+                while j < lines.len() {
+                    let t = lines[j].trim();
+                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+                        j += 1;
+                        continue;
+                    }
+                    if j > i {
+                        let is_new_top = !lines[j].starts_with(' ')
+                            && !lines[j].starts_with('\t')
                             && !t.is_empty()
                             && !t.starts_with('#')
-                            && !t.starts_with("//")
-                        {
-                            // 可能是新包开始，但也有可能是注释行，这里我们只当它是新包行则停止
-                            // 但还要判断是否是线程行（线程行通常缩进，所以顶格的是包）
-                            // 我们可以检查该行是否包含 '=' 或 '{'，若是则很可能是包级行
-                            if t.contains('=') || t.contains('{') {
-                                // 当前块到此结束
-                                end = j - 1;
-                                break;
-                            }
+                            && !t.starts_with("//");
+                        if is_new_top {
+                            ranges.push((start, j - 1));
+                            i = j;
+                            break;
                         }
-                        if t.ends_with('{') && !t.ends_with("{{") && !t.starts_with('}') {
+                    }
+                    for ch in t.chars() {
+                        if ch == '{' {
                             depth += 1;
-                        } else if t == "}" || (t.ends_with('}') && !t.starts_with('{')) {
+                        } else if ch == '}' {
                             depth -= 1;
-                            if depth == 0 {
-                                end = j;
-                                break;
-                            }
                         }
-                        j += 1;
                     }
-                    // 如果 j 到达末尾，end 可能未更新，则设置为 i（单行）
-                    if end == i {
-                        // 未找到闭合，但可能存在后续包行，我们尝试调整
-                        // 这里我们简单地只取本行
+                    if depth == 0 && j > i {
+                        ranges.push((start, j));
+                        i = j + 1;
+                        break;
                     }
+                    j += 1;
                 }
-                ranges.push((start, end));
-                i = end + 1;
+                if i == start {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    ranges
+}
+
+pub fn normalize_package_block(
+    lines: &mut Vec<String>,
+    pkg: &str,
+    cfg: &crate::config::AppConfig,
+) -> bool {
+    let mut ranges = Vec::new();
+
+    // 1. 收集所有主包块
+    ranges.extend(find_all_package_ranges(lines, pkg));
+
+    // 2. 收集所有独立子包块（以 "pkg:" 开头的顶格行）
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
+        if is_top_level && trimmed.starts_with(&format!("{}:", pkg)) {
+            let block_name = trimmed.split('=').next().unwrap_or(trimmed).trim();
+            let sub_ranges = find_all_package_ranges(lines, block_name);
+            if !sub_ranges.is_empty() {
+                for (s, e) in &sub_ranges {
+                    ranges.push((*s, *e));
+                }
+                i = sub_ranges.last().unwrap().1 + 1;
                 continue;
             }
         }
         i += 1;
     }
-    ranges
+
+    // 3. 扩展范围：包含注释和孤立 }
+    let mut extended_ranges = Vec::new();
+    for (start, end) in ranges {
+        let mut s = start;
+        let mut e = end;
+
+        while s > 0 {
+            let prev = s - 1;
+            let trimmed = lines[prev].trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if lines[prev].starts_with('#')
+                && !lines[prev].starts_with(' ')
+                && !lines[prev].starts_with('\t')
+            {
+                s = prev;
+            } else {
+                break;
+            }
+        }
+
+        let mut next = e + 1;
+        while next < lines.len() {
+            let trimmed = lines[next].trim();
+            if trimmed == "}" && !lines[next].starts_with(' ') && !lines[next].starts_with('\t') {
+                e = next;
+                next += 1;
+            } else if trimmed.is_empty() {
+                break;
+            } else {
+                break;
+            }
+        }
+
+        extended_ranges.push((s, e));
+    }
+
+    // 4. 合并重叠
+    if !extended_ranges.is_empty() {
+        extended_ranges.sort_by_key(|(s, _)| *s);
+        let mut merged = Vec::new();
+        let mut cur = extended_ranges[0];
+        for (s, e) in extended_ranges.iter().skip(1) {
+            if *s <= cur.1 + 1 {
+                cur.1 = cur.1.max(*e);
+            } else {
+                merged.push(cur);
+                cur = (*s, *e);
+            }
+        }
+        merged.push(cur);
+        extended_ranges = merged;
+    }
+
+    // 5. 删除旧块
+    for (start, end) in extended_ranges.iter().rev() {
+        lines.drain(*start..=*end);
+    }
+
+    // 6. 生成新块
+    let new_block = build_package_block(pkg, cfg);
+    if new_block.is_empty() {
+        return true;
+    }
+
+    // 7. 插入新块
+    let insert_pos = if !extended_ranges.is_empty() {
+        extended_ranges[0].0
+    } else {
+        lines.len()
+    };
+
+    if insert_pos > 0 && !lines[insert_pos - 1].trim().is_empty() {
+        lines.insert(insert_pos, String::new());
+        let actual_pos = insert_pos + 1;
+        let block_len = new_block.len();
+        lines.splice(actual_pos..actual_pos, new_block);
+        if actual_pos + block_len < lines.len() && !lines[actual_pos + block_len].trim().is_empty()
+        {
+            lines.insert(actual_pos + block_len, String::new());
+        }
+    } else {
+        let block_len = new_block.len();
+        lines.splice(insert_pos..insert_pos, new_block);
+        if insert_pos + block_len < lines.len() && !lines[insert_pos + block_len].trim().is_empty()
+        {
+            lines.insert(insert_pos + block_len, String::new());
+        }
+    }
+
+    true
 }
 
 pub fn rule_upsert(
@@ -1596,74 +1711,4 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
     block.push(String::new()); // 末尾空行
 
     block
-}
-
-fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        if is_top_level
-            && !trimmed.is_empty()
-            && !trimmed.starts_with('#')
-            && !trimmed.starts_with("//")
-        {
-            let line_pkg = trimmed
-                .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
-                .next()
-                .unwrap_or("");
-            if line_pkg == pkg {
-                let start = i;
-                let has_brace = trimmed.contains('{');
-                if !has_brace {
-                    ranges.push((start, start));
-                    i += 1;
-                    continue;
-                }
-                let mut depth = 0;
-                let mut j = i;
-                while j < lines.len() {
-                    let t = lines[j].trim();
-                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
-                        j += 1;
-                        continue;
-                    }
-                    if j > i {
-                        let is_new_top = !lines[j].starts_with(' ')
-                            && !lines[j].starts_with('\t')
-                            && !t.is_empty()
-                            && !t.starts_with('#')
-                            && !t.starts_with("//");
-                        if is_new_top {
-                            ranges.push((start, j - 1));
-                            i = j;
-                            break;
-                        }
-                    }
-                    for ch in t.chars() {
-                        if ch == '{' {
-                            depth += 1;
-                        } else if ch == '}' {
-                            depth -= 1;
-                        }
-                    }
-                    if depth == 0 && j > i {
-                        ranges.push((start, j));
-                        i = j + 1;
-                        break;
-                    }
-                    j += 1;
-                }
-                if i == start {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    ranges
 }
