@@ -871,77 +871,7 @@ fn write_sub_pkg_block(
     }
 }
 
-fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_top_level = !lines[i].starts_with(' ') && !lines[i].starts_with('\t');
-        if is_top_level
-            && !trimmed.is_empty()
-            && !trimmed.starts_with('#')
-            && !trimmed.starts_with("//")
-        {
-            let line_pkg = trimmed
-                .split(|c| c == '=' || c == ' ' || c == '{' || c == ':')
-                .next()
-                .unwrap_or("");
-            if line_pkg == pkg {
-                let start = i;
-                let has_brace = trimmed.contains('{');
-                if !has_brace {
-                    ranges.push((start, start));
-                    i += 1;
-                    continue;
-                }
-                let mut depth = 0;
-                let mut j = i;
-                while j < lines.len() {
-                    let t = lines[j].trim();
-                    if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
-                        j += 1;
-                        continue;
-                    }
-                    if j > i {
-                        let is_new_top = !lines[j].starts_with(' ')
-                            && !lines[j].starts_with('\t')
-                            && !t.is_empty()
-                            && !t.starts_with('#')
-                            && !t.starts_with("//");
-                        if is_new_top {
-                            ranges.push((start, j - 1));
-                            i = j;
-                            break;
-                        }
-                    }
-                    for ch in t.chars() {
-                        if ch == '{' {
-                            depth += 1;
-                        } else if ch == '}' {
-                            depth -= 1;
-                        }
-                    }
-                    if depth == 0 && j > i {
-                        ranges.push((start, j));
-                        i = j + 1;
-                        break;
-                    }
-                    j += 1;
-                }
-                if i == start {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    ranges
-}
-
-// 如果已经有 find_all_package_ranges，请删除旧的，使用下面的版本
+/// 查找文件中所有名为 pkg 的顶层块范围（包括单行规则），返回 (start, end) 列表
 fn find_all_package_ranges(lines: &[String], pkg: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut i = 0;
@@ -1019,7 +949,7 @@ pub fn normalize_package_block(
 ) -> bool {
     let mut ranges = Vec::new();
 
-    // 1. 收集所有主包块
+    // 1. 收集所有主包块（以 pkg 开头的顶格行）
     ranges.extend(find_all_package_ranges(lines, pkg));
 
     // 2. 收集所有独立子包块（以 "pkg:" 开头的顶格行）
@@ -1041,7 +971,7 @@ pub fn normalize_package_block(
         i += 1;
     }
 
-    // 3. 扩展范围：包含注释和孤立 }
+    // 3. 扩展范围：向前包含顶格注释，向后包含孤立的 }
     let mut extended_ranges = Vec::new();
     for (start, end) in ranges {
         let mut s = start;
@@ -1079,7 +1009,7 @@ pub fn normalize_package_block(
         extended_ranges.push((s, e));
     }
 
-    // 4. 合并重叠
+    // 4. 合并重叠范围
     if !extended_ranges.is_empty() {
         extended_ranges.sort_by_key(|(s, _)| *s);
         let mut merged = Vec::new();
@@ -1096,7 +1026,7 @@ pub fn normalize_package_block(
         extended_ranges = merged;
     }
 
-    // 5. 删除旧块
+    // 5. 删除所有扩展后的范围
     for (start, end) in extended_ranges.iter().rev() {
         lines.drain(*start..=*end);
     }
@@ -1143,6 +1073,8 @@ pub fn rule_upsert(
     comment: Option<&str>,
     cfg: &crate::config::AppConfig,
 ) -> RuleEdit {
+    use std::collections::HashSet;
+
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
 
     let mut lines: Vec<String> = fs::read_to_string(config_path)
@@ -1162,7 +1094,6 @@ pub fn rule_upsert(
         if set.count() == 0 { None } else { Some(set) }
     }
 
-    // ---- 规范化参数 ----
     let (main_pkg, sub_thread) = if pkg.contains(':') {
         let parts: Vec<&str> = pkg.splitn(2, ':').collect();
         if parts.len() == 2 {
@@ -1187,26 +1118,20 @@ pub fn rule_upsert(
         String::new()
     };
 
-    // ---- 构建新规则集合：删除旧目标规则，保留其他全部 ----
     let mut new_rules = Vec::new();
     for r in &cfg.rules {
-        // 1. 跳过主包下旧子包包级规则（pkg=主包, thread=:子包）
         if r.pkg == main_pkg && r.thread == sub_thread {
             continue;
         }
-        // 2. 跳过子包内部的所有规则（pkg=主包:子包），仅当操作子包时
         if !child_pkg.is_empty() && r.pkg == child_pkg {
             continue;
         }
-        // 3. 跳过历史遗留的不带冒号的同名线程（如 MSF=e-core）
         if !sub_name.is_empty() && r.pkg == main_pkg && r.thread == sub_name {
             continue;
         }
-        // 4. 保留其他所有规则（包括子包内部线程规则）
         new_rules.push(r.clone());
     }
 
-    // 添加新规则
     if !cpus.is_empty() {
         if let Some(cpuset) = validate_cpus(cpus, &cfg.topo) {
             let cpuset_dir = if sub_thread.is_empty() {
@@ -1243,7 +1168,6 @@ pub fn rule_upsert(
     }
 
     if new_rules.is_empty() {
-        // 没有新规则，删除该包所有规则
         let ranges = find_all_package_ranges(&lines, &main_pkg);
         for (start, end) in ranges.iter().rev() {
             lines.drain(*start..=*end);
@@ -1252,7 +1176,6 @@ pub fn rule_upsert(
         return file_write(config_path, &lines);
     }
 
-    // ---- 构建新配置 ----
     let pkgs: HashSet<String> = new_rules.iter().map(|r| r.pkg.clone()).collect();
     let has_thread_rules: HashSet<String> = new_rules
         .iter()
@@ -1266,7 +1189,6 @@ pub fn rule_upsert(
         topo: cfg.topo.clone(),
     };
 
-    // ---- 使用 normalize_package_block 统一替换 ----
     if normalize_package_block(&mut lines, &main_pkg, &new_cfg) {
         clean_empty_lines(&mut lines);
         file_write(config_path, &lines)
@@ -1277,7 +1199,7 @@ pub fn rule_upsert(
 
 /// 清理空块（若块内只有注释或空行，则删除整个块）
 fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
-    let ranges = find_package_ranges(lines, pkg);
+    let ranges = find_all_package_ranges(lines, pkg);
     for (start, end) in ranges.iter().rev() {
         let start_line = &lines[*start];
         let trimmed = start_line.trim();
@@ -1303,7 +1225,7 @@ fn clean_empty_blocks(lines: &mut Vec<String>, pkg: &str) {
 /// 子包删除辅助
 fn delete_sub_pkg(lines: &mut Vec<String>, main_pkg: &str, sub: &str, thread: &str) -> RuleEdit {
     let sub_pkg = format!("{}:{}", main_pkg, sub);
-    let ranges = find_package_ranges(lines, &sub_pkg);
+    let ranges = find_all_package_ranges(lines, &sub_pkg);
     if ranges.is_empty() {
         return RuleEdit::NotFound;
     }
@@ -1380,7 +1302,7 @@ pub fn rule_delete(config_path: &str, pkg: &str, thread: &str) -> RuleEdit {
     }
 
     // ---- 主包处理 ----
-    let ranges = find_package_ranges(&lines, pkg);
+    let ranges = find_all_package_ranges(&lines, pkg);
     if ranges.is_empty() {
         return RuleEdit::NotFound;
     }
@@ -1473,7 +1395,7 @@ pub fn rule_delete_pkg(config_path: &str, pkg: &str) -> RuleEdit {
         return RuleEdit::NotFound;
     }
 
-    let ranges = find_package_ranges(&lines, pkg);
+    let ranges = find_all_package_ranges(&lines, pkg);
     if ranges.is_empty() {
         return RuleEdit::NotFound;
     }
