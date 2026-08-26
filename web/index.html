@@ -608,7 +608,7 @@
             box-shadow: 0 2px 12px rgba(239, 68, 68, 0.3);
         }
 
-        /* 规则分组 - 新布局：应用名在上，包名在下 */
+        /* 规则分组 */
         .grp {
             background: var(--glass-bg);
             backdrop-filter: blur(24px);
@@ -659,7 +659,7 @@
             transform: rotate(90deg);
         }
 
-        /* 应用名（注释）—— 大号粗体 */
+        /* 应用名（注释）—— 大号粗体，左对齐 */
         .grp-comment {
             font-weight: 700;
             font-size: 16px;
@@ -675,37 +675,7 @@
             text-overflow: ellipsis;
         }
 
-        /* 包名 —— 灰色小字，放在应用名下方 */
-        .grp-name {
-            flex: 1 1 100%;
-            min-width: 0;
-            color: #94a3b8;
-            font-size: 12px;
-            opacity: 0.8;
-            background: rgba(148, 163, 184, 0.15);
-            padding: 0 10px;
-            border-radius: 12px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-weight: 400;
-            order: 2;
-            max-width: 100%;
-            display: block;
-        }
-
-        .grp-name marquee {
-            display: block;
-            width: 100%;
-            font-size: 12px;
-            color: #94a3b8;
-            background: transparent;
-            border: none;
-            padding: 0;
-            opacity: 0.8;
-            font-weight: 400;
-        }
-
+        /* 包名（右侧）—— 灰色小字，放在应用名下方 */
         .grp-name-static {
             display: block;
             white-space: nowrap;
@@ -719,6 +689,19 @@
             padding: 0 10px;
             border-radius: 12px;
             background: rgba(148, 163, 184, 0.15);
+            order: 2;
+        }
+
+        .grp-name-static marquee {
+            display: block;
+            width: 100%;
+            font-size: 12px;
+            color: #94a3b8;
+            background: transparent;
+            border: none;
+            padding: 0;
+            opacity: 0.8;
+            font-weight: 400;
         }
 
         .grp-count {
@@ -984,6 +967,26 @@
             margin-bottom: 16px;
         }
 
+        .modal input {
+            text-align: left;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            font-size: 14px;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .modal input:focus {
+            border-color: var(--blue);
+            background: var(--input-focus);
+        }
+
+        .modal .sg-wrap {
+            text-align: left;
+        }
+
         .modal .field-group {
             margin-bottom: 10px;
             text-align: left;
@@ -995,26 +998,6 @@
             color: var(--sub);
             margin-bottom: 4px;
             font-weight: 500;
-        }
-
-        .modal input {
-            text-align: left;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            padding: 10px 14px;
-            font-size: 14px;
-            width: 100%;
-            margin-bottom: 0;
-        }
-
-        .modal input:focus {
-            border-color: var(--blue);
-            background: var(--input-focus);
-        }
-
-        .modal .sg-wrap {
-            text-align: left;
         }
 
         .modal-actions {
@@ -1120,7 +1103,7 @@
             margin-bottom: 0;
         }
 
-        .tr-head .rr-comment {
+        .tr-head input.rr-comment {
             flex: 0.6;
             min-width: 60px;
         }
@@ -1475,11 +1458,6 @@
                 margin-left: 4px;
                 padding-left: 8px;
             }
-
-            .tr-head .rr-comment {
-                flex: 1;
-                min-width: 50px;
-            }
         }
 
         @media(min-width:600px) {
@@ -1695,8 +1673,9 @@
     <div id="modal-rule" class="modal-bg" hidden>
         <div class="modal">
             <h3 id="mr-title">添加应用</h3>
+            <!-- 应用名（包级注释） -->
             <div class="field-group">
-                <label for="mr-appname">📝 应用名（可选）</label>
+                <label for="mr-appname">📝 应用名（可选，将作为块上方注释）</label>
                 <input id="mr-appname" placeholder="例如：微信">
             </div>
             <div class="field-group">
@@ -1899,21 +1878,10 @@
             } catch (e) { toast(e.message); }
         }
 
-        function checkOverflow() {
-            document.querySelectorAll('.grp-name-static').forEach(el => {
-                if (el.scrollWidth > el.clientWidth) {
-                    const text = el.textContent;
-                    el.innerHTML = `<marquee behavior="scroll" direction="left" scrollamount="3">${text}</marquee>`;
-                    el.style.background = 'rgba(148,163,184,0.15)';
-                    el.style.padding = '0 10px';
-                    el.style.borderRadius = '12px';
-                }
-            });
-        }
-
         function grpInner(g, gi) {
             const commentHtml = g.comment ? `<span class="grp-comment">${esc(g.comment)}</span>` : '';
-            const pkgHtml = `<span class="grp-name-static" title="${esc(g.pkg)}">${esc(g.pkg)}</span>`;
+            const pkgText = esc(g.pkg);
+            const pkgHtml = `<span class="grp-name-static" title="${esc(g.pkg)}">${pkgText}</span>`;
 
             let html = `
         <div class="grp-head">
@@ -1934,11 +1902,10 @@
                 for (const it of g.items) {
                     const isPkgRule = !it.thread;
                     const displayName = isPkgRule ? '<span class="rule-sub">包级默认</span>' : esc(it.thread);
-                    const commentTag = it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : '';
                     html += `
             <div class="rule-row">
               <span class="rule-name">${displayName}</span>
-              ${commentTag}
+              ${it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : ''}
               ${chipGroupHtml(it.spec)}
               <button class="icon-btn" data-edit="main:${gi}:${it.thread || ''}" title="编辑">${ICO_EDIT}</button>
               <button class="icon-btn danger" data-del="main:${gi}:${it.thread || ''}" title="删除">${ICO_TRASH}</button>
@@ -1962,11 +1929,10 @@
               </div>
               <div class="sub-inner">`;
                     if (pkgRule) {
-                        const commentTag = pkgRule.comment ? `<span class="rule-comment">${esc(pkgRule.comment)}</span>` : '';
                         html += `
                 <div class="rule-row">
                   <span class="rule-name"><span class="rule-sub">包级默认</span></span>
-                  ${commentTag}
+                  ${pkgRule.comment ? `<span class="rule-comment">${esc(pkgRule.comment)}</span>` : ''}
                   ${chipGroupHtml(pkgRule.spec)}
                   <button class="icon-btn" data-edit="sub:${gi}:${sub}:" title="编辑包级规则">${ICO_EDIT}</button>
                   <button class="icon-btn danger" data-del="sub:${gi}:${sub}:" title="删除包级规则">${ICO_TRASH}</button>
@@ -1978,11 +1944,10 @@
                 </div>`;
                     }
                     for (const it of threadRules) {
-                        const commentTag = it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : '';
                         html += `
                 <div class="rule-row">
                   <span class="rule-name">${esc(it.thread)}</span>
-                  ${commentTag}
+                  ${it.comment ? `<span class="rule-comment">${esc(it.comment)}</span>` : ''}
                   ${chipGroupHtml(it.spec)}
                   <button class="icon-btn" data-edit="sub:${gi}:${sub}:${it.thread}" title="编辑线程规则">${ICO_EDIT}</button>
                   <button class="icon-btn danger" data-del="sub:${gi}:${sub}:${it.thread}" title="删除线程规则">${ICO_TRASH}</button>
@@ -2037,7 +2002,21 @@
                 }
                 tip.innerHTML = f ? '无匹配应用' : '<span class="empty-icon">📭</span>暂无规则<br>点击右上角「添加」创建第一条规则';
             } else tip?.remove();
+
+            // 检测包名溢出，动态添加滚动
             setTimeout(checkOverflow, 50);
+        }
+
+        function checkOverflow() {
+            document.querySelectorAll('.grp-name-static').forEach(el => {
+                if (el.scrollWidth > el.clientWidth) {
+                    const text = el.textContent;
+                    el.innerHTML = `<marquee behavior="scroll" direction="left" scrollamount="3">${text}</marquee>`;
+                    el.style.background = 'rgba(148,163,184,0.15)';
+                    el.style.padding = '0 10px';
+                    el.style.borderRadius = '12px';
+                }
+            });
         }
 
         $('r-filter').addEventListener('input', renderRules);
@@ -2061,7 +2040,7 @@
                 return;
             }
             const head = e.target.closest('.grp-head');
-            if (head) { head.parentElement.closest('.grp').classList.toggle('open'); return; }
+            if (head) { head.closest('.grp').classList.toggle('open'); return; }
 
             const eb = e.target.closest('[data-edit]');
             if (eb) {
@@ -2194,7 +2173,7 @@
                     return `<div class="tree-row branch" data-ri="${i}">
                 <div class="tr-head sg-wrap">
                   <input class="rr-thread" placeholder="输入线程名" value="${esc(r.thread || '')}">
-                  <input class="rr-comment" placeholder="注释" value="${esc(r.comment || '')}">
+                  <input class="rr-comment" placeholder="行尾注释（可选）" value="${esc(r.comment || '')}" style="flex:0.6; min-width:60px;">
                   <div class="sg-box" hidden></div>
                   ${tree ? `<button class="icon-btn danger rr-del" title="删除该行">${ICO_TRASH}</button>` : ''}
                 </div>
@@ -2249,7 +2228,7 @@
             const r = mrRows[+e.target.closest('[data-ri]')?.dataset.ri];
             if (!r) return;
             if (e.target.classList.contains('rr-thread')) r.thread = e.target.value.trim();
-            if (e.target.classList.contains('rr-comment')) r.comment = e.target.value.trim();
+            if (e.target.classList.contains('rr-comment')) r.comment = e.target.value;
             if (e.target.classList.contains('rr-custom')) r.customVal = e.target.value;
         });
 
@@ -2298,7 +2277,11 @@
                 mrHadPkgRule = !!pkgItem;
                 mrRows = [mkRow({ pkgRow: true, ...(pkgItem ? parseSpec(pkgItem.spec) : {}) })];
                 for (const it of g.items) {
-                    if (it.thread) mrRows.push(mkRow({ thread: it.thread, comment: it.comment || '', ...parseSpec(it.spec) }));
+                    if (it.thread) mrRows.push(mkRow({
+                        thread: it.thread,
+                        comment: it.comment || '',
+                        ...parseSpec(it.spec)
+                    }));
                 }
             } else if (mode === 'edit-pkg') {
                 $('mr-title').textContent = '📦 包级默认规则';
@@ -2323,7 +2306,11 @@
                 appInput.value = g.comment || '';
                 const item = g.items.find(it => it.thread === thread);
                 mrOldThread = thread;
-                const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
+                const row = mkRow({
+                    thread: thread,
+                    comment: item?.comment || '',
+                    ...(item ? parseSpec(item.spec) : {})
+                });
                 row.thread = thread;
                 mrRows = [row];
             } else if (mode === 'add-sub') {
@@ -2345,7 +2332,12 @@
                 $('mr-addrow').hidden = true;
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => !it.thread) : null;
-                mrRows = [mkRow({ pkgRow: true, thread: ':' + sub, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) })];
+                mrRows = [mkRow({
+                    pkgRow: true,
+                    thread: ':' + sub,
+                    comment: item?.comment || '',
+                    ...(item ? parseSpec(item.spec) : {})
+                })];
             } else if (mode === 'add-sub-thread') {
                 $('mr-title').textContent = '🧵 添加子包线程规则';
                 const g = rulesData[gi];
@@ -2362,7 +2354,11 @@
                 const subData = g.subs && g.subs[sub];
                 const item = subData ? subData.items.find(it => it.thread === thread) : null;
                 mrOldThread = thread;
-                const row = mkRow({ thread: thread, comment: item?.comment || '', ...(item ? parseSpec(item.spec) : {}) });
+                const row = mkRow({
+                    thread: thread,
+                    comment: item?.comment || '',
+                    ...(item ? parseSpec(item.spec) : {})
+                });
                 row.thread = thread;
                 mrRows = [row];
             }
@@ -2400,7 +2396,7 @@
             if (!jobs.length) return toast('请至少配置一条规则');
             mrSaving = true;
             try {
-                // 子包添加
+                // 处理子包相关模式
                 if (mrMode === 'add-sub') {
                     let subInput = jobs[0].thread.trim();
                     if (!subInput.startsWith(':')) subInput = ':' + subInput;
@@ -2453,7 +2449,7 @@
                     return;
                 }
 
-                // 主包相关
+                // 编辑应用：删除多余规则
                 if (mrMode === 'edit-app') {
                     if (pkg !== mrOldPkg) await api('/api/rule/rename', { old: mrOldPkg, new: pkg });
                     const cur = new Set(jobs.map(j => j.thread));
@@ -2463,23 +2459,17 @@
                 if (mrMode === 'edit-thread' && mrOldThread !== jobs[0].thread)
                     await api('/api/rule/del', { pkg, thread: mrOldThread });
 
-                // 保存所有规则
+                // 保存规则（包级 + 线程）
                 for (let i = 0; i < jobs.length; i++) {
                     const j = jobs[i];
                     if (j.thread.startsWith(':')) continue;
-                    const isPkg = j.thread === '';
-                    const body = {
-                        pkg,
-                        thread: j.thread,
-                        cpus: j.cpus,
-                    };
-                    if (isPkg) {
-                        body.comment = appName; // 包级规则使用应用名
-                    } else {
-                        body.comment = j.comment || ''; // 线程规则使用各自的注释
-                    }
                     try {
-                        await api('/api/rule', body);
+                        await api('/api/rule', {
+                            pkg,
+                            thread: j.thread,
+                            cpus: j.cpus,
+                            comment: j.thread === '' ? appName : j.comment
+                        });
                     } catch (e) {
                         return toast(`第${i + 1}条（${j.thread || '包级'}）失败：${e.message}`);
                     }
@@ -2491,7 +2481,7 @@
         };
 
         // ============================================================
-        //  建议下拉
+        //  建议下拉（保持不变）
         // ============================================================
         function suggest_bind(input, box, opts = {}) {
             let seq = 0,
@@ -2567,7 +2557,7 @@
         });
 
         // ============================================================
-        //  确认删除
+        //  确认删除（保持不变）
         // ============================================================
         let confirmCb = null;
 
@@ -2595,7 +2585,7 @@
         };
 
         // ============================================================
-        //  设置页
+        //  设置页（保持不变）
         // ============================================================
         async function loadCfg() {
             try {
@@ -2634,7 +2624,7 @@
         $('c-file-save').onclick = () => saveField({ config_file: $('c-file').value.trim() });
 
         // ============================================================
-        //  主题管理
+        //  主题管理（自动适应 + 手动切换）
         // ============================================================
         const themeSelector = document.getElementById('theme-selector');
         const themeBtns = themeSelector.querySelectorAll('button');
@@ -2691,7 +2681,7 @@
         initTheme();
 
         // ============================================================
-        //  关于页
+        //  关于页（保持不变）
         // ============================================================
         $('c-about').onclick = async () => {
             $('page-about').classList.add('show');
