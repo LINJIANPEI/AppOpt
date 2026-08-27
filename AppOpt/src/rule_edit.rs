@@ -465,6 +465,16 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
 pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<String> {
     use std::collections::BTreeMap;
 
+    // 快速检查：如果没有任何规则属于该包（或子包），返回空
+    let prefix = format!("{}:", pkg);
+    let has_any = cfg
+        .rules
+        .iter()
+        .any(|r| r.pkg == pkg || r.pkg.starts_with(&prefix));
+    if !has_any {
+        return Vec::new();
+    }
+
     // ---- 子包节点结构 ----
     #[derive(Clone)]
     struct SubPkg {
@@ -568,6 +578,7 @@ pub fn build_package_block(pkg: &str, cfg: &crate::config::AppConfig) -> Vec<Str
 
         (pkg_rule, threads, subs)
     }
+
     // ---- 构建主包树 ----
     let (main_pkg_rule, main_threads, main_subs) = build_sub_pkg_tree(pkg, cfg);
 
